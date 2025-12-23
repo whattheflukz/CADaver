@@ -1,0 +1,176 @@
+use crate::geometry::{Point3, Vector3, Transform3};
+use crate::topo::EntityId;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchPlane {
+    pub origin: Point3,
+    pub normal: Vector3,
+    pub x_axis: Vector3,
+    pub y_axis: Vector3,
+}
+
+impl Default for SketchPlane {
+    fn default() -> Self {
+        Self {
+            origin: Point3::origin(),
+            normal: Vector3::z_axis().into_inner(),
+            x_axis: Vector3::x_axis().into_inner(),
+            y_axis: Vector3::y_axis().into_inner(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SketchGeometry {
+    Line { start: [f64; 2], end: [f64; 2] },
+    Circle { center: [f64; 2], radius: f64 },
+    Arc { center: [f64; 2], radius: f64, start_angle: f64, end_angle: f64 },
+    Point { pos: [f64; 2] },
+    /// Ellipse defined by center, semi-major axis, semi-minor axis, and rotation
+    /// DOF: 5 (center_x, center_y, semi_major, semi_minor, rotation)
+    Ellipse { center: [f64; 2], semi_major: f64, semi_minor: f64, rotation: f64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchEntity {
+    pub id: EntityId,
+    pub geometry: SketchGeometry,
+    #[serde(default)]
+    pub is_construction: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConstraintPoint {
+    pub id: EntityId,
+    pub index: u8, // 0=Start/Center/Pos, 1=End
+}
+
+/// Style configuration for visible dimension annotations
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DimensionStyle {
+    /// If true, dimension is reference-only (driven). If false, it drives the geometry (driving).
+    pub driven: bool,
+    /// Offset position for the dimension annotation text from the midpoint
+    pub offset: [f64; 2],
+}
+
+impl Default for DimensionStyle {
+    fn default() -> Self {
+        Self {
+            driven: false,
+            offset: [0.0, 0.5], // Default offset above the dimension line
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SketchConstraint {
+    Coincident { points: [ConstraintPoint; 2] }, 
+    Horizontal { entity: EntityId }, // Assuming line
+    Vertical { entity: EntityId },   // Assuming line
+    /// Distance constraint between two points
+    Distance { 
+        points: [ConstraintPoint; 2], 
+        value: f64,
+        /// If Some, renders as a visible dimension annotation
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+    /// Angle constraint between two lines
+    Angle {
+        lines: [EntityId; 2],
+        value: f64, // radians
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+    /// Radius constraint for a Circle or Arc
+    Radius {
+        entity: EntityId,
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+    Parallel { lines: [EntityId; 2] },
+    Perpendicular { lines: [EntityId; 2] },
+    Tangent { entities: [EntityId; 2] }, // Generic entity reference
+    Equal { entities: [EntityId; 2] },
+    /// Symmetric constraint: p2 is the reflection of p1 across the axis line
+    Symmetric { p1: ConstraintPoint, p2: ConstraintPoint, axis: EntityId },
+    Fix { point: ConstraintPoint, position: [f64; 2] },
+    /// Distance between a point and an infinite line (perpendicular distance)
+    DistancePointLine {
+        point: ConstraintPoint,
+        line: EntityId,
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SketchOperation {
+    AddGeometry { id: EntityId, geometry: SketchGeometry },
+    AddConstraint { constraint: SketchConstraint },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sketch {
+    pub plane: SketchPlane,
+    // Using a Vec for ordered iteration stability, but could be HashMap. 
+    // For Phase 1, linear scan is fine, stability of order is nice for UI.
+    pub entities: Vec<SketchEntity>,
+    pub constraints: Vec<SketchConstraint>,
+    #[serde(default)]
+    pub history: Vec<SketchOperation>,
+}
+
+impl Sketch {
+    pub fn new(plane: SketchPlane) -> Self {
+        Self {
+            plane,
+            entities: Vec::new(),
+            constraints: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+
+    pub fn add_entity(&mut self, geometry: SketchGeometry) -> EntityId {
+        let id = EntityId::new();
+        self.entities.push(SketchEntity { id, geometry: geometry.clone(), is_construction: false });
+        self.history.push(SketchOperation::AddGeometry { id, geometry });
+        id
+    }
+
+    pub fn add_constraint(&mut self, constraint: SketchConstraint) {
+        self.constraints.push(constraint.clone());
+        self.history.push(SketchOperation::AddConstraint { constraint });
+    }
+
+    /// Populates history from entities and constraints if history is empty.
+    /// This is for migrating legacy sketches.
+    pub fn ensure_history(&mut self) {
+        if !self.history.is_empty() {
+            return;
+        }
+
+        if self.entities.is_empty() && self.constraints.is_empty() {
+            return;
+        }
+
+        // Reconstruct history from current state
+        // Note: This assumes the current order is the creation order, which is the best guess we have.
+        for entity in &self.entities {
+            self.history.push(SketchOperation::AddGeometry { 
+                id: entity.id, 
+                geometry: entity.geometry.clone() 
+            });
+        }
+
+        for constraint in &self.constraints {
+            self.history.push(SketchOperation::AddConstraint { 
+                constraint: constraint.clone() 
+            });
+        }
+    }
+}
