@@ -9,13 +9,13 @@ fn test_ellipse_center_constraint() {
         semi_major: 10.0, 
         semi_minor: 5.0, 
         rotation: 0.0 
-    });
+    }.into());
 
     // Constrain center to (5,5)
     sketch.constraints.push(SketchConstraint::Fix {
         point: ConstraintPoint { id: ellipse, index: 0 },
         position: [5.0, 5.0],
-    });
+    }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged);
@@ -37,7 +37,7 @@ fn test_ellipse_major_axis_point() {
         semi_major: 10.0, 
         semi_minor: 5.0, 
         rotation: 0.0 
-    });
+    }.into());
 
     // Try to access Major Axis Endpoint (Index 1)
     // Theoretically should be at (10, 0)
@@ -45,7 +45,7 @@ fn test_ellipse_major_axis_point() {
     sketch.constraints.push(SketchConstraint::Fix {
         point: ConstraintPoint { id: ellipse, index: 1 },
         position: [12.0, 0.0],
-    });
+    }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     
@@ -68,10 +68,10 @@ fn test_ellipse_horizontal_constraint() {
         semi_major: 10.0, 
         semi_minor: 5.0, 
         rotation: std::f64::consts::FRAC_PI_4 
-    });
+    }.into());
 
     // Constrain Horizontal
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: ellipse });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: ellipse }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged);

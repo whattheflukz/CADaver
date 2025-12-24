@@ -9,7 +9,7 @@ fn test_solver_horizontal() {
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 5.0] });
 
     // Add Horizontal Constraint
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
 
     // Solve
     let converged = SketchSolver::solve(&mut sketch);
@@ -38,7 +38,7 @@ fn test_solver_coincident() {
             ConstraintPoint { id: l1_id, index: 1 },
             ConstraintPoint { id: l2_id, index: 0 },
         ]
-    });
+    }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged);
@@ -66,7 +66,7 @@ fn test_relaxed_solve_full_convergence() {
     
     // Create diagonal line
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 5.0] });
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
 
     let result = SketchSolver::solve_relaxed(&mut sketch);
     
@@ -100,7 +100,7 @@ fn test_relaxed_solve_partial_convergence() {
         ],
         value: 5.0,
         style: None,
-    });
+    }.into());
     sketch.constraints.push(SketchConstraint::Distance {
         points: [
             ConstraintPoint { id: l1, index: 1 },  // L1 end (same points)
@@ -108,7 +108,7 @@ fn test_relaxed_solve_partial_convergence() {
         ],
         value: 15.0,
         style: None,
-    });
+    }.into());
 
     let result = SketchSolver::solve_relaxed(&mut sketch);
     
@@ -138,8 +138,8 @@ fn test_relaxed_solve_constraint_status_tracking() {
     let l2 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 10.0], end: [10.0, 15.0] });
     
     // Add horizontal constraints to both
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l2 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l2 }.into());
 
     let result = SketchSolver::solve_relaxed(&mut sketch);
     
@@ -164,7 +164,7 @@ fn test_relaxed_solve_error_reduction_metric() {
     
     // Create a very diagonal line (high initial error for horizontal constraint)
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 100.0] });
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
 
     let result = SketchSolver::solve_relaxed(&mut sketch);
     
@@ -184,7 +184,7 @@ fn test_relaxed_solve_already_satisfied() {
     
     // Create an already horizontal line
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 5.0], end: [10.0, 5.0] });
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
 
     let result = SketchSolver::solve_relaxed(&mut sketch);
     
@@ -211,7 +211,7 @@ fn test_solver_fix() {
     sketch.constraints.push(SketchConstraint::Fix {
         point: ConstraintPoint { id: l1, index: 0 },
         position: [0.0, 0.0],
-    });
+    }.into());
 
     // Try to move the start point by setting it wrong initially?
     // The solver doesn't "try" to move things unless constraints conflict.
@@ -229,7 +229,7 @@ fn test_solver_fix() {
             ConstraintPoint { id: l1, index: 0 },
             ConstraintPoint { id: l2, index: 0 },
         ]
-    });
+    }.into());
     
     // The coincident solver averages positions. The fix solver strictly sets position.
     // If we run them, eventually L1.start should be at 0,0 and L2.start should come to 0,0.
@@ -286,17 +286,17 @@ fn test_entity_status_fully_constrained() {
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 0.0] });
     
     // Horizontal: 1 DOF
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
     // Fix start: 2 DOF
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: l1, index: 0 },
         position: [0.0, 0.0]
-    });
+    }.into());
     // Fix end: 2 DOF (this gives us 5 constrained DOF, but we cap at 4 for fully constrained)
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: l1, index: 1 },
         position: [10.0, 0.0]
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -318,12 +318,12 @@ fn test_entity_status_exactly_constrained() {
     let c1 = sketch.add_entity(SketchGeometry::Circle { center: [5.0, 5.0], radius: 3.0 });
     
     // Radius: 1 DOF
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 5.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 5.0, style: None }.into());
     // Fix center: 2 DOF
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: c1, index: 0 },  // Circle center
         position: [5.0, 5.0]
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -346,8 +346,8 @@ fn test_entity_status_over_constrained_conflict() {
     let c1 = sketch.add_entity(SketchGeometry::Circle { center: [0.0, 0.0], radius: 5.0 });
     
     // Two conflicting radius values
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 10.0, style: None });
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 10.0, style: None }.into());
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -374,15 +374,15 @@ fn test_entity_status_mixed_sketch() {
     
     // Line 1: Horizontal constraint only (1/4 DOF used)
     let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 0.0] });
-    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+    sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
     
     // Circle 1: Fully constrained (3/3 DOF)
     let c1 = sketch.add_entity(SketchGeometry::Circle { center: [20.0, 20.0], radius: 5.0 });
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 5.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 5.0, style: None }.into());
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: c1, index: 0 },
         position: [20.0, 20.0]
-    });
+    }.into());
     
     // Line 2: No constraints (0/4 DOF used)
     let _l2 = sketch.add_entity(SketchGeometry::Line { start: [50.0, 50.0], end: [60.0, 60.0] });
@@ -428,7 +428,7 @@ fn test_entity_status_point_geometry() {
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: p1, index: 0 },
         position: [5.0, 5.0]
-    });
+    }.into());
     
     let result2 = SketchSolver::solve_with_result(&mut sketch);
     let status2 = &result2.entity_statuses[0];
@@ -445,7 +445,7 @@ fn test_entity_status_arc_geometry() {
         radius: 5.0, 
         start_angle: 0.0, 
         end_angle: std::f64::consts::PI 
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -464,7 +464,7 @@ fn test_entity_status_ellipse_geometry() {
         semi_major: 10.0, 
         semi_minor: 5.0, 
         rotation: 0.0 
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -486,13 +486,13 @@ fn test_ellipse_fix_center() {
         semi_major: 8.0, 
         semi_minor: 4.0, 
         rotation: 0.5 
-    });
+    }.into());
     
     // Fix the center at 10,10
     sketch.constraints.push(SketchConstraint::Fix {
         point: ConstraintPoint { id: e1, index: 0 },
         position: [10.0, 10.0],
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     
@@ -523,13 +523,13 @@ fn test_ellipse_coincident_with_line() {
         semi_major: 5.0, 
         semi_minor: 3.0, 
         rotation: 0.0 
-    });
+    }.into());
     
     // Line ending at (8, 8)
     let l1 = sketch.add_entity(SketchGeometry::Line { 
         start: [0.0, 0.0], 
         end: [8.0, 8.0] 
-    });
+    }.into());
     
     // Coincident: ellipse center (index 0) = line end (index 1)
     sketch.constraints.push(SketchConstraint::Coincident {
@@ -537,7 +537,7 @@ fn test_ellipse_coincident_with_line() {
             ConstraintPoint { id: e1, index: 0 },
             ConstraintPoint { id: l1, index: 1 },
         ]
-    });
+    }.into());
     
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged, "Solver should converge");

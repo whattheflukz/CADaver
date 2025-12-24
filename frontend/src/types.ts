@@ -9,6 +9,23 @@ export interface Tessellation {
     point_ids: any[];
 }
 
+export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Cut' | 'Plane' | 'Axis' | 'Point';
+
+export interface Feature {
+    id: string; // EntityId is UUID string
+    name: string;
+    feature_type: FeatureType;
+    suppressed: boolean;
+    parameters: Record<string, any>; // ParameterValue equivalent
+    dependencies?: string[]; // IDs of features this feature depends on
+}
+
+// Graph structure from backend
+export interface FeatureGraphState {
+    nodes: Record<string, Feature>;
+    sort_order: string[];
+}
+
 export interface SketchPlane {
     origin: [number, number, number];
     normal: [number, number, number];
@@ -66,6 +83,17 @@ export interface SketchConstraint {
     DistancePointLine?: { point: ConstraintPoint, line: EntityId, value: number, style?: DimensionStyle };
 }
 
+/** Wrapper for constraints with suppression state */
+export interface SketchConstraintEntry {
+    constraint: SketchConstraint;
+    suppressed?: boolean;
+}
+
+/** Helper to wrap a SketchConstraint in a SketchConstraintEntry */
+export function wrapConstraint(constraint: SketchConstraint, suppressed: boolean = false): SketchConstraintEntry {
+    return { constraint, suppressed };
+}
+
 export interface SketchOperation {
     AddGeometry?: { id: string, geometry: SketchGeometry };
     AddConstraint?: { constraint: SketchConstraint };
@@ -74,8 +102,24 @@ export interface SketchOperation {
 export interface Sketch {
     plane: any;
     entities: SketchEntity[];
-    constraints: SketchConstraint[];
+    constraints: SketchConstraintEntry[];
     history: SketchOperation[];
+}
+
+/** A detected closed region in a sketch (for extrude profile selection) */
+export interface SketchRegion {
+    /** Stable identifier for this region */
+    id: string;
+    /** Entity IDs that form the boundary */
+    boundary_entity_ids: string[];
+    /** Ordered boundary points for rendering */
+    boundary_points: [number, number][];
+    /** Inner loops (holes) inside this region */
+    voids?: [number, number][][];
+    /** Centroid of the region */
+    centroid: [number, number];
+    /** Area of the region */
+    area: number;
 }
 
 // Mirroring the backend ParameterValue
@@ -84,7 +128,9 @@ export type ParameterValue =
     | { String: string }
     | { Bool: boolean }
     | { Sketch: Sketch }
-    | { Reference: any };
+    | { Reference: any }
+    | { List: string[] }
+    | { ProfileRegions: [number, number][][][] }; // Profile regions with 2D boundary points (Proiles -> Loops -> Points)
 
 // Snap types for sketch snapping
 export type SnapType =
@@ -122,7 +168,7 @@ export const defaultSnapConfig: SnapConfig = {
 
 export type SketchToolType =
     | "select" | "line" | "circle" | "arc" | "rectangle" | "slot" | "polygon" | "point" | "ellipse"
-    | "trim" | "mirror" | "offset"
+    | "trim" | "mirror" | "offset" | "linear_pattern" | "circular_pattern"
     | "constraint_horizontal" | "constraint_vertical" | "constraint_coincident"
     | "constraint_parallel" | "constraint_perpendicular" | "constraint_equal" | "constraint_fix"
     | "dimension";

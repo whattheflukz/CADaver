@@ -149,8 +149,11 @@ impl SketchSolver {
             let mut max_error = 0.0;
 
             // Clone constraints to avoid borrowing issues while mutating entities
-            // (In a more memory constrained env we'd iterate indices)
-            let constraints = sketch.constraints.clone(); 
+            // Filter out suppressed constraints
+            let constraints: Vec<_> = sketch.constraints.iter()
+                .filter(|entry| !entry.suppressed)
+                .map(|entry| entry.constraint.clone())
+                .collect();
 
             for constraint in &constraints {
                 match constraint {
@@ -626,15 +629,22 @@ impl SketchSolver {
         
         let constraint_count = sketch.constraints.len();
         
-        // Track per-constraint initial errors
-        let mut initial_errors: Vec<f64> = Vec::with_capacity(constraint_count);
-        for constraint in &sketch.constraints {
+        // Build list of active (non-suppressed) constraints with original indices
+        let active_constraints: Vec<(usize, SketchConstraint)> = sketch.constraints.iter()
+            .enumerate()
+            .filter(|(_, entry)| !entry.suppressed)
+            .map(|(i, entry)| (i, entry.constraint.clone()))
+            .collect();
+        
+        // Track per-constraint initial errors (only for active constraints)
+        let mut initial_errors: Vec<f64> = Vec::with_capacity(active_constraints.len());
+        for (_, constraint) in &active_constraints {
             initial_errors.push(Self::calculate_constraint_error(sketch, &id_map, constraint));
         }
         let initial_total_error: f64 = initial_errors.iter().sum();
         
-        // Track when each constraint was first satisfied
-        let mut first_satisfied_at: Vec<Option<usize>> = vec![None; constraint_count];
+        // Track when each active constraint was first satisfied
+        let mut first_satisfied_at: Vec<Option<usize>> = vec![None; active_constraints.len()];
         
         // Run the solver iterations
         let mut converged = false;
@@ -645,13 +655,11 @@ impl SketchSolver {
             iterations_used = iteration + 1;
             let mut max_error = 0.0;
 
-            let constraints = sketch.constraints.clone();
-
-            for (c_idx, constraint) in constraints.iter().enumerate() {
+            for (active_idx, (_, constraint)) in active_constraints.iter().enumerate() {
                 // Check if this constraint is already satisfied and record first satisfaction
                 let pre_error = Self::calculate_constraint_error(sketch, &id_map, constraint);
-                if pre_error < epsilon && first_satisfied_at[c_idx].is_none() {
-                    first_satisfied_at[c_idx] = Some(iteration);
+                if pre_error < epsilon && first_satisfied_at[active_idx].is_none() {
+                    first_satisfied_at[active_idx] = Some(iteration);
                 }
                 
                 match constraint {
@@ -1023,12 +1031,12 @@ impl SketchSolver {
             }
         }
 
-        // Calculate final per-constraint errors and statuses
-        let mut constraint_statuses = Vec::with_capacity(constraint_count);
+        // Calculate final per-constraint errors and statuses (only active constraints)
+        let mut constraint_statuses = Vec::with_capacity(active_constraints.len());
         let mut satisfied_count = 0;
         let mut final_total_error = 0.0;
         
-        for (i, constraint) in sketch.constraints.iter().enumerate() {
+        for (active_idx, (original_idx, constraint)) in active_constraints.iter().enumerate() {
             let final_error = Self::calculate_constraint_error(sketch, &id_map, constraint);
             final_total_error += final_error;
             let satisfied = final_error < epsilon;
@@ -1036,7 +1044,11 @@ impl SketchSolver {
                 satisfied_count += 1;
             }
             
-            let initial_err = initial_errors[i];
+            let initial_err = if active_idx < initial_errors.len() {
+                initial_errors[active_idx]
+            } else {
+                0.0
+            };
             let error_reduction = if initial_err > epsilon {
                 1.0 - (final_error / initial_err).min(1.0)
             } else {
@@ -1044,15 +1056,20 @@ impl SketchSolver {
             };
             
             constraint_statuses.push(ConstraintStatus {
-                constraint_index: i,
+                constraint_index: *original_idx,
                 error: final_error,
                 satisfied,
-                first_satisfied_at: first_satisfied_at[i],
+                first_satisfied_at: if active_idx < first_satisfied_at.len() {
+                    first_satisfied_at[active_idx]
+                } else {
+                    None
+                },
                 error_reduction,
-            });
+            }.into());
         }
         
-        let unsatisfied_count = constraint_count - satisfied_count;
+        let active_count = active_constraints.len();
+        let unsatisfied_count = active_count - satisfied_count;
         
         // Calculate overall progress
         let partial_progress = if initial_total_error > epsilon {
@@ -1127,10 +1144,14 @@ impl SketchSolver {
             };
         }
 
-        // Each constraint removes a certain number of DOF
+        // Each constraint removes a certain number of DOF (skip suppressed)
         let mut constrained_dof: i32 = 0;
-        for constraint in &sketch.constraints {
-            constrained_dof += match constraint {
+        for entry in &sketch.constraints {
+            // Skip suppressed constraints
+            if entry.suppressed {
+                continue;
+            }
+            constrained_dof += match &entry.constraint {
                 SketchConstraint::Coincident { .. } => 2, // Removes 2 DOF (x, y)
                 SketchConstraint::Horizontal { .. } => 1, // Removes 1 DOF (forces same y)
                 SketchConstraint::Vertical { .. } => 1,   // Removes 1 DOF (forces same x)
@@ -1167,9 +1188,12 @@ impl SketchSolver {
             entity_dof_map.insert(entity.id, (total, 0));
         }
         
-        // Accumulate constrained DOF from each constraint
-        for constraint in &sketch.constraints {
-            let (affected_entities, dof_per_entity) = match constraint {
+        // Accumulate constrained DOF from each active (non-suppressed) constraint
+        for entry in &sketch.constraints {
+            if entry.suppressed {
+                continue;
+            }
+            let (affected_entities, dof_per_entity) = match &entry.constraint {
                 SketchConstraint::Coincident { points } => {
                     // Coincident removes 2 DOF total, split between entities
                     (vec![points[0].id, points[1].id], 1)
@@ -1204,7 +1228,7 @@ impl SketchSolver {
             let mut ids = std::collections::HashSet::new();
             for &idx in &c.unsatisfied_constraints {
                 if idx < sketch.constraints.len() {
-                    let entity_ids = Self::get_constraint_entities(&sketch.constraints[idx]);
+                    let entity_ids = Self::get_constraint_entities(&sketch.constraints[idx].constraint);
                     for id in entity_ids {
                         ids.insert(id);
                     }
@@ -1268,9 +1292,12 @@ impl SketchSolver {
             current
         }
         
-        // First pass: collect coincident groups
-        for constraint in constraints.iter() {
-            if let SketchConstraint::Coincident { points } = constraint {
+        // First pass: collect coincident groups (from active constraints only)
+        for entry in constraints.iter() {
+            if entry.suppressed {
+                continue;
+            }
+            if let SketchConstraint::Coincident { points } = &entry.constraint {
                 let sig1 = point_sig(&points[0]);
                 let sig2 = point_sig(&points[1]);
                 
@@ -1288,9 +1315,12 @@ impl SketchSolver {
             }
         }
         
-        // Second pass: detect redundant constraints
-        for (i, constraint) in constraints.iter().enumerate() {
-            let signature = match constraint {
+        // Second pass: detect redundant constraints (from active constraints only)
+        for (i, entry) in constraints.iter().enumerate() {
+            if entry.suppressed {
+                continue;
+            }
+            let signature = match &entry.constraint {
                 SketchConstraint::Coincident { points } => {
                     // Check if this coincident is implied by transitivity
                     let sig1 = point_sig(&points[0]);
@@ -1354,8 +1384,11 @@ impl SketchSolver {
             // Check for exact duplicate
             if seen_signatures.contains(&signature) {
                 // Find which constraint this duplicates
-                let dup_index = constraints.iter().position(|c| {
-                    let other_sig = match c {
+                let dup_index = constraints.iter().position(|entry| {
+                    if entry.suppressed {
+                        return false;
+                    }
+                    let other_sig = match &entry.constraint {
                         SketchConstraint::Coincident { points } => {
                             let sig1 = point_sig(&points[0]);
                             let sig2 = point_sig(&points[1]);
@@ -1407,13 +1440,13 @@ impl SketchSolver {
                         },
                     };
                     other_sig == signature
-                });
+                }.into());
                 
                 redundant.push(RedundantConstraintInfo {
                     constraint_index: i,
                     duplicates_index: dup_index,
                     reason: format!("Exact duplicate of constraint #{}", dup_index.map_or("?".to_string(), |idx| idx.to_string())),
-                });
+                }.into());
             } else {
                 seen_signatures.insert(signature);
             }
@@ -1422,8 +1455,11 @@ impl SketchSolver {
         // Third pass: check for transitive coincident redundancy
         // (A=B and B=C already implies A=C)
         let mut coincident_pairs: Vec<(String, String, usize)> = Vec::new();
-        for (i, constraint) in constraints.iter().enumerate() {
-            if let SketchConstraint::Coincident { points } = constraint {
+        for (i, entry) in constraints.iter().enumerate() {
+            if entry.suppressed {
+                continue;
+            }
+            if let SketchConstraint::Coincident { points } = &entry.constraint {
                 let sig1 = point_sig(&points[0]);
                 let sig2 = point_sig(&points[1]);
                 coincident_pairs.push((sig1, sig2, i));
@@ -1459,7 +1495,7 @@ impl SketchSolver {
             // If they're still in the same group without this constraint, it's redundant
             if temp_root1 == temp_root2 {
                 // Only report if not already reported as exact duplicate
-                if !redundant.iter().any(|r| r.constraint_index == *idx) {
+                if !redundant.iter().any(|r: &RedundantConstraintInfo| r.constraint_index == *idx) {
                     redundant.push(RedundantConstraintInfo {
                         constraint_index: *idx,
                         duplicates_index: None,
@@ -1479,9 +1515,12 @@ impl SketchSolver {
         let mut constraint_errors = Vec::new();
         let mut possible_conflicts = Vec::new();
         
-        // Calculate current error for each constraint
-        for (i, constraint) in sketch.constraints.iter().enumerate() {
-            let error = Self::calculate_constraint_error(sketch, id_map, constraint);
+        // Calculate current error for each active constraint
+        for (i, entry) in sketch.constraints.iter().enumerate() {
+            if entry.suppressed {
+                continue;
+            }
+            let error = Self::calculate_constraint_error(sketch, id_map, &entry.constraint);
             
             if error > epsilon {
                 unsatisfied_constraints.push(i);
@@ -1497,8 +1536,8 @@ impl SketchSolver {
                 let idx1 = unsatisfied_constraints[i];
                 let idx2 = unsatisfied_constraints[j];
                 
-                let c1 = &sketch.constraints[idx1];
-                let c2 = &sketch.constraints[idx2];
+                let c1 = &sketch.constraints[idx1].constraint;
+                let c2 = &sketch.constraints[idx2].constraint;
                 
                 // Extract entities referenced by each constraint
                 let entities1 = Self::get_constraint_entities(c1);
@@ -1523,11 +1562,17 @@ impl SketchSolver {
             }
         }
         
-        // Also detect direct conflicts like Horizontal + Vertical on same line
+        // Also detect direct conflicts like Horizontal + Vertical on same line (skip suppressed)
         for i in 0..sketch.constraints.len() {
+            if sketch.constraints[i].suppressed {
+                continue;
+            }
             for j in (i + 1)..sketch.constraints.len() {
-                let c1 = &sketch.constraints[i];
-                let c2 = &sketch.constraints[j];
+                if sketch.constraints[j].suppressed {
+                    continue;
+                }
+                let c1 = &sketch.constraints[i].constraint;
+                let c2 = &sketch.constraints[j].constraint;
                 
                 // Check for Horizontal + Vertical on same entity
                 if let (SketchConstraint::Horizontal { entity: e1 }, SketchConstraint::Vertical { entity: e2 }) = (c1, c2) {
@@ -2083,28 +2128,28 @@ mod tests {
         let l4 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [0.0, 10.0] });
 
         // Add Constraints
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Vertical { entity: l2 });
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l3 });
-        sketch.constraints.push(SketchConstraint::Vertical { entity: l4 });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Vertical { entity: l2 }.into());
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l3 }.into());
+        sketch.constraints.push(SketchConstraint::Vertical { entity: l4 }.into());
 
         // Coincident Corners
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l1, index: 1 },
             ConstraintPoint { id: l2, index: 0 }
-        ]});
+        ]}.into());
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l2, index: 1 },
             ConstraintPoint { id: l3, index: 0 }
-        ]});
+        ]}.into());
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l3, index: 1 },
             ConstraintPoint { id: l4, index: 0 }
-        ]});
+        ]}.into());
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l4, index: 1 },
             ConstraintPoint { id: l1, index: 0 }
-        ]});
+        ]}.into());
 
         let converged = SketchSolver::solve(&mut sketch);
         assert!(converged, "Solver should converge");
@@ -2138,9 +2183,9 @@ mod tests {
         // L3: Nearly vertical
         let l3 = sketch.add_entity(SketchGeometry::Line { start: [5.0, 0.0], end: [5.1, 10.0] });
 
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Parallel { lines: [l1, l2] });
-        sketch.constraints.push(SketchConstraint::Perpendicular { lines: [l1, l3] });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Parallel { lines: [l1, l2] }.into());
+        sketch.constraints.push(SketchConstraint::Perpendicular { lines: [l1, l3] }.into());
 
         let converged = SketchSolver::solve(&mut sketch);
         
@@ -2165,7 +2210,7 @@ mod tests {
         let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 0.0] });
         let l2 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 5.0], end: [5.0, 5.0] });
 
-        sketch.constraints.push(SketchConstraint::Equal { entities: [l1, l2] });
+        sketch.constraints.push(SketchConstraint::Equal { entities: [l1, l2] }.into());
 
         let converged = SketchSolver::solve(&mut sketch);
         assert!(converged);
@@ -2187,8 +2232,8 @@ mod tests {
         // Line at y=6 (dist 6 from center, radius is 5, error 1.0)
         let l1 = sketch.add_entity(SketchGeometry::Line { start: [-10.0, 6.0], end: [10.0, 6.0] });
 
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Tangent { entities: [l1, c1] }); // Or [c1, l1]
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Tangent { entities: [l1, c1] }.into()); // Or [c1, l1]
 
         let converged = SketchSolver::solve(&mut sketch);
         assert!(converged);
@@ -2215,7 +2260,7 @@ mod tests {
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: line, index: 0 },
             ConstraintPoint { id: arc, index: 2 }
-        ]});
+        ]}.into());
 
         let converged = SketchSolver::solve(&mut sketch);
         assert!(converged);
@@ -2238,8 +2283,8 @@ mod tests {
         let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 5.0] });
         
         // Add same Horizontal constraint twice - second should be detected as redundant
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2262,17 +2307,17 @@ mod tests {
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l_a, index: 1 },
             ConstraintPoint { id: l_b, index: 0 },
-        ]});
+        ]}.into());
         // B.start = C.start (B.start is effectively same as A.end now)
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l_b, index: 0 },
             ConstraintPoint { id: l_c, index: 0 },
-        ]});
+        ]}.into());
         // A.end = C.start - this is implied by transitivity (A.end = B.start = C.start)
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l_a, index: 1 },
             ConstraintPoint { id: l_c, index: 0 },
-        ]});
+        ]}.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2294,9 +2339,9 @@ mod tests {
         let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 5.0] });
         let l2 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 10.0], end: [10.0, 15.0] });
         
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l2 });
-        sketch.constraints.push(SketchConstraint::Parallel { lines: [l1, l2] });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l2 }.into());
+        sketch.constraints.push(SketchConstraint::Parallel { lines: [l1, l2] }.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2317,8 +2362,8 @@ mod tests {
         // Apply both Horizontal AND Vertical
         // Note: This converges to a degenerate (zero-length line / point)
         // DOF = 4 (line) - 1 (horiz) - 1 (vert) = 2 (still under-constrained)
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
-        sketch.constraints.push(SketchConstraint::Vertical { entity: l1 });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
+        sketch.constraints.push(SketchConstraint::Vertical { entity: l1 }.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2349,7 +2394,7 @@ mod tests {
             ],
             value: 10.0,
             style: None,
-        });
+        }.into());
         sketch.constraints.push(SketchConstraint::Distance { 
             points: [
                 ConstraintPoint { id: p1, index: 0 },
@@ -2357,7 +2402,7 @@ mod tests {
             ],
             value: 20.0,
             style: None,
-        });
+        }.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2372,7 +2417,7 @@ mod tests {
         // Should detect the conflicting distance values
         let has_distance_conflict = conflicts.possible_conflicts.iter().any(|(_, _, reason)| {
             reason.contains("distance") || reason.contains("10") || reason.contains("20")
-        });
+        }.into());
         assert!(has_distance_conflict, "Should detect conflicting distance values");
     }
 
@@ -2383,7 +2428,7 @@ mod tests {
         let l1 = sketch.add_entity(SketchGeometry::Line { start: [0.0, 0.0], end: [10.0, 5.0] });
         
         // Single Horizontal constraint - should converge fine
-        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 });
+        sketch.constraints.push(SketchConstraint::Horizontal { entity: l1 }.into());
         
         let result = SketchSolver::solve_with_result(&mut sketch);
         
@@ -2400,17 +2445,17 @@ mod tests {
         sketch.constraints.push(SketchConstraint::Coincident { points: [
             ConstraintPoint { id: l1, index: 0 },
             ConstraintPoint { id: l2, index: 1 }
-        ]});
+        ]}.into());
 
         let target_angle = 120.0 * std::f64::consts::PI / 180.0;
         sketch.constraints.push(SketchConstraint::Angle { 
             lines: [l1, l2],
             value: target_angle,
             style: None
-        });
+        }.into());
 
         let id_map: std::collections::HashMap<_, _> = sketch.entities.iter().enumerate().map(|(i,e)| (e.id, i)).collect();
-        let error = SketchSolver::calculate_constraint_error(&sketch, &id_map, &sketch.constraints[1]);
+        let error = SketchSolver::calculate_constraint_error(&sketch, &id_map, &sketch.constraints[1].constraint);
         assert!(error < 1e-3, "Initial error should be zero for matching geometry (120 deg). Got {}", error);
     }
 }

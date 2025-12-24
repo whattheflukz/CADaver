@@ -116,6 +116,20 @@ const SketchToolbar: Component<SketchToolbarProps> = (props) => {
             >
                 Reference
             </button>
+            <button
+                onClick={() => props.onToolSelect("linear_pattern")}
+                style={buttonStyle(props.activeTool === "linear_pattern")}
+                title="Linear Pattern - Repeat entities along a direction"
+            >
+                📐 LinPat
+            </button>
+            <button
+                onClick={() => props.onToolSelect("circular_pattern")}
+                style={buttonStyle(props.activeTool === "circular_pattern")}
+                title="Circular Pattern - Repeat entities around a center"
+            >
+                🔄 CircPat
+            </button>
 
             {/* Separator */}
             <div style={{ width: "1px", height: "24px", background: "#888" }} />

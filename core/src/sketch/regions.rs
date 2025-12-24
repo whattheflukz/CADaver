@@ -1,0 +1,826 @@
+//! Region detection for 2D sketch geometry.
+//!
+//! Computes enclosed faces (regions) from sketch entities by:
+//! 1. Finding all intersection points between curves
+//! 2. Building a planar graph with vertices at endpoints/intersections
+//! 3. Traversing the graph to find minimal enclosed faces
+
+use crate::sketch::types::{SketchEntity, SketchGeometry};
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
+use serde::{Deserialize, Serialize};
+
+const EPSILON: f64 = 1e-6;
+
+/// A detected closed region in the sketch
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchRegion {
+    /// Stable identifier for this region (hash of boundary)
+    pub id: String,
+    /// Entity IDs that form the boundary
+    pub boundary_entity_ids: Vec<Uuid>,
+    /// Ordered boundary points (for rendering/tessellation)
+    pub boundary_points: Vec<[f64; 2]>,
+    /// Inner loops (holes) inside this region
+    #[serde(default)]
+    pub voids: Vec<Vec<[f64; 2]>>,
+    /// Centroid of the region
+    pub centroid: [f64; 2],
+    /// Signed area (positive = CCW, negative = CW)
+    pub area: f64,
+}
+
+/// A vertex in the planar graph
+#[derive(Debug, Clone)]
+struct GraphVertex {
+    pos: [f64; 2],
+    /// Edges incident to this vertex, sorted by angle
+    edges: Vec<usize>,
+}
+
+/// A half-edge in the planar graph
+#[derive(Debug, Clone)]
+struct HalfEdge {
+    /// Start vertex index
+    start: usize,
+    /// End vertex index
+    end: usize,
+    /// Original entity this edge came from
+    entity_id: Uuid,
+    /// Twin half-edge (opposite direction)
+    twin: Option<usize>,
+    /// Next half-edge in face traversal
+    next: Option<usize>,
+    /// Has this edge been used in face extraction?
+    used: bool,
+}
+
+/// Find all closed regions in the sketch
+pub fn find_regions(entities: &[SketchEntity]) -> Vec<SketchRegion> {
+    let mut regions = Vec::new();
+    
+    // Filter to non-construction entities
+    let geom_entities: Vec<&SketchEntity> = entities
+        .iter()
+        .filter(|e| !e.is_construction)
+        .collect();
+    
+    if geom_entities.is_empty() {
+        return regions;
+    }
+    
+    // 1. Find all intersection points
+    let intersections = find_all_intersections(&geom_entities);
+    
+    // 2. Build planar graph
+    let (vertices, mut edges) = build_planar_graph(&geom_entities, &intersections);
+    
+    if vertices.is_empty() || edges.is_empty() {
+        // Handle self-contained loops (circles/ellipses)
+        for entity in &geom_entities {
+            if let Some(region) = entity_as_region(entity) {
+                regions.push(region);
+            }
+        }
+        return regions;
+    }
+    
+    // 3. Link half-edges by sorting around vertices
+    link_half_edges(&vertices, &mut edges);
+    
+    // 4. Extract faces by following half-edge chains
+    let faces = extract_faces(&mut edges);
+    
+    // 5. Convert faces to regions
+    for face in faces {
+        if let Some(mut region) = face_to_region(&face, &vertices, &edges) {
+            // Interior faces have negative area (CW winding in our half-edge structure)
+            // The outer unbounded face has positive area (CCW winding)
+            // Skip faces with positive area (the exterior)
+            if region.area < -EPSILON {
+                // Interior faces are CW. Reverse to make CCW (standard).
+                region.boundary_points.reverse();
+                region.area = region.area.abs();
+                regions.push(region);
+            }
+        }
+    }
+    
+    // Also add any self-contained circles/ellipses that weren't split
+    for entity in &geom_entities {
+        match &entity.geometry {
+            SketchGeometry::Circle { .. } | SketchGeometry::Ellipse { .. } => {
+                // Check if this entity was split by intersections
+                let was_split = edges.iter().any(|e| e.entity_id == entity.id.0);
+                if !was_split {
+                    if let Some(region) = entity_as_region(entity) {
+                        regions.push(region);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    // 6. Detect containment and build hierarchy to identifying voids
+    let mut final_regions = Vec::new();
+    let mut raw_regions = regions; // Rename for clarity
+    
+    // Sort by area descending (largest first)
+    raw_regions.sort_by(|a, b| b.area.partial_cmp(&a.area).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // Build containment tree
+    // parents[i] = Some(p_idx) means region i is inside region p_idx
+    let mut parents: Vec<Option<usize>> = vec![None; raw_regions.len()];
+    
+    for i in 0..raw_regions.len() {
+        // Find the smallest parent that contains region i
+        // Since we sorted by area, potential parents are always at indices < i
+        // We pick the "closest" parent (deepest in hierarchy)
+        
+        let mut best_parent = None;
+        let mut min_parent_area = f64::INFINITY;
+        
+        println!("Checking containment for Region {} (Area {}) using centroid {:?}", i, raw_regions[i].area, raw_regions[i].centroid);
+        
+        for j in 0..i {
+            // Check if i is inside j
+            // Using first point of boundary for check
+            // TODO: Robustness improvement needed for tangent boundaries
+            if !raw_regions[i].boundary_points.is_empty() && 
+               point_in_region(raw_regions[i].centroid, &raw_regions[j]) {
+                
+                println!("  -> Contained in Region {} (Area {})", j, raw_regions[j].area);
+                
+                if raw_regions[j].area < min_parent_area {
+                     min_parent_area = raw_regions[j].area;
+                     best_parent = Some(j);
+                }
+            }
+        }
+        parents[i] = best_parent;
+    }
+    
+    // Populate voids
+    // For every region in the list, its 'voids' are its immediate children in the tree.
+    // If Parent P contains Child C, and C contains Grandchild G.
+    // P.voids should contain C.
+    // C.voids should contain G.
+    // G.voids = [].
+    //
+    // Then we output all of them as valid regions: P (with void C), C (with void G), G.
+    // This effectively produces: (P-C), (C-G), G.
+    // These are disjoint and cover the original union.
+    
+    for i in 0..raw_regions.len() {
+        let mut region = raw_regions[i].clone();
+        
+        // Find all immediate children
+        for j in (i + 1)..raw_regions.len() {
+            if parents[j] == Some(i) {
+                println!("  Region {} has void: Region {}", i, j);
+                // Add child as void. Child is CCW. Reverse to make it CW for triangulation.
+                let mut void_loop = raw_regions[j].boundary_points.clone();
+                void_loop.reverse();
+                region.voids.push(void_loop);
+                
+                // Subtract void area from region area
+                region.area -= raw_regions[j].area;
+            }
+        }
+        
+        final_regions.push(region);
+    }
+    
+    final_regions
+}
+
+/// Test if a point is inside a region using winding number algorithm
+pub fn point_in_region(point: [f64; 2], region: &SketchRegion) -> bool {
+    let pts = &region.boundary_points;
+    if pts.len() < 3 {
+        return false;
+    }
+    
+    let mut winding = 0i32;
+    let n = pts.len();
+    
+    for i in 0..n {
+        let p1 = pts[i];
+        let p2 = pts[(i + 1) % n];
+        
+        if p1[1] <= point[1] {
+            if p2[1] > point[1] {
+                // Upward crossing
+                if cross_product_sign(p1, p2, point) > 0.0 {
+                    winding += 1;
+                }
+            }
+        } else {
+            if p2[1] <= point[1] {
+                // Downward crossing
+                if cross_product_sign(p1, p2, point) < 0.0 {
+                    winding -= 1;
+                }
+            }
+        }
+    }
+    
+    winding != 0
+}
+
+fn cross_product_sign(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Find all intersection points between entities
+fn find_all_intersections(entities: &[&SketchEntity]) -> Vec<([f64; 2], Uuid, Uuid)> {
+    let mut intersections = Vec::new();
+    
+    for i in 0..entities.len() {
+        for j in (i + 1)..entities.len() {
+            let pts = intersect_entities(entities[i], entities[j]);
+            for pt in pts {
+                intersections.push((pt, entities[i].id.0, entities[j].id.0));
+            }
+        }
+    }
+    
+    intersections
+}
+
+/// Intersect two entities and return intersection points
+fn intersect_entities(e1: &SketchEntity, e2: &SketchEntity) -> Vec<[f64; 2]> {
+    match (&e1.geometry, &e2.geometry) {
+        (SketchGeometry::Circle { center: c1, radius: r1 }, 
+         SketchGeometry::Circle { center: c2, radius: r2 }) => {
+            circle_circle_intersect(*c1, *r1, *c2, *r2)
+        }
+        (SketchGeometry::Line { start: s1, end: e1 },
+         SketchGeometry::Line { start: s2, end: e2 }) => {
+            if let Some(pt) = line_line_intersect(*s1, *e1, *s2, *e2) {
+                vec![pt]
+            } else {
+                vec![]
+            }
+        }
+        (SketchGeometry::Line { start, end }, SketchGeometry::Circle { center, radius }) |
+        (SketchGeometry::Circle { center, radius }, SketchGeometry::Line { start, end }) => {
+            line_circle_intersect(*start, *end, *center, *radius)
+        }
+        // TODO: Add Arc, Ellipse intersections
+        _ => vec![]
+    }
+}
+
+/// Circle-circle intersection
+fn circle_circle_intersect(c1: [f64; 2], r1: f64, c2: [f64; 2], r2: f64) -> Vec<[f64; 2]> {
+    let dx = c2[0] - c1[0];
+    let dy = c2[1] - c1[1];
+    let d = (dx * dx + dy * dy).sqrt();
+    
+    // No intersection or coincident
+    if d > r1 + r2 + EPSILON || d < (r1 - r2).abs() - EPSILON || d < EPSILON {
+        return vec![];
+    }
+    
+    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+    let h_sq = r1 * r1 - a * a;
+    
+    if h_sq < 0.0 {
+        return vec![];
+    }
+    
+    let h = h_sq.sqrt();
+    let px = c1[0] + a * dx / d;
+    let py = c1[1] + a * dy / d;
+    
+    if h < EPSILON {
+        // Tangent
+        return vec![[px, py]];
+    }
+    
+    let ox = h * dy / d;
+    let oy = h * dx / d;
+    
+    vec![
+        [px + ox, py - oy],
+        [px - ox, py + oy],
+    ]
+}
+
+/// Line-line intersection (segments)
+fn line_line_intersect(s1: [f64; 2], e1: [f64; 2], s2: [f64; 2], e2: [f64; 2]) -> Option<[f64; 2]> {
+    let d1x = e1[0] - s1[0];
+    let d1y = e1[1] - s1[1];
+    let d2x = e2[0] - s2[0];
+    let d2y = e2[1] - s2[1];
+    
+    let denom = d1x * d2y - d1y * d2x;
+    if denom.abs() < EPSILON {
+        return None; // Parallel
+    }
+    
+    let t = ((s2[0] - s1[0]) * d2y - (s2[1] - s1[1]) * d2x) / denom;
+    let u = ((s2[0] - s1[0]) * d1y - (s2[1] - s1[1]) * d1x) / denom;
+    
+    // Check if intersection is within both segments
+    if t >= -EPSILON && t <= 1.0 + EPSILON && u >= -EPSILON && u <= 1.0 + EPSILON {
+        Some([s1[0] + t * d1x, s1[1] + t * d1y])
+    } else {
+        None
+    }
+}
+
+/// Line-circle intersection
+fn line_circle_intersect(s: [f64; 2], e: [f64; 2], c: [f64; 2], r: f64) -> Vec<[f64; 2]> {
+    let dx = e[0] - s[0];
+    let dy = e[1] - s[1];
+    let fx = s[0] - c[0];
+    let fy = s[1] - c[1];
+    
+    let a = dx * dx + dy * dy;
+    let b = 2.0 * (fx * dx + fy * dy);
+    let cc = fx * fx + fy * fy - r * r;
+    
+    let disc = b * b - 4.0 * a * cc;
+    
+    if disc < 0.0 {
+        return vec![];
+    }
+    
+    let disc_sqrt = disc.sqrt();
+    let mut results = Vec::new();
+    
+    let t1 = (-b - disc_sqrt) / (2.0 * a);
+    let t2 = (-b + disc_sqrt) / (2.0 * a);
+    
+    // Include intersections slightly outside segment for robustness
+    if t1 >= -EPSILON && t1 <= 1.0 + EPSILON {
+        results.push([s[0] + t1 * dx, s[1] + t1 * dy]);
+    }
+    if t2 >= -EPSILON && t2 <= 1.0 + EPSILON && (t2 - t1).abs() > EPSILON {
+        results.push([s[0] + t2 * dx, s[1] + t2 * dy]);
+    }
+    
+    results
+}
+
+/// Build planar graph from entities and intersection points
+fn build_planar_graph(
+    entities: &[&SketchEntity],
+    intersections: &[([f64; 2], Uuid, Uuid)]
+) -> (Vec<GraphVertex>, Vec<HalfEdge>) {
+    let mut vertices: Vec<GraphVertex> = Vec::new();
+    let mut edges: Vec<HalfEdge> = Vec::new();
+    let mut pos_to_vertex: HashMap<String, usize> = HashMap::new();
+    
+    let pos_key = |p: [f64; 2]| format!("{:.6},{:.6}", p[0], p[1]);
+    
+    let get_or_create_vertex = |pos: [f64; 2], 
+                                 vertices: &mut Vec<GraphVertex>, 
+                                 pos_to_vertex: &mut HashMap<String, usize>| -> usize {
+        let key = pos_key(pos);
+        if let Some(&idx) = pos_to_vertex.get(&key) {
+            idx
+        } else {
+            let idx = vertices.len();
+            vertices.push(GraphVertex { pos, edges: Vec::new() });
+            pos_to_vertex.insert(key, idx);
+            idx
+        }
+    };
+    
+    for entity in entities {
+        match &entity.geometry {
+            SketchGeometry::Line { start, end } => {
+                // Collect all points on this line (endpoints + intersections)
+                let mut pts_on_line: Vec<[f64; 2]> = vec![*start, *end];
+                
+                for (pt, id1, id2) in intersections {
+                    if *id1 == entity.id.0 || *id2 == entity.id.0 {
+                        pts_on_line.push(*pt);
+                    }
+                }
+                
+                // Sort by parameter along line
+                let dx = end[0] - start[0];
+                let dy = end[1] - start[1];
+                pts_on_line.sort_by(|a, b| {
+                    let ta = if dx.abs() > dy.abs() { (a[0] - start[0]) / dx } else { (a[1] - start[1]) / dy };
+                    let tb = if dx.abs() > dy.abs() { (b[0] - start[0]) / dx } else { (b[1] - start[1]) / dy };
+                    ta.partial_cmp(&tb).unwrap()
+                });
+                
+                // Deduplicate
+                pts_on_line.dedup_by(|a, b| (a[0] - b[0]).abs() < EPSILON && (a[1] - b[1]).abs() < EPSILON);
+                
+                // Create edges between consecutive points
+                for i in 0..(pts_on_line.len() - 1) {
+                    let v1 = get_or_create_vertex(pts_on_line[i], &mut vertices, &mut pos_to_vertex);
+                    let v2 = get_or_create_vertex(pts_on_line[i + 1], &mut vertices, &mut pos_to_vertex);
+                    
+                    let e1_idx = edges.len();
+                    let e2_idx = edges.len() + 1;
+                    
+                    edges.push(HalfEdge {
+                        start: v1,
+                        end: v2,
+                        entity_id: entity.id.0,
+                        twin: Some(e2_idx),
+                        next: None,
+                        used: false,
+                    });
+                    edges.push(HalfEdge {
+                        start: v2,
+                        end: v1,
+                        entity_id: entity.id.0,
+                        twin: Some(e1_idx),
+                        next: None,
+                        used: false,
+                    });
+                    
+                    vertices[v1].edges.push(e1_idx);
+                    vertices[v2].edges.push(e2_idx);
+                }
+            }
+            SketchGeometry::Circle { center, radius: _ } => {
+                // Collect intersection points on this circle
+                let mut pts_on_circle: Vec<[f64; 2]> = Vec::new();
+                
+                for (pt, id1, id2) in intersections {
+                    if *id1 == entity.id.0 || *id2 == entity.id.0 {
+                        pts_on_circle.push(*pt);
+                    }
+                }
+                
+                if pts_on_circle.is_empty() {
+                    // Self-contained circle, handled separately
+                    continue;
+                }
+                
+                // Sort by angle
+                pts_on_circle.sort_by(|a, b| {
+                    let angle_a = (a[1] - center[1]).atan2(a[0] - center[0]);
+                    let angle_b = (b[1] - center[1]).atan2(b[0] - center[0]);
+                    angle_a.partial_cmp(&angle_b).unwrap()
+                });
+                
+                // For each arc between consecutive intersection points, 
+                // discretize into line segments so graph traversal works
+                let n = pts_on_circle.len();
+                for i in 0..n {
+                    let p1 = pts_on_circle[i];
+                    let p2 = pts_on_circle[(i + 1) % n];
+                    
+                    // Calculate arc between p1 and p2 (going CCW)
+                    let angle1 = (p1[1] - center[1]).atan2(p1[0] - center[0]);
+                    let mut angle2 = (p2[1] - center[1]).atan2(p2[0] - center[0]);
+                    
+                    // Ensure we go CCW from angle1 to angle2  
+                    if angle2 <= angle1 {
+                        angle2 += 2.0 * std::f64::consts::PI;
+                    }
+                    
+                    let arc_length = angle2 - angle1;
+                    
+                    // Discretize into segments (more for longer arcs)
+                    let num_segments = ((arc_length / (std::f64::consts::PI / 16.0)).max(1.0)) as usize;
+                    
+                    let mut prev_vertex = get_or_create_vertex(p1, &mut vertices, &mut pos_to_vertex);
+                    
+                    for seg in 1..=num_segments {
+                        let t = seg as f64 / num_segments as f64;
+                        let angle = angle1 + t * arc_length;
+                        let pt = if seg == num_segments {
+                            p2 // Use exact endpoint
+                        } else {
+                            let r = ((p1[0] - center[0]).powi(2) + (p1[1] - center[1]).powi(2)).sqrt();
+                            [center[0] + r * angle.cos(), center[1] + r * angle.sin()]
+                        };
+                        
+                        let curr_vertex = get_or_create_vertex(pt, &mut vertices, &mut pos_to_vertex);
+                        
+                        // Create half-edge pair
+                        let e1_idx = edges.len();
+                        let e2_idx = edges.len() + 1;
+                        
+                        edges.push(HalfEdge {
+                            start: prev_vertex,
+                            end: curr_vertex,
+                            entity_id: entity.id.0,
+                            twin: Some(e2_idx),
+                            next: None,
+                            used: false,
+                        });
+                        edges.push(HalfEdge {
+                            start: curr_vertex,
+                            end: prev_vertex,
+                            entity_id: entity.id.0,
+                            twin: Some(e1_idx),
+                            next: None,
+                            used: false,
+                        });
+                        
+                        vertices[prev_vertex].edges.push(e1_idx);
+                        vertices[curr_vertex].edges.push(e2_idx);
+                        
+                        prev_vertex = curr_vertex;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    (vertices, edges)
+}
+
+/// Link half-edges by sorting edges around each vertex by angle
+fn link_half_edges(vertices: &[GraphVertex], edges: &mut [HalfEdge]) {
+    for vertex in vertices {
+        if vertex.edges.len() < 2 {
+            continue;
+        }
+        
+        // Sort edges by outgoing angle
+        let mut sorted_edges: Vec<usize> = vertex.edges.clone();
+        sorted_edges.sort_by(|&a, &b| {
+            let ea = &edges[a];
+            let eb = &edges[b];
+            let end_a = vertices[ea.end].pos;
+            let end_b = vertices[eb.end].pos;
+            let angle_a = (end_a[1] - vertex.pos[1]).atan2(end_a[0] - vertex.pos[0]);
+            let angle_b = (end_b[1] - vertex.pos[1]).atan2(end_b[0] - vertex.pos[0]);
+            angle_a.partial_cmp(&angle_b).unwrap()
+        });
+        
+        // Link: incoming edge's next = CCW next outgoing edge
+        for i in 0..sorted_edges.len() {
+            let outgoing = sorted_edges[i];
+            let next_outgoing = sorted_edges[(i + 1) % sorted_edges.len()];
+            
+            // The incoming edge is the twin of this outgoing edge
+            if let Some(twin_idx) = edges[outgoing].twin {
+                edges[twin_idx].next = Some(next_outgoing);
+            }
+        }
+    }
+}
+
+/// Extract faces by following half-edge chains
+fn extract_faces(edges: &mut [HalfEdge]) -> Vec<Vec<usize>> {
+    let mut faces = Vec::new();
+    
+    for start_edge in 0..edges.len() {
+        if edges[start_edge].used {
+            continue;
+        }
+        
+        let mut face = Vec::new();
+        let mut current = start_edge;
+        let mut iterations = 0;
+        let max_iterations = edges.len() * 2;
+        
+        loop {
+            if edges[current].used {
+                break;
+            }
+            
+            edges[current].used = true;
+            face.push(current);
+            
+            if let Some(next) = edges[current].next {
+                if next == start_edge {
+                    // Completed the loop
+                    faces.push(face);
+                    break;
+                }
+                current = next;
+            } else {
+                break; // Dead end
+            }
+            
+            iterations += 1;
+            if iterations > max_iterations {
+                break; // Safety
+            }
+        }
+    }
+    
+    faces
+}
+
+/// Convert a face (list of half-edge indices) to a SketchRegion
+fn face_to_region(
+    face: &[usize], 
+    vertices: &[GraphVertex], 
+    edges: &[HalfEdge]
+) -> Option<SketchRegion> {
+    if face.len() < 3 {
+        return None;
+    }
+    
+    let mut boundary_points: Vec<[f64; 2]> = Vec::new();
+    let mut boundary_entity_ids: HashSet<Uuid> = HashSet::new();
+    
+    for &edge_idx in face {
+        let edge = &edges[edge_idx];
+        let start_pos = vertices[edge.start].pos;
+        boundary_points.push(start_pos);
+        boundary_entity_ids.insert(edge.entity_id);
+    }
+    
+    // Calculate area and centroid
+    let (area, centroid) = compute_area_and_centroid(&boundary_points);
+    
+    // Generate stable ID from boundary entity IDs AND centroid (for uniqueness)
+    // Note: All regions from overlapping circles share the same entity IDs,
+    // so we need to include the centroid to differentiate them
+    let mut id_parts: Vec<String> = boundary_entity_ids.iter().map(|id| id.to_string()).collect();
+    id_parts.sort();
+    let id = format!("region_{:x}", {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id_parts.hash(&mut hasher);
+        // Include centroid to differentiate regions with same boundary entities
+        ((centroid[0] * 10000.0) as i64).hash(&mut hasher);
+        ((centroid[1] * 10000.0) as i64).hash(&mut hasher);
+        hasher.finish()
+    });
+    
+    Some(SketchRegion {
+        id,
+        boundary_entity_ids: boundary_entity_ids.into_iter().collect(),
+        boundary_points,
+        voids: Vec::new(),
+        centroid,
+        area,
+    })
+}
+
+/// Compute signed area and centroid using shoelace formula
+fn compute_area_and_centroid(pts: &[[f64; 2]]) -> (f64, [f64; 2]) {
+    let n = pts.len();
+    if n < 3 {
+        return (0.0, [0.0, 0.0]);
+    }
+    
+    let mut signed_area = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let cross = pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+        signed_area += cross;
+        cx += (pts[i][0] + pts[j][0]) * cross;
+        cy += (pts[i][1] + pts[j][1]) * cross;
+    }
+    
+    signed_area /= 2.0;
+    
+    if signed_area.abs() > EPSILON {
+        cx /= 6.0 * signed_area;
+        cy /= 6.0 * signed_area;
+    } else {
+        // Degenerate, use average
+        cx = pts.iter().map(|p| p[0]).sum::<f64>() / n as f64;
+        cy = pts.iter().map(|p| p[1]).sum::<f64>() / n as f64;
+    }
+    
+    (signed_area, [cx, cy])
+}
+
+/// Convert a self-contained entity (circle/ellipse) to a region
+fn entity_as_region(entity: &SketchEntity) -> Option<SketchRegion> {
+    match &entity.geometry {
+        SketchGeometry::Circle { center, radius } => {
+            // Discretize circle
+            let segments = 64;
+            let mut pts = Vec::with_capacity(segments);
+            for i in 0..segments {
+                let angle = (i as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
+                pts.push([
+                    center[0] + radius * angle.cos(),
+                    center[1] + radius * angle.sin(),
+                ]);
+            }
+            
+            let area = std::f64::consts::PI * radius * radius;
+            
+            Some(SketchRegion {
+                id: format!("region_{}", entity.id.0),
+                boundary_entity_ids: vec![entity.id.0],
+                boundary_points: pts,
+                voids: Vec::new(),
+                centroid: *center,
+                area,
+            })
+        }
+        SketchGeometry::Ellipse { center, semi_major, semi_minor, rotation } => {
+            let segments = 64;
+            let cos_r = rotation.cos();
+            let sin_r = rotation.sin();
+            let mut pts = Vec::with_capacity(segments);
+            
+            for i in 0..segments {
+                let t = (i as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
+                let x_local = semi_major * t.cos();
+                let y_local = semi_minor * t.sin();
+                pts.push([
+                    center[0] + x_local * cos_r - y_local * sin_r,
+                    center[1] + x_local * sin_r + y_local * cos_r,
+                ]);
+            }
+            
+            let area = std::f64::consts::PI * semi_major * semi_minor;
+            
+            Some(SketchRegion {
+                id: format!("region_{}", entity.id.0),
+                boundary_entity_ids: vec![entity.id.0],
+                boundary_points: pts,
+                voids: Vec::new(),
+                centroid: *center,
+                area,
+            })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::topo::EntityId;
+
+    #[test]
+    fn test_two_non_overlapping_circles() {
+        let entities = vec![
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [0.0, 0.0], radius: 5.0 },
+                is_construction: false,
+            },
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [20.0, 0.0], radius: 5.0 },
+                is_construction: false,
+            },
+        ];
+        
+        let regions = find_regions(&entities);
+        assert_eq!(regions.len(), 2, "Two non-overlapping circles should produce 2 regions");
+    }
+
+    #[test]
+    fn test_two_overlapping_circles() {
+        let entities = vec![
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [0.0, 0.0], radius: 5.0 },
+                is_construction: false,
+            },
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [6.0, 0.0], radius: 5.0 },
+                is_construction: false,
+            },
+        ];
+        
+        let regions = find_regions(&entities);
+        // Should have 3 regions: left crescent, intersection, right crescent
+        assert_eq!(regions.len(), 3, "Two overlapping circles should produce 3 regions");
+        
+        // All regions should have positive area
+        for region in &regions {
+            assert!(region.area > 0.0, "Region area should be positive");
+        }
+    }
+
+    #[test]
+    fn test_point_in_circle_region() {
+        let entity = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Circle { center: [0.0, 0.0], radius: 5.0 },
+            is_construction: false,
+        };
+        
+        let regions = find_regions(&[entity]);
+        assert_eq!(regions.len(), 1);
+        
+        let region = &regions[0];
+        
+        // Point at center should be inside
+        assert!(point_in_region([0.0, 0.0], region), "Center should be inside");
+        
+        // Point outside should be outside
+        assert!(!point_in_region([10.0, 0.0], region), "Point at (10,0) should be outside");
+    }
+
+    #[test]
+    fn test_circle_circle_intersection() {
+        let pts = circle_circle_intersect([0.0, 0.0], 5.0, [6.0, 0.0], 5.0);
+        assert_eq!(pts.len(), 2, "Overlapping circles should have 2 intersection points");
+    }
+}

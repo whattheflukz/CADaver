@@ -8,6 +8,7 @@ pub enum Value {
     Boolean(bool),
     Identifier(String),
     Vector(Vec<f64>),
+    Array(Vec<Value>),
 }
 
 impl fmt::Display for Value {
@@ -18,6 +19,14 @@ impl fmt::Display for Value {
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Identifier(s) => write!(f, "{}", s),
             Value::Vector(v) => {
+                write!(f, "[")?;
+                for (i, val) in v.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", val)?;
+                }
+                write!(f, "]")
+            }
+            Value::Array(v) => {
                 write!(f, "[")?;
                 for (i, val) in v.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }

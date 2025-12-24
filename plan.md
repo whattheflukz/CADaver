@@ -156,6 +156,21 @@ Mode changes must:
 - [ ] Keyboard shortcut system
 - [ ] Command palette infrastructure
 
+### **Reusable UI Components (Added — Best Practice)**
+
+Focus on building reusable, composable components to reduce duplication and ensure consistent UX.
+
+**Existing Base Components:**
+- [x] `BaseModal` — Draggable modal with standard Cancel/Finish buttons, title, and children slot
+  - Used by: `OffsetModal`, `MirrorModal`
+  - Features: drag-to-move, consistent dark theme, disabled state support
+
+**Future Candidates:**
+- [ ] `SelectionField` — Reusable "click to select entity" input field
+- [ ] `NumericInput` — Styled number input with unit support
+- [ ] `ToolButton` — Consistent toolbar button with tooltip and shortcut display
+
+
 ### MicroCAD Integration
 - [ ] Embed MicroCAD Runtime
 - [x] Program generation layer
@@ -234,9 +249,9 @@ Mode changes must:
 
 ### Sketch Editing Tools
 - [x] Trim / extend (basic line-line trim)
-- [ ] Offset sketch geometry
-- [ ] Mirror sketch geometry
-- [ ] Sketch patterns
+- [x] Offset sketch geometry *(Added)*
+- [x] Mirror sketch geometry *(Added)*
+- [x] Sketch patterns
 - [x] Construction geometry
 - [ ] Derived / reused sketches
 - [x] Fix / unfix sketch entities *(Added)*
@@ -261,7 +276,7 @@ Mode changes must:
 - [x] Fix constraint *(Added)*
 - [x] Distance constraint *(Added)*
 - [x] Angle constraint *(Added)*
-- [ ] Constraint suppression *(Added)*
+- [x] Constraint suppression *(Added)*
 
 ### Constraint Solver Requirements
 - [x] Incremental solving
@@ -470,6 +485,16 @@ The project must not proceed to advanced solid modeling unless:
 - [ ] Occlusion culling
 - [ ] LOD rendering
 - [ ] Background regeneration
+
+---
+
+## Phase 9 — CAM
+
+### CAM
+- [ ] todo
+
+### Performance
+- [ ] todo
 
 ---
 

@@ -108,6 +108,30 @@ pub enum SketchConstraint {
     },
 }
 
+/// Wrapper for constraints with suppression state and future metadata
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchConstraintEntry {
+    pub constraint: SketchConstraint,
+    #[serde(default)]
+    pub suppressed: bool,
+}
+
+impl SketchConstraintEntry {
+    pub fn new(constraint: SketchConstraint) -> Self {
+        Self { constraint, suppressed: false }
+    }
+
+    pub fn suppressed(constraint: SketchConstraint) -> Self {
+        Self { constraint, suppressed: true }
+    }
+}
+
+impl From<SketchConstraint> for SketchConstraintEntry {
+    fn from(constraint: SketchConstraint) -> Self {
+        Self::new(constraint)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SketchOperation {
     AddGeometry { id: EntityId, geometry: SketchGeometry },
@@ -120,7 +144,7 @@ pub struct Sketch {
     // Using a Vec for ordered iteration stability, but could be HashMap. 
     // For Phase 1, linear scan is fine, stability of order is nice for UI.
     pub entities: Vec<SketchEntity>,
-    pub constraints: Vec<SketchConstraint>,
+    pub constraints: Vec<SketchConstraintEntry>,
     #[serde(default)]
     pub history: Vec<SketchOperation>,
 }
@@ -143,8 +167,38 @@ impl Sketch {
     }
 
     pub fn add_constraint(&mut self, constraint: SketchConstraint) {
-        self.constraints.push(constraint.clone());
+        self.constraints.push(SketchConstraintEntry::new(constraint.clone()));
         self.history.push(SketchOperation::AddConstraint { constraint });
+    }
+
+    /// Add constraint with explicit suppression state
+    pub fn add_constraint_with_suppression(&mut self, constraint: SketchConstraint, suppressed: bool) {
+        self.constraints.push(SketchConstraintEntry { constraint: constraint.clone(), suppressed });
+        self.history.push(SketchOperation::AddConstraint { constraint });
+    }
+
+    /// Toggle suppression state for a constraint by index
+    pub fn toggle_constraint_suppression(&mut self, index: usize) -> bool {
+        if let Some(entry) = self.constraints.get_mut(index) {
+            entry.suppressed = !entry.suppressed;
+            entry.suppressed
+        } else {
+            false
+        }
+    }
+
+    /// Set suppression state for a constraint by index
+    pub fn set_constraint_suppression(&mut self, index: usize, suppressed: bool) {
+        if let Some(entry) = self.constraints.get_mut(index) {
+            entry.suppressed = suppressed;
+        }
+    }
+
+    /// Get active (non-suppressed) constraints
+    pub fn active_constraints(&self) -> impl Iterator<Item = &SketchConstraint> {
+        self.constraints.iter()
+            .filter(|e| !e.suppressed)
+            .map(|e| &e.constraint)
     }
 
     /// Populates history from entities and constraints if history is empty.
@@ -167,9 +221,9 @@ impl Sketch {
             });
         }
 
-        for constraint in &self.constraints {
+        for entry in &self.constraints {
             self.history.push(SketchOperation::AddConstraint { 
-                constraint: constraint.clone() 
+                constraint: entry.constraint.clone() 
             });
         }
     }

@@ -242,8 +242,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           let mut graph = state.graph.write().unwrap();
                           if graph.remove_node(entity_id).is_some() {
                               info!("Deleted feature {}", id);
-                              let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                              // IMPORTANT: regenerate() BEFORE serializing to ensure sort_order is populated
                               let program = graph.regenerate();
+                              let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
                               (Some(json), Some(program))
                           } else {
                               warn!("Feature {} not found for deletion", id);
@@ -380,16 +381,21 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                      #[serde(rename = "type")]
                      feature_type: String, // "Sketch", etc.
                      name: String,
+                     dependencies: Option<Vec<uuid::Uuid>>,
                  }
                  
                  if let Ok(cmd) = serde_json::from_str::<CreateCmd>(json_str) {
                       let f_type = match cmd.feature_type.as_str() {
                           "Sketch" => cad_core::features::types::FeatureType::Sketch,
                           "Extrude" => cad_core::features::types::FeatureType::Extrude,
+                          "Revolve" => cad_core::features::types::FeatureType::Revolve,
                           _ => cad_core::features::types::FeatureType::Point // Default fallback
                       };
                       
-                      let feature = cad_core::features::types::Feature::new(&cmd.name, f_type);
+                      let mut feature = cad_core::features::types::Feature::new(&cmd.name, f_type);
+                      if let Some(deps) = cmd.dependencies {
+                          feature.dependencies = deps.into_iter().map(cad_core::topo::EntityId::from_uuid).collect();
+                      }
                       let id = feature.id;
 
                       let (json_update, program) = {
@@ -422,6 +428,52 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           }
                       }
                  }
+            } else if text.starts_with("GET_REGIONS:") {
+                // Format: GET_REGIONS:sketchFeatureId
+                // Returns computed regions using the planar graph algorithm
+                let id_str = text.trim_start_matches("GET_REGIONS:");
+                if let Ok(id) = uuid::Uuid::parse_str(id_str) {
+                    let entity_id = cad_core::topo::EntityId::from_uuid(id);
+                    
+                    let regions_json = {
+                        let graph = state.graph.read().unwrap();
+                        if let Some(node) = graph.nodes.get(&entity_id) {
+                            if let Some(cad_core::features::types::ParameterValue::Sketch(ref sketch)) = node.parameters.get("sketch_data") {
+                                // Compute regions using the planar graph algorithm
+                                let regions = cad_core::sketch::regions::find_regions(&sketch.entities);
+                                info!("Computed {} regions for sketch {}", regions.len(), id);
+                                
+                                // Convert to JSON-serializable format
+                                let serializable_regions: Vec<serde_json::Value> = regions.iter().map(|r| {
+                                    serde_json::json!({
+                                        "id": r.id.to_string(),
+                                        "boundary_entity_ids": r.boundary_entity_ids.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+                                        "boundary_points": r.boundary_points,
+                                        "voids": r.voids,
+                                        "centroid": r.centroid,
+                                        "area": r.area
+                                    })
+                                }).collect();
+                                
+                                Some(serde_json::to_string(&serializable_regions).unwrap_or("[]".into()))
+                            } else {
+                                warn!("Sketch data not found for feature {}", id);
+                                None
+                            }
+                        } else {
+                            warn!("Feature {} not found", id);
+                            None
+                        }
+                    };
+                    
+                    if let Some(json) = regions_json {
+                        if socket.send(Message::Text(format!("REGIONS_UPDATE:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                } else {
+                    warn!("Invalid UUID for GET_REGIONS: {}", id_str);
+                }
             } else {
                  if socket.send(Message::Text(format!("Echo: {}", text))).await.is_err() {
                      return;

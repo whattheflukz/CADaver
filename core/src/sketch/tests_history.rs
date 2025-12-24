@@ -49,7 +49,7 @@ mod tests {
         });
 
         let constraint = SketchConstraint::Horizontal { entity: id1 };
-        sketch.constraints.push(constraint.clone());
+        sketch.constraints.push(constraint.clone().into());
 
         // History should be empty initially (simulating legacy)
         assert!(sketch.history.is_empty());

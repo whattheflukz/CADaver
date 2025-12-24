@@ -92,3 +92,187 @@ impl Tessellation {
         self.point_ids.push(id);
     }
 }
+
+/// Triangulate a 2D polygon using ear-clipping algorithm.
+/// Works for both convex and concave simple polygons.
+/// Returns a list of triangle indices (i, j, k) into the input polygon.
+pub fn ear_clip_triangulate(polygon: &[[f64; 2]]) -> Vec<(usize, usize, usize)> {
+    let n = polygon.len();
+    if n < 3 {
+        return vec![];
+    }
+    
+    // Create index list
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut triangles = Vec::new();
+    
+    // Helper: compute signed area of triangle
+    fn signed_area(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+        (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+    }
+    
+    // Determine overall polygon winding (positive = CCW, negative = CW)
+    let mut total_signed_area = 0.0;
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        total_signed_area += (b[0] - a[0]) * (b[1] + a[1]);
+    }
+    let is_ccw = total_signed_area < 0.0;
+    
+    println!("[EAR_CLIP] n={}, total_signed_area={:.6}, is_ccw={}", n, total_signed_area, is_ccw);
+    
+    // Helper: check if point is inside triangle
+    fn point_in_triangle(p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
+        let sign = |p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]| -> f64 {
+            (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+        };
+        let d1 = sign(p, a, b);
+        let d2 = sign(p, b, c);
+        let d3 = sign(p, c, a);
+        let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+        let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+        !(has_neg && has_pos)
+    }
+    
+    // Ear clipping
+    let mut safety = 0;
+    let mut no_ear_count = 0;
+    while indices.len() > 3 && safety < n * n {
+        safety += 1;
+        let mut found_ear = false;
+        
+        for i in 0..indices.len() {
+            let len = indices.len();
+            let prev = indices[(i + len - 1) % len];
+            let curr = indices[i];
+            let next = indices[(i + 1) % len];
+            
+            let a = polygon[prev];
+            let b = polygon[curr];
+            let c = polygon[next];
+            
+            let area = signed_area(a, b, c);
+            
+            // Check if this is a convex vertex (ear candidate)
+            let is_convex = if is_ccw { area > 0.0 } else { area < 0.0 };
+            
+            if !is_convex {
+                continue;
+            }
+            
+            // Check if any other vertex is inside this triangle
+            let mut is_ear = true;
+            for j in 0..indices.len() {
+                if j == (i + len - 1) % len || j == i || j == (i + 1) % len {
+                    continue;
+                }
+                let p = polygon[indices[j]];
+                if point_in_triangle(p, a, b, c) {
+                    is_ear = false;
+                    break;
+                }
+            }
+            
+            if is_ear {
+                triangles.push((prev, curr, next));
+                indices.remove(i);
+                found_ear = true;
+                break;
+            }
+        }
+        
+        if !found_ear {
+            // Fallback: try to find any ear (degenerate case)
+            break;
+        }
+    }
+    
+    // Handle remaining triangle
+    if indices.len() == 3 {
+        triangles.push((indices[0], indices[1], indices[2]));
+    }
+    
+    triangles
+}
+
+/// Triangulate a polygon with holes using earcutr library.
+/// Returns the merged 2D points and triangle indices.
+pub fn triangulate_polygon_with_holes(outer: &[[f64; 2]], holes: &[Vec<[f64; 2]>]) -> (Vec<[f64; 2]>, Vec<(usize, usize, usize)>) {
+    println!("[TRIANGULATE] outer={} pts, holes={}", outer.len(), holes.len());
+    
+    if outer.len() < 3 {
+        return (outer.to_vec(), vec![]);
+    }
+    
+    // Build flattened vertex array and hole indices for earcutr
+    let mut vertices: Vec<f64> = Vec::with_capacity((outer.len() + holes.iter().map(|h| h.len()).sum::<usize>()) * 2);
+    let mut hole_indices: Vec<usize> = Vec::with_capacity(holes.len());
+    
+    // Add outer polygon vertices
+    for pt in outer {
+        vertices.push(pt[0]);
+        vertices.push(pt[1]);
+    }
+    
+    // Add hole vertices
+    for hole in holes {
+        hole_indices.push(vertices.len() / 2); // Index of first vertex of this hole
+        for pt in hole {
+            vertices.push(pt[0]);
+            vertices.push(pt[1]);
+        }
+    }
+    
+    // Run earcutr triangulation
+    let indices = earcutr::earcut(&vertices, &hole_indices, 2).unwrap_or_default();
+    
+    // Convert flat indices to triangle tuples
+    let triangles: Vec<(usize, usize, usize)> = indices
+        .chunks(3)
+        .map(|chunk| (chunk[0], chunk[1], chunk[2]))
+        .collect();
+    
+    // Build merged points array for compatibility with existing code
+    let merged_points: Vec<[f64; 2]> = vertices
+        .chunks(2)
+        .map(|chunk| [chunk[0], chunk[1]])
+        .collect();
+    
+    println!("[TRIANGULATE] earcutr produced {} triangles", triangles.len());
+    (merged_points, triangles)
+}
+
+fn is_visible_segment(p1: &[f64; 2], p2: &[f64; 2], poly: &[[f64; 2]]) -> bool {
+    let n = poly.len();
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i+1)%n];
+        
+        // Ignore edges incident to p1 or p2
+        if (p1[0]-a[0]).abs() < 1e-6 && (p1[1]-a[1]).abs() < 1e-6 { continue; }
+        if (p1[0]-b[0]).abs() < 1e-6 && (p1[1]-b[1]).abs() < 1e-6 { continue; }
+        if (p2[0]-a[0]).abs() < 1e-6 && (p2[1]-a[1]).abs() < 1e-6 { continue; }
+        if (p2[0]-b[0]).abs() < 1e-6 && (p2[1]-b[1]).abs() < 1e-6 { continue; }
+        
+        if segments_intersect(*p1, *p2, a, b) {
+            return false;
+        }
+    }
+    true
+}
+
+fn segments_intersect(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
+    fn ccw(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]) -> f64 {
+        (p2[0]-p1[0])*(p3[1]-p1[1]) - (p2[1]-p1[1])*(p3[0]-p1[0])
+    }
+    
+    let d1 = ccw(c, d, a);
+    let d2 = ccw(c, d, b);
+    let d3 = ccw(a, b, c);
+    let d4 = ccw(a, b, d);
+    
+    // Strict intersection
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) &&
+    ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+}

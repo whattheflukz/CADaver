@@ -9,7 +9,7 @@ fn test_distance_point_line() {
     let line_id = sketch.add_entity(SketchGeometry::Line { 
         start: [0.0, 0.0], 
         end: [10.0, 0.0] 
-    });
+    }.into());
     
     // Point at (5, 5)
     let point_id = sketch.add_entity(SketchGeometry::Point { pos: [5.0, 5.0] });
@@ -22,18 +22,18 @@ fn test_distance_point_line() {
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: line_id, index: 0 }, 
         position: [0.0, 0.0] 
-    });
+    }.into());
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: line_id, index: 1 }, 
         position: [10.0, 0.0] 
-    });
+    }.into());
     
     sketch.constraints.push(SketchConstraint::DistancePointLine {
         point: ConstraintPoint { id: point_id, index: 0 },
         line: line_id,
         value: 2.0,
         style: None
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     assert!(result.converged, "Solver should converge");
@@ -57,7 +57,7 @@ fn test_distance_point_line_move_line() {
     let line_id = sketch.add_entity(SketchGeometry::Line { 
         start: [0.0, 0.0], 
         end: [10.0, 0.0] 
-    });
+    }.into());
     
     // Point at (5, 5) -> Fixed
     let point_id = sketch.add_entity(SketchGeometry::Point { pos: [5.0, 5.0] });
@@ -65,7 +65,7 @@ fn test_distance_point_line_move_line() {
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: point_id, index: 0 }, 
         position: [5.0, 5.0] 
-    });
+    }.into());
     
     // Constrain distance to 2.0
     // Line should move up to y=3.0 (dist=2 from 5)
@@ -74,7 +74,7 @@ fn test_distance_point_line_move_line() {
         line: line_id,
         value: 2.0,
         style: None
-    });
+    }.into());
     
     let result = SketchSolver::solve_with_result(&mut sketch);
     assert!(result.converged);

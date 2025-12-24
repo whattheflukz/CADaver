@@ -174,10 +174,17 @@ impl FeatureGraph {
                         }
                         
                         // Get distance parameter (default 10.0)
-                        let distance = match feature.parameters.get("distance") {
+                        let mut distance = match feature.parameters.get("distance") {
                             Some(crate::features::types::ParameterValue::Float(d)) => *d,
                             _ => 10.0, // Default distance
                         };
+                        
+                        // Check for flip_direction parameter
+                        if let Some(crate::features::types::ParameterValue::Bool(flip)) = feature.parameters.get("flip_direction") {
+                            if *flip {
+                                distance = -distance;
+                            }
+                        }
                         args.push(Expression::Value(Value::Number(distance)));
                         
                         // Get operation (default Add = 0)
@@ -186,7 +193,36 @@ impl FeatureGraph {
                             _ => "Add".to_string(),
                         };
                         args.push(Expression::Value(Value::String(operation)));
-                         
+
+                        // Get start_offset parameter (default 0.0)
+                        let start_offset = match feature.parameters.get("start_offset") {
+                            Some(crate::features::types::ParameterValue::Float(d)) => *d,
+                            _ => 0.0,
+                        };
+                        args.push(Expression::Value(Value::Number(start_offset)));
+
+                        // Get profiles parameter (optional List or String)
+                        if let Some(val) = feature.parameters.get("profiles") {
+                            match val {
+                                crate::features::types::ParameterValue::List(list) => {
+                                    let arr = list.iter().map(|s| Value::String(s.clone())).collect();
+                                    args.push(Expression::Value(Value::Array(arr)));
+                                },
+                                crate::features::types::ParameterValue::String(s) => {
+                                    args.push(Expression::Value(Value::String(s.clone())));
+                                }
+                                _ => {}
+                            }
+                        }
+                        
+                        // Get profile_regions parameter (boundary points for region-based extrusion)
+                        // This is critical for intersection regions where entity IDs are shared
+                        if let Some(crate::features::types::ParameterValue::ProfileRegions(regions)) = feature.parameters.get("profile_regions") {
+                            // Serialize the regions as JSON string for the syscall
+                            if let Ok(json) = serde_json::to_string(regions) {
+                                args.push(Expression::Value(Value::String(json)));
+                            }
+                        }
                         Some(Call {
                             function: "extrude".to_string(),
                             args, 

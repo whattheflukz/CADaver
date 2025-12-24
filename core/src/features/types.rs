@@ -9,6 +9,11 @@ pub enum ParameterValue {
     Bool(bool),
     Sketch(crate::sketch::types::Sketch),
     Reference(crate::topo::naming::TopoId),
+    List(Vec<String>),
+    /// Profile regions for region-based extrusion.
+    /// Each item is a list of loops (first is outer, rest are holes).
+    /// Each loop is a list of 2D points [[x,y], ...].
+    ProfileRegions(Vec<Vec<Vec<[f64; 2]>>>),
     // Expression(String), // TODO: Add expression parsing
 }
 

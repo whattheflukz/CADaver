@@ -1,4 +1,4 @@
-import { createSignal, type Component, type JSX, Show } from 'solid-js';
+import { createSignal, type Component, type JSX, Show, onMount } from 'solid-js';
 
 interface BaseModalProps {
     isOpen: boolean;
@@ -14,22 +14,60 @@ interface BaseModalProps {
 }
 
 export const BaseModal: Component<BaseModalProps> = (props) => {
-    const defaultY = typeof window !== 'undefined' ? window.innerHeight - 300 : 500;
-    const initial = props.initialPosition ?? { x: 20, y: defaultY };
+    const MARGIN = 20; // Margin from viewport edges
+    let modalRef: HTMLDivElement | undefined;
 
-    const [position, setPosition] = createSignal(initial);
+    // Start with a position that will be adjusted after mount
+    const [position, setPosition] = createSignal({ x: MARGIN, y: MARGIN });
     const [isDragging, setIsDragging] = createSignal(false);
     const [dragOffset, setDragOffset] = createSignal({ x: 0, y: 0 });
+
+    // Calculate and clamp position to keep modal fully on-screen
+    const clampPosition = (x: number, y: number, modalWidth: number, modalHeight: number) => {
+        const maxX = window.innerWidth - modalWidth - MARGIN;
+        const maxY = window.innerHeight - modalHeight - MARGIN;
+
+        return {
+            x: Math.max(MARGIN, Math.min(x, maxX)),
+            y: Math.max(MARGIN, Math.min(y, maxY))
+        };
+    };
+
+    // After mount, measure modal and position it in lower-left
+    onMount(() => {
+        if (modalRef) {
+            const rect = modalRef.getBoundingClientRect();
+            const modalHeight = rect.height;
+            const modalWidth = rect.width;
+
+            // Target position: lower-left corner
+            const targetX = props.initialPosition?.x ?? MARGIN;
+            const targetY = props.initialPosition?.y ?? (window.innerHeight - modalHeight - MARGIN);
+
+            // Clamp to ensure it stays on screen
+            const clamped = clampPosition(targetX, targetY, modalWidth, modalHeight);
+            setPosition(clamped);
+        }
+    });
 
     const startDrag = (e: MouseEvent) => {
         setIsDragging(true);
         setDragOffset({ x: e.clientX - position().x, y: e.clientY - position().y });
 
         const handleMouseMove = (moveEvent: MouseEvent) => {
-            setPosition({
-                x: moveEvent.clientX - dragOffset().x,
-                y: moveEvent.clientY - dragOffset().y
-            });
+            if (modalRef) {
+                const rect = modalRef.getBoundingClientRect();
+                const newX = moveEvent.clientX - dragOffset().x;
+                const newY = moveEvent.clientY - dragOffset().y;
+                // Clamp while dragging too
+                const clamped = clampPosition(newX, newY, rect.width, rect.height);
+                setPosition(clamped);
+            } else {
+                setPosition({
+                    x: moveEvent.clientX - dragOffset().x,
+                    y: moveEvent.clientY - dragOffset().y
+                });
+            }
         };
 
         const handleMouseUp = () => {
@@ -48,7 +86,7 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
 
     return (
         <Show when={props.isOpen}>
-            <div style={{
+            <div ref={modalRef} style={{
                 position: 'fixed',
                 top: `${position().y}px`,
                 left: `${position().x}px`,

@@ -9,7 +9,7 @@ fn test_symmetry_vertical_axis() {
     let axis = sketch.add_entity(SketchGeometry::Line { 
         start: [5.0, 0.0], 
         end: [5.0, 10.0] 
-    });
+    }.into());
     
     // P1 at (0, 5)
     let p1_id = sketch.add_entity(SketchGeometry::Point { pos: [0.0, 5.0] });
@@ -20,17 +20,17 @@ fn test_symmetry_vertical_axis() {
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: axis, index: 0 }, 
         position: [5.0, 0.0] 
-    });
+    }.into());
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: axis, index: 1 }, 
         position: [5.0, 10.0] 
-    });
+    }.into());
     
     sketch.constraints.push(SketchConstraint::Symmetric {
         p1: ConstraintPoint { id: p1_id, index: 0 },
         p2: ConstraintPoint { id: p2_id, index: 0 },
         axis: axis
-    });
+    }.into());
     
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged);
@@ -69,17 +69,17 @@ fn test_symmetry_diagonal_axis() {
     let axis = sketch.add_entity(SketchGeometry::Line { 
         start: [0.0, 0.0], 
         end: [10.0, 10.0] 
-    });
+    }.into());
     
     // Fix axis
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: axis, index: 0 }, 
         position: [0.0, 0.0] 
-    });
+    }.into());
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: axis, index: 1 }, 
         position: [10.0, 10.0] 
-    });
+    }.into());
     
     // P1 at (2, 0)
     let p1_id = sketch.add_entity(SketchGeometry::Point { pos: [2.0, 0.0] });
@@ -91,13 +91,13 @@ fn test_symmetry_diagonal_axis() {
     sketch.constraints.push(SketchConstraint::Fix { 
         point: ConstraintPoint { id: p1_id, index: 0 }, 
         position: [2.0, 0.0] 
-    });
+    }.into());
     
     sketch.constraints.push(SketchConstraint::Symmetric {
         p1: ConstraintPoint { id: p1_id, index: 0 },
         p2: ConstraintPoint { id: p2_id, index: 0 },
         axis: axis
-    });
+    }.into());
     
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged);

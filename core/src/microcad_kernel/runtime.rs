@@ -342,21 +342,55 @@ impl Runtime {
                 
                 let ctx = NamingContext::new(id);
                 
-                // Parse arguments: sketch_json, distance, operation
+                // Parse arguments: sketch_json, distance, operation, start_offset, profiles (optional)
                 let mut sketch_json: Option<String> = None;
-                let mut distance: f64 = 10.0;
+                let mut distance = 10.0;
                 let mut _operation = "Add";
+                let mut start_offset = 0.0;
+                // List of sketches entity UUIDs to extrude (as strings)
+                let mut profile_selection: Option<Vec<String>> = None;
+                // Region boundary points for region-based extrusion (JSON: [[[x,y], ...], ...])
+                // Each item is a Profile (list of loops: outer, inner...)
+                let mut profile_regions: Option<Vec<Vec<Vec<[f64; 2]>>>> = None;
                 
                 for (i, arg) in call.args.iter().enumerate() {
                     match (i, arg) {
                         (0, Expression::Value(Value::String(s))) => sketch_json = Some(s.clone()),
                         (1, Expression::Value(Value::Number(d))) => distance = *d,
                         (2, Expression::Value(Value::String(op))) => _operation = op.as_str(),
+                        (3, Expression::Value(Value::Number(o))) => start_offset = *o,
+                        (4, Expression::Value(Value::Array(arr))) => {
+                             let list: Vec<String> = arr.iter().filter_map(|v| {
+                                 if let Value::String(s) = v { Some(s.clone()) } else { None }
+                             }).collect();
+                             // Allow empty list to mean "Select None"
+                             profile_selection = Some(list);
+                        },
+                        (4, Expression::Value(Value::String(s))) => {
+                             // Single ID case? Or serialized JSON array?
+                             // Let's support if it's a JSON array string
+                             if let Ok(list) = serde_json::from_str::<Vec<String>>(s) {
+                                 if !list.is_empty() {
+                                    profile_selection = Some(list);
+                                 }
+                             }
+                        },
+                        // Profile regions: boundary points for region-based extrusion
+                        (5, Expression::Value(Value::String(s))) => {
+                            // JSON array of profiles
+                            if let Ok(regions) = serde_json::from_str::<Vec<Vec<Vec<[f64; 2]>>>>(s) {
+                                if !regions.is_empty() {
+                                    profile_regions = Some(regions);
+                                }
+                            }
+                        },
                         _ => {}
                     }
                 }
                 
-                logs.push(format!("Extruding with distance={}, operation={}", distance, _operation));
+                logs.push(format!("Extruding distance={}, offset={}, op={}, profiles={:?}, regions={}", 
+                    distance, start_offset, _operation, profile_selection, 
+                    profile_regions.as_ref().map(|r| r.len()).unwrap_or(0)));
                 
                 // Parse sketch and generate 3D geometry
                 if let Some(json) = sketch_json {
@@ -364,144 +398,227 @@ impl Runtime {
                         // Solve constraints first
                         crate::sketch::solver::SketchSolver::solve(&mut sketch);
                         
-                        // Collect line segments to form profile
-                        let mut profile_points: Vec<[f64; 2]> = Vec::new();
+                        let plane = sketch.plane;
+                        let origin = plane.origin;
+                        let x_axis = plane.x_axis;
+                        let y_axis = plane.y_axis;
+                        let normal_vec = plane.normal;
+                        let normal: [f64; 3] = [normal_vec[0], normal_vec[1], normal_vec[2]];
                         
-                        for entity in &sketch.entities {
-                            // Skip construction geometry
-                            if entity.is_construction {
-                                continue;
-                            }
-                            
-                            match &entity.geometry {
-                                crate::sketch::types::SketchGeometry::Line { start, end } => {
-                                    // Add start point if not already present
-                                    if profile_points.is_empty() || 
-                                       (profile_points.last().unwrap()[0] - start[0]).abs() > 1e-6 ||
-                                       (profile_points.last().unwrap()[1] - start[1]).abs() > 1e-6 {
-                                        profile_points.push(*start);
-                                    }
-                                    profile_points.push(*end);
+                        // Determine which loops to extrude
+                        // Priority: profile_regions (exact boundary points) > find_closed_loops
+                        // Type: Vec<Vec<Vec<[f64; 2]>>> where inner is [Outer, Hole1, Hole2...]
+                        let loops_2d: Vec<Vec<Vec<[f64; 2]>>> = if let Some(regions) = profile_regions {
+                            // Use provided region boundary points directly
+                            logs.push(format!("Using {} provided profile regions", regions.len()));
+                            regions
+                        } else {
+                            // Fallback: filter entities and use find_closed_loops
+                            let filtered_entities: Vec<crate::sketch::types::SketchEntity> = match profile_selection {
+                                Some(selection) if !selection.is_empty() => {
+                                    let set: std::collections::HashSet<String> = selection.into_iter().collect();
+                                    sketch.entities.iter().filter(|e| set.contains(&e.id.to_string())).cloned().collect()
                                 },
-                                _ => {} // TODO: Handle arcs, circles as profiles
-                            }
-                        }
+                                _ => sketch.entities.clone(), // None or empty list = extrude all
+                            };
+                            
+                            // Use chain finder to get closed loops
+                            let loops = crate::sketch::chains::find_closed_loops(&filtered_entities);
+                            logs.push(format!("Found {} closed loops for extrusion", loops.len()));
+                            
+                            // Convert chain loops to 2D point arrays
+                            loops.into_iter().map(|chain| {
+                                let mut points: Vec<[f64; 2]> = Vec::new();
+                                for entity in chain {
+                                    match &entity.geometry {
+                                        crate::sketch::types::SketchGeometry::Line { start, end } => {
+                                            if points.is_empty() || 
+                                               (points.last().unwrap()[0] - start[0]).abs() > 1e-6 ||
+                                               (points.last().unwrap()[1] - start[1]).abs() > 1e-6 {
+                                                points.push(*start);
+                                            }
+                                            points.push(*end);
+                                        },
+                                        crate::sketch::types::SketchGeometry::Circle { center, radius } => {
+                                            let segments = 32;
+                                            for j in 0..segments {
+                                                let angle = (j as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
+                                                points.push([
+                                                    center[0] + radius * angle.cos(),
+                                                    center[1] + radius * angle.sin()
+                                                ]);
+                                            }
+                                        },
+                                        crate::sketch::types::SketchGeometry::Ellipse { center, semi_major, semi_minor, rotation } => {
+                                            let segments = 32;
+                                            let cos_r = rotation.cos();
+                                            let sin_r = rotation.sin();
+                                            for j in 0..segments {
+                                                let t = (j as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
+                                                let x_local = semi_major * t.cos();
+                                                let y_local = semi_minor * t.sin();
+                                                points.push([
+                                                    center[0] + x_local * cos_r - y_local * sin_r,
+                                                    center[1] + x_local * sin_r + y_local * cos_r
+                                                ]);
+                                            }
+                                        },
+                                        crate::sketch::types::SketchGeometry::Arc { center, radius, start_angle, end_angle } => {
+                                            let segments = 16;
+                                            let angle_span = end_angle - start_angle;
+                                            for j in 0..=segments {
+                                                let t = j as f64 / segments as f64;
+                                                let angle = start_angle + t * angle_span;
+                                                points.push([
+                                                    center[0] + radius * angle.cos(),
+                                                    center[1] + radius * angle.sin()
+                                                ]);
+                                            }
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                                vec![points] // Wrap single loop as a profile with no holes
+                            }).collect()
+                        };
                         
-                        // Generate 3D prism from profile
-                        if profile_points.len() >= 2 {
-                            let z_bottom = 0.0;
-                            let z_top = distance;
+                        logs.push(format!("Processing {} loops for extrusion", loops_2d.len()));
+
+                        let to_3d = |u: f64, v: f64| -> [f64; 3] {
+                            [
+                                origin[0] + u * x_axis[0] + v * y_axis[0],
+                                origin[1] + u * x_axis[1] + v * y_axis[1],
+                                origin[2] + u * x_axis[2] + v * y_axis[2],
+                            ]
+                        };
+
+                        for (profile_idx, profile_loops_2d) in loops_2d.iter().enumerate() {
+                            if profile_loops_2d.is_empty() { continue; }
                             
-                            // Create bottom face TopoId
-                            let bottom_face_id = ctx.derive("BottomFace", TopoRank::Face);
-                            let bottom_entity = KernelEntity {
-                                id: bottom_face_id,
-                                geometry: AnalyticGeometry::Plane {
-                                    origin: [0.0, 0.0, z_bottom],
-                                    normal: [0.0, 0.0, -1.0],
-                                }
-                            };
-                            topology_manifest.insert(bottom_face_id, bottom_entity);
+                            let outer_loop = &profile_loops_2d[0];
+                            let holes = &profile_loops_2d[1..];
                             
-                            // Create top face TopoId
-                            let top_face_id = ctx.derive("TopFace", TopoRank::Face);
-                            let top_entity = KernelEntity {
-                                id: top_face_id,
-                                geometry: AnalyticGeometry::Plane {
-                                    origin: [0.0, 0.0, z_top],
-                                    normal: [0.0, 0.0, 1.0],
-                                }
-                            };
-                            topology_manifest.insert(top_face_id, top_entity);
+                            // Triangulate with holes
+                            let (merged_2d_points, triangles) = crate::geometry::tessellation::triangulate_polygon_with_holes(outer_loop, holes);
                             
-                            // Triangulate bottom and top faces (simple fan triangulation for convex profiles)
-                            // For a proper implementation, we'd use ear clipping or similar
-                            if profile_points.len() >= 3 {
-                                let p0 = profile_points[0];
-                                for i in 1..(profile_points.len() - 1) {
-                                    let p1 = profile_points[i];
-                                    let p2 = profile_points[i + 1];
+                            // Convert merged 2D points to 3D
+                            let merged_3d_points: Vec<[f64; 3]> = merged_2d_points.iter().map(|pt| to_3d(pt[0], pt[1])).collect();
+
+                             // Generate 3D prism from profile
+                            if !merged_3d_points.is_empty() {
+                                // Calculate Z-offsets vectors
+                                let vec_bottom = [normal[0] * start_offset, normal[1] * start_offset, normal[2] * start_offset];
+                                let vec_top = [normal[0] * (start_offset + distance), normal[1] * (start_offset + distance), normal[2] * (start_offset + distance)];
+                                
+                                // Bottom face plane (origin shifted)
+                                let bottom_origin = [origin[0] + vec_bottom[0], origin[1] + vec_bottom[1], origin[2] + vec_bottom[2]];
+                                let top_origin = [origin[0] + vec_top[0], origin[1] + vec_top[1], origin[2] + vec_top[2]];
+                                
+                                // Create bottom face TopoId
+                                let bottom_face_id = ctx.derive(&format!("BottomFace_{}", profile_idx), TopoRank::Face);
+                                let bottom_entity = KernelEntity {
+                                    id: bottom_face_id,
+                                    geometry: AnalyticGeometry::Plane {
+                                        origin: bottom_origin,
+                                        normal: [-normal[0], -normal[1], -normal[2]], 
+                                    }
+                                };
+                                topology_manifest.insert(bottom_face_id, bottom_entity);
+                                
+                                // Create top face TopoId
+                                let top_face_id = ctx.derive(&format!("TopFace_{}", profile_idx), TopoRank::Face);
+                                let top_entity = KernelEntity {
+                                    id: top_face_id,
+                                    geometry: AnalyticGeometry::Plane {
+                                        origin: top_origin,
+                                        normal: normal,
+                                    }
+                                };
+                                topology_manifest.insert(top_face_id, top_entity);
+                                
+                                // Add triangles for top/bottom faces
+                                for (i, j, k) in triangles {
+                                    let p0 = merged_3d_points[i];
+                                    let p1 = merged_3d_points[j];
+                                    let p2 = merged_3d_points[k];
                                     
-                                    // Bottom face (reversed winding for outward normal)
+                                    // Bottom face (reverse winding for outward normal)
                                     tessellation.add_triangle(
-                                        Point3::new(p0[0], p0[1], z_bottom),
-                                        Point3::new(p2[0], p2[1], z_bottom),
-                                        Point3::new(p1[0], p1[1], z_bottom),
+                                        Point3::new(p0[0] + vec_bottom[0], p0[1] + vec_bottom[1], p0[2] + vec_bottom[2]),
+                                        Point3::new(p2[0] + vec_bottom[0], p2[1] + vec_bottom[1], p2[2] + vec_bottom[2]),
+                                        Point3::new(p1[0] + vec_bottom[0], p1[1] + vec_bottom[1], p1[2] + vec_bottom[2]),
                                         bottom_face_id
                                     );
                                     
                                     // Top face
                                     tessellation.add_triangle(
-                                        Point3::new(p0[0], p0[1], z_top),
-                                        Point3::new(p1[0], p1[1], z_top),
-                                        Point3::new(p2[0], p2[1], z_top),
+                                        Point3::new(p0[0] + vec_top[0], p0[1] + vec_top[1], p0[2] + vec_top[2]),
+                                        Point3::new(p1[0] + vec_top[0], p1[1] + vec_top[1], p1[2] + vec_top[2]),
+                                        Point3::new(p2[0] + vec_top[0], p2[1] + vec_top[1], p2[2] + vec_top[2]),
                                         top_face_id
                                     );
                                 }
-                            }
-                            
-                            // Create side faces (quads as two triangles each)
-                            for i in 0..profile_points.len() {
-                                let j = (i + 1) % profile_points.len();
-                                let p1 = profile_points[i];
-                                let p2 = profile_points[j];
                                 
-                                // Skip if last point equals first (closed profile)
-                                if i == profile_points.len() - 1 && 
-                                   (p1[0] - profile_points[0][0]).abs() < 1e-6 &&
-                                   (p1[1] - profile_points[0][1]).abs() < 1e-6 {
-                                    continue;
-                                }
-                                
-                                let side_face_id = ctx.derive(&format!("SideFace{}", i), TopoRank::Face);
-                                
-                                // Calculate normal for this side face
-                                let dx = p2[0] - p1[0];
-                                let dy = p2[1] - p1[1];
-                                let len = (dx*dx + dy*dy).sqrt();
-                                let nx = dy / len;  // Perpendicular to edge, pointing outward
-                                let ny = -dx / len;
-                                
-                                let side_entity = KernelEntity {
-                                    id: side_face_id,
-                                    geometry: AnalyticGeometry::Plane {
-                                        origin: [(p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0, z_bottom + distance / 2.0],
-                                        normal: [nx, ny, 0.0],
+                                // Maintain side faces (loop over ALL loops: outer + holes)
+                                // Only logic change: iterate through all loops in current profile
+                                for (sub_idx, loop_pts_2d) in profile_loops_2d.iter().enumerate() {
+                                    let profile_points: Vec<[f64; 3]> = loop_pts_2d.iter().map(|pt| to_3d(pt[0], pt[1])).collect();
+                                    
+                                    for i in 0..profile_points.len() {
+                                        let j = (i + 1) % profile_points.len();
+                                        let p1 = profile_points[i];
+                                        let p2 = profile_points[j];
+                                        
+                                        let dist_sq = (p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2) + (p1[2]-p2[2]).powi(2);
+                                        if dist_sq < 1e-9 { continue; }
+
+                                        let side_face_id = ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face);
+                                        
+                                        let v1_bottom = Point3::new(p1[0] + vec_bottom[0], p1[1] + vec_bottom[1], p1[2] + vec_bottom[2]);
+                                        let v2_bottom = Point3::new(p2[0] + vec_bottom[0], p2[1] + vec_bottom[1], p2[2] + vec_bottom[2]);
+                                        let v1_top = Point3::new(p1[0] + vec_top[0], p1[1] + vec_top[1], p1[2] + vec_top[2]);
+                                        let v2_top = Point3::new(p2[0] + vec_top[0], p2[1] + vec_top[1], p2[2] + vec_top[2]);
+                                        
+                                        // Side normal approximation (planar walls)
+                                        let dx = p2[0] - p1[0];
+                                        let dy = p2[1] - p1[1];
+                                        let dz = p2[2] - p1[2];
+                                        let tx = dx; let ty = dy; let tz = dz;
+                                        let nx = ty * normal[2] - tz * normal[1];
+                                        let ny = tz * normal[0] - tx * normal[2];
+                                        let nz = tx * normal[1] - ty * normal[0];
+                                        let len = (nx*nx + ny*ny + nz*nz).sqrt();
+                                        let side_normal = if len > 1e-6 { [nx/len, ny/len, nz/len] } else { [0.0, 0.0, 1.0] };
+
+                                        // Register side entity
+                                        let side_entity = KernelEntity {
+                                            id: side_face_id,
+                                            geometry: AnalyticGeometry::Plane {
+                                                origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
+                                                normal: side_normal,
+                                            }
+                                        };
+                                        topology_manifest.insert(side_face_id, side_entity);
+                                        
+                                        // For holes (sub_idx > 0), reverse winding so faces point inward
+                                        if sub_idx == 0 {
+                                            // Outer loop: faces point outward
+                                            tessellation.add_triangle(v1_bottom, v2_bottom, v1_top, side_face_id);
+                                            tessellation.add_triangle(v2_bottom, v2_top, v1_top, side_face_id);
+                                        } else {
+                                            // Hole loop: faces point inward (reversed winding)
+                                            tessellation.add_triangle(v1_bottom, v1_top, v2_bottom, side_face_id);
+                                            tessellation.add_triangle(v2_bottom, v1_top, v2_top, side_face_id);
+                                        }
                                     }
-                                };
-                                topology_manifest.insert(side_face_id, side_entity);
-                                
-                                // Two triangles for the quad
-                                // Bottom-left, top-left, top-right
-                                tessellation.add_triangle(
-                                    Point3::new(p1[0], p1[1], z_bottom),
-                                    Point3::new(p1[0], p1[1], z_top),
-                                    Point3::new(p2[0], p2[1], z_top),
-                                    side_face_id
-                                );
-                                // Bottom-left, top-right, bottom-right
-                                tessellation.add_triangle(
-                                    Point3::new(p1[0], p1[1], z_bottom),
-                                    Point3::new(p2[0], p2[1], z_top),
-                                    Point3::new(p2[0], p2[1], z_bottom),
-                                    side_face_id
-                                );
-                                
-                                // Add edge TopoIds
-                                let edge_id = ctx.derive(&format!("SideEdge{}", i), TopoRank::Edge);
-                                tessellation.add_line(
-                                    Point3::new(p1[0], p1[1], z_bottom),
-                                    Point3::new(p1[0], p1[1], z_top),
-                                    edge_id
-                                );
+                                }
                             }
-                            
-                            logs.push(format!("Generated extrusion with {} profile points, {} faces", 
-                                profile_points.len(), 
-                                2 + profile_points.len())); // top + bottom + sides
-                        } else {
-                            logs.push("Warning: Not enough profile points for extrusion".to_string());
                         }
+
+                        if loops_2d.is_empty() {
+                            logs.push("Warning: No closed loops found for extrusion".to_string());
+                        }
+
                     } else {
                         logs.push("Warning: Failed to parse sketch for extrusion".to_string());
                     }

@@ -1,22 +1,8 @@
 import { type Component, For } from 'solid-js';
+import { type Feature, type FeatureType, type FeatureGraphState } from '../types';
 import './FeatureTree.css';
 
-// Types mirror the backend types
-export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Cut' | 'Plane' | 'Axis' | 'Point';
 
-export interface Feature {
-    id: string; // EntityId is UUID string
-    name: string;
-    feature_type: FeatureType;
-    suppressed: boolean;
-    parameters: Record<string, any>; // ParameterValue equivalent
-}
-
-// Graph structure from backend
-export interface FeatureGraphState {
-    nodes: Record<string, Feature>;
-    sort_order: string[];
-}
 
 interface FeatureTreeProps {
     graph: FeatureGraphState;

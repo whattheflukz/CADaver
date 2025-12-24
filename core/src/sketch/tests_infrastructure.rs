@@ -9,7 +9,7 @@ fn test_sketch_feature_integration() {
     let line_id = sketch.add_entity(SketchGeometry::Line {
         start: [0.0, 0.0],
         end: [10.0, 10.0],
-    });
+    }.into());
 
     assert_eq!(sketch.entities.len(), 1);
     assert_eq!(sketch.entities[0].id, line_id);

@@ -9,7 +9,7 @@ fn test_solver_circle_radius() {
     let c1 = sketch.add_entity(SketchGeometry::Circle { center: [0.0, 0.0], radius: 10.0 });
 
     // Add Radius Constraint for 20.0
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged, "Solver should converge");
@@ -31,10 +31,10 @@ fn test_solver_arc_radius() {
         radius: 10.0, 
         start_angle: 0.0, 
         end_angle: 1.57 
-    });
+    }.into());
 
     // Add Radius Constraint for 15.0
-    sketch.constraints.push(SketchConstraint::Radius { entity: a1, value: 15.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: a1, value: 15.0, style: None }.into());
 
     let converged = SketchSolver::solve(&mut sketch);
     assert!(converged, "Solver should converge");
@@ -54,8 +54,8 @@ fn test_solver_radius_conflict() {
     let c1 = sketch.add_entity(SketchGeometry::Circle { center: [0.0, 0.0], radius: 10.0 });
 
     // Add Conflicting Radius Constraints
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None });
-    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 30.0, style: None });
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 20.0, style: None }.into());
+    sketch.constraints.push(SketchConstraint::Radius { entity: c1, value: 30.0, style: None }.into());
 
     let result = SketchSolver::solve_with_result(&mut sketch);
     

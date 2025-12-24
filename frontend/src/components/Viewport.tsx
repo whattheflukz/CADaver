@@ -26,6 +26,8 @@ interface ViewportProps {
     // Trigger camera alignment to sketch plane
     alignToPlane?: SketchPlane | null;
     previewGeometry?: SketchEntity[];
+    // Callback for region click (extrude mode profile selection)
+    onRegionClick?: (point2d: [number, number]) => void;
 }
 
 
@@ -413,6 +415,8 @@ const Viewport: Component<ViewportProps> = (props) => {
     createEffect(() => {
         if (!ready() || !scene) return;
 
+        console.log("Viewport Effect: sketchSetupMode changed to:", props.sketchSetupMode);
+
         const PLANE_HELPER_NAME = "plane_selection_helpers";
         let group = scene.getObjectByName(PLANE_HELPER_NAME);
         if (group) {
@@ -609,9 +613,28 @@ const Viewport: Component<ViewportProps> = (props) => {
 
             if (topoId) {
                 props.onSelect(topoId, modifier);
+            } else {
+                // No specific geometry clicked, try region click for extrude mode
+                if (props.onRegionClick && props.clientSketch?.plane) {
+                    const target = getSketchPlaneIntersection(event.clientX, event.clientY);
+                    if (target) {
+                        props.onRegionClick([target[0], target[1]]);
+                        return;
+                    }
+                }
             }
         } else {
-            props.onSelect(null, "replace");
+            // Clicked empty space
+            if (props.onRegionClick && props.clientSketch?.plane) {
+                const target = getSketchPlaneIntersection(event.clientX, event.clientY);
+                if (target) {
+                    props.onRegionClick([target[0], target[1]]);
+                    return;
+                }
+            }
+            if (props.onSelect) {
+                props.onSelect(null, "replace");
+            }
         }
     };
 

@@ -27,7 +27,7 @@ mod tests_resolution;
 /// We wrap Uuid to ensure strong typing and allow for potential future extension 
 /// (e.g. adding generation/version counters).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct EntityId(Uuid);
+pub struct EntityId(pub Uuid);
 
 impl EntityId {
     /// Generate a new random EntityId.

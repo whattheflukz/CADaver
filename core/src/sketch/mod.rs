@@ -1,6 +1,8 @@
 pub mod types;
 pub mod solver;
 pub mod snap;
+pub mod chains;
+pub mod regions;
 
 #[cfg(test)]
 mod tests_infrastructure;
@@ -22,3 +24,6 @@ mod tests_history;
 
 #[cfg(test)]
 mod tests_distance_pl;
+
+#[cfg(test)]
+mod tests_suppression;
