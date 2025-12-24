@@ -154,16 +154,23 @@ Mode changes must:
 - [ ] Persistent layout (toolbar always visible)
 - [ ] Hover tooltips with descriptions
 - [ ] Keyboard shortcut system
-- [ ] Command palette infrastructure
+- [x] Command palette infrastructure
 
 ### **Reusable UI Components (Added — Best Practice)**
 
 Focus on building reusable, composable components to reduce duplication and ensure consistent UX.
 
+**Modal Requirements (Non-Negotiable):**
+- All popup/modal windows MUST be draggable
+- Use `BaseModal` pattern for consistent drag behavior
+- Modals must clamp to viewport boundaries
+
 **Existing Base Components:**
 - [x] `BaseModal` — Draggable modal with standard Cancel/Finish buttons, title, and children slot
   - Used by: `OffsetModal`, `MirrorModal`
   - Features: drag-to-move, consistent dark theme, disabled state support
+- [x] `CommandPalette` — Draggable command search with fuzzy filtering (Added)
+  - Features: drag header, keyboard nav, mode-aware filtering
 
 **Future Candidates:**
 - [ ] `SelectionField` — Reusable "click to select entity" input field

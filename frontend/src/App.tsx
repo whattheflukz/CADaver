@@ -16,9 +16,12 @@ import { LinearPatternModal } from './components/LinearPatternModal';
 import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
 import ModelingToolbar from './components/ModelingToolbar';
+import CommandPalette from './components/CommandPalette';
+import { type AppMode, commandIdToSketchTool } from './commandRegistry';
 
 import { useMicrocadConnection } from './hooks/useMicrocadConnection';
 import { useSketching } from './hooks/useSketching';
+import { onMount, onCleanup } from 'solid-js';
 
 const App: Component = () => {
   // Feature Graph State managed by hook
@@ -29,6 +32,8 @@ const App: Component = () => {
   const [pendingExtrude, setPendingExtrude] = createSignal(false);
   // For region click detection in extrude mode
   const [regionClickPoint, setRegionClickPoint] = createSignal<[number, number] | null>(null);
+  // Command Palette state
+  const [showCommandPalette, setShowCommandPalette] = createSignal(false);
 
   const toggleTreeExpand = (id: string) => {
     const current = treeExpanded();
@@ -188,6 +193,69 @@ const App: Component = () => {
   createEffect(() => {
     console.log("App.tsx: sketchSetupMode signal =", sketchSetupMode());
   });
+
+  // === COMMAND PALETTE ===
+  // Global keyboard shortcut for Command Palette (Cmd/Ctrl+K)
+  onMount(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      // Debug: log Cmd+K attempts
+      if (isCtrlOrCmd && e.key.toLowerCase() === 'k') {
+        console.log("App.tsx: Cmd+K detected! Opening command palette...");
+        e.preventDefault();
+        e.stopPropagation();
+        setShowCommandPalette(true);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown, true); // Use capture phase
+    onCleanup(() => window.removeEventListener('keydown', handleGlobalKeyDown, true));
+  });
+
+  // Determine current app mode for command filtering
+  const currentAppMode = (): AppMode => {
+    if (sketchMode()) return 'sketch';
+    return 'modeling';
+  };
+
+  // Handle command execution from Command Palette
+  const handleCommandSelect = (commandId: string) => {
+    setShowCommandPalette(false);
+
+    // Tool commands (sketch tools)
+    const sketchTool = commandIdToSketchTool(commandId);
+    if (sketchTool && sketchMode()) {
+      setConstraintSelection([]);
+      setSketchTool(sketchTool);
+      return;
+    }
+
+    // Action commands
+    switch (commandId) {
+      case 'action:finish_sketch':
+        if (sketchMode()) handleSketchFinish();
+        break;
+      case 'action:cancel_sketch':
+        if (sketchMode()) handleCancelSketch();
+        break;
+      case 'action:toggle_construction':
+        if (sketchMode()) setConstructionMode(!constructionMode());
+        break;
+      case 'action:select':
+        if (sketchMode()) setSketchTool('select');
+        break;
+      case 'action:extrude':
+        if (!sketchMode()) handleExtrude();
+        break;
+      case 'action:new_sketch':
+        if (!sketchMode() && !sketchSetupMode()) {
+          const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
+          const payload = { type: "Sketch", name: name };
+          setAutostartNextSketch(true);
+          send(`CREATE_FEATURE:${JSON.stringify(payload)}`);
+        }
+        break;
+    }
+  };
 
   return (
     <div class="app">
@@ -608,6 +676,14 @@ const App: Component = () => {
               }
             }
           }}
+        />
+
+        {/* Command Palette */}
+        <CommandPalette
+          isOpen={showCommandPalette()}
+          currentMode={currentAppMode()}
+          onCommandSelect={handleCommandSelect}
+          onClose={() => setShowCommandPalette(false)}
         />
       </main >
     </div >
