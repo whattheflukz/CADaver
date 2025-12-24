@@ -2107,7 +2107,7 @@ export function useSketching(props: UseSketchingProps) {
           const updated = { ...currentSketch() };
           updated.entities = updated.entities.filter(e => !e.id.startsWith("preview_slot"));
           updated.entities = [...updated.entities, a1, a2, l1, l2];
-          updated.constraints = [...updated.constraints, ...constraints];
+          updated.constraints = [...updated.constraints, ...constraints.map(c => wrapConstraint(c))];
 
           setCurrentSketch(updated);
           sendSketchUpdate(updated); // Sync to backend for live DOF updates
@@ -2259,7 +2259,7 @@ export function useSketching(props: UseSketchingProps) {
             const updated = { ...currentSketch() };
             updated.entities = updated.entities.filter(e => !e.id.startsWith("preview_poly"));
             updated.entities = [...updated.entities, ...entities];
-            updated.constraints = [...updated.constraints, ...constraints];
+            updated.constraints = [...updated.constraints, ...constraints.map(c => wrapConstraint(c))];
 
             setCurrentSketch(updated);
             sendSketchUpdate(updated); // Sync to backend for live DOF updates

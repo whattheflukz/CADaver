@@ -152,7 +152,7 @@ Mode changes must:
 ### **UI Infrastructure (Added)**
 - [ ] Mode-aware toolbar system
 - [ ] Persistent layout (toolbar always visible)
-- [ ] Hover tooltips with descriptions
+- [x] Hover tooltips with descriptions *(Added - ToolButton component)*
 - [ ] Keyboard shortcut system
 - [x] Command palette infrastructure
 
@@ -175,7 +175,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 **Future Candidates:**
 - [ ] `SelectionField` — Reusable "click to select entity" input field
 - [ ] `NumericInput` — Styled number input with unit support
-- [ ] `ToolButton` — Consistent toolbar button with tooltip and shortcut display
+- [x] `ToolButton` — Toolbar button with rich tooltip, shortcut, and description display *(Added)*
 
 
 ### MicroCAD Integration

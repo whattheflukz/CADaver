@@ -9,15 +9,207 @@
  * - Keyboard navigation (↑/↓/Enter/Escape)
  * - Click selection
  * - Draggable header
+ * - Inline calculator (Raycast-style)
  */
 
-import { type Component, createSignal, createMemo, For, Show, createEffect, onMount } from "solid-js";
+import { type Component, createSignal, createMemo, For, Show, createEffect } from "solid-js";
 import {
     type Command,
     type AppMode,
     getCommandsForMode,
     filterCommands
 } from "../commandRegistry";
+
+// ============================================================================
+// Safe Math Expression Evaluator (no eval!)
+// ============================================================================
+
+type Token =
+    | { type: 'number'; value: number }
+    | { type: 'operator'; value: string }
+    | { type: 'lparen' }
+    | { type: 'rparen' };
+
+function tokenize(expr: string): Token[] | null {
+    const tokens: Token[] = [];
+    let i = 0;
+
+    // Normalize: replace × with *, ÷ with /, x with * (case insensitive)
+    expr = expr.replace(/×/g, '*').replace(/÷/g, '/').replace(/x/gi, '*');
+
+    while (i < expr.length) {
+        const char = expr[i];
+
+        // Skip whitespace
+        if (/\s/.test(char)) {
+            i++;
+            continue;
+        }
+
+        // Numbers (including decimals)
+        if (/[0-9.]/.test(char)) {
+            let numStr = '';
+            while (i < expr.length && /[0-9.]/.test(expr[i])) {
+                numStr += expr[i];
+                i++;
+            }
+            const num = parseFloat(numStr);
+            if (isNaN(num)) return null;
+            tokens.push({ type: 'number', value: num });
+            continue;
+        }
+
+        // Operators
+        if (['+', '-', '*', '/', '^', '%'].includes(char)) {
+            tokens.push({ type: 'operator', value: char });
+            i++;
+            continue;
+        }
+
+        // Parentheses
+        if (char === '(') {
+            tokens.push({ type: 'lparen' });
+            i++;
+            continue;
+        }
+        if (char === ')') {
+            tokens.push({ type: 'rparen' });
+            i++;
+            continue;
+        }
+
+        // Unknown character - not a math expression
+        return null;
+    }
+
+    return tokens.length > 0 ? tokens : null;
+}
+
+// Recursive descent parser for math expressions
+function evaluateTokens(tokens: Token[]): number | null {
+    let pos = 0;
+
+    function peek(): Token | undefined {
+        return tokens[pos];
+    }
+
+    function consume(): Token | undefined {
+        return tokens[pos++];
+    }
+
+    // Parse addition/subtraction (lowest precedence)
+    function parseAddSub(): number | null {
+        let left = parseMulDiv();
+        if (left === null) return null;
+
+        while (peek()?.type === 'operator' && ['+', '-'].includes((peek() as { type: 'operator'; value: string }).value)) {
+            const op = (consume() as { type: 'operator'; value: string }).value;
+            const right = parseMulDiv();
+            if (right === null) return null;
+            left = op === '+' ? left + right : left - right;
+        }
+
+        return left;
+    }
+
+    // Parse multiplication/division/modulo
+    function parseMulDiv(): number | null {
+        let left = parsePower();
+        if (left === null) return null;
+
+        while (peek()?.type === 'operator' && ['*', '/', '%'].includes((peek() as { type: 'operator'; value: string }).value)) {
+            const op = (consume() as { type: 'operator'; value: string }).value;
+            const right = parsePower();
+            if (right === null) return null;
+            if (op === '*') left = left * right;
+            else if (op === '/') left = right !== 0 ? left / right : null as unknown as number;
+            else left = left % right;
+            if (left === null) return null;
+        }
+
+        return left;
+    }
+
+    // Parse exponentiation (highest precedence, right-associative)
+    function parsePower(): number | null {
+        let base = parseUnary();
+        if (base === null) return null;
+
+        if (peek()?.type === 'operator' && (peek() as { type: 'operator'; value: string }).value === '^') {
+            consume();
+            const exp = parsePower(); // Right-associative
+            if (exp === null) return null;
+            base = Math.pow(base, exp);
+        }
+
+        return base;
+    }
+
+    // Parse unary minus
+    function parseUnary(): number | null {
+        if (peek()?.type === 'operator' && (peek() as { type: 'operator'; value: string }).value === '-') {
+            consume();
+            const val = parseUnary();
+            return val !== null ? -val : null;
+        }
+        return parsePrimary();
+    }
+
+    // Parse numbers and parentheses
+    function parsePrimary(): number | null {
+        const token = peek();
+
+        if (token?.type === 'number') {
+            consume();
+            return token.value;
+        }
+
+        if (token?.type === 'lparen') {
+            consume();
+            const result = parseAddSub();
+            if (peek()?.type !== 'rparen') return null;
+            consume();
+            return result;
+        }
+
+        return null;
+    }
+
+    const result = parseAddSub();
+
+    // Ensure all tokens were consumed
+    if (pos !== tokens.length) return null;
+
+    return result;
+}
+
+/**
+ * Attempt to evaluate a string as a math expression.
+ * Returns { expression: string, result: number } or null if not a valid math expression.
+ */
+function tryEvaluateMath(input: string): { expression: string; result: number } | null {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+
+    // Must contain at least one operator to be considered a math expression
+    if (!/[+\-*×÷/^%x]/.test(trimmed)) return null;
+
+    // Must not start with a letter (except operators that look like letters)
+    if (/^[a-wyzA-WYZ]/.test(trimmed)) return null;
+
+    const tokens = tokenize(trimmed);
+    if (!tokens) return null;
+
+    // Need at least a number and an operator
+    const hasNumber = tokens.some(t => t.type === 'number');
+    const hasOperator = tokens.some(t => t.type === 'operator');
+    if (!hasNumber || !hasOperator) return null;
+
+    const result = evaluateTokens(tokens);
+    if (result === null || !isFinite(result)) return null;
+
+    return { expression: trimmed, result };
+}
 
 interface CommandPaletteProps {
     /** Whether the palette is visible */
@@ -48,6 +240,10 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
         const modeCommands = getCommandsForMode(props.currentMode);
         return filterCommands(modeCommands, searchQuery());
     });
+
+    // Calculator mode: try to evaluate search query as math expression
+    const calculationResult = createMemo(() => tryEvaluateMath(searchQuery()));
+    const isCalculatorMode = createMemo(() => calculationResult() !== null);
 
     // Center modal when opened
     const centerModal = () => {
@@ -89,6 +285,15 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                 break;
             case "Enter":
                 e.preventDefault();
+                // Calculator mode: copy result to clipboard
+                if (isCalculatorMode()) {
+                    const result = calculationResult()!.result;
+                    const resultStr = Number.isInteger(result) ? result.toString() : result.toFixed(6).replace(/\.?0+$/, '');
+                    navigator.clipboard.writeText(resultStr).then(() => {
+                        props.onClose();
+                    });
+                    return;
+                }
                 if (commands[selectedIndex()]) {
                     props.onCommandSelect(commands[selectedIndex()].id);
                 }
@@ -224,6 +429,67 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                         />
                     </div>
 
+                    {/* Calculator Result Preview (Raycast-style) */}
+                    <Show when={isCalculatorMode()}>
+                        <div
+                            style={{
+                                padding: "12px 16px",
+                                background: "linear-gradient(135deg, #1e3a5f 0%, #2d2d44 100%)",
+                                "border-bottom": "1px solid #444",
+                                display: "flex",
+                                "align-items": "center",
+                                "justify-content": "center",
+                                gap: "20px",
+                            }}
+                        >
+                            {/* Expression side */}
+                            <div style={{ "text-align": "center" }}>
+                                <div style={{ color: "#fff", "font-size": "24px", "font-weight": "bold" }}>
+                                    {calculationResult()!.expression.replace(/\*/g, '×').replace(/\//g, '÷')}
+                                </div>
+                                <div
+                                    style={{
+                                        background: "#444",
+                                        color: "#aaa",
+                                        padding: "3px 8px",
+                                        "border-radius": "4px",
+                                        "font-size": "10px",
+                                        "margin-top": "6px",
+                                        display: "inline-block",
+                                    }}
+                                >
+                                    Expression
+                                </div>
+                            </div>
+
+                            {/* Arrow */}
+                            <span style={{ color: "#888", "font-size": "20px" }}>→</span>
+
+                            {/* Result side */}
+                            <div style={{ "text-align": "center" }}>
+                                <div style={{ color: "#4CAF50", "font-size": "24px", "font-weight": "bold" }}>
+                                    {(() => {
+                                        const result = calculationResult()!.result;
+                                        return Number.isInteger(result) ? result.toString() : result.toFixed(6).replace(/\.?0+$/, '');
+                                    })()}
+                                </div>
+                                <div
+                                    style={{
+                                        background: "#4CAF50",
+                                        color: "#fff",
+                                        padding: "3px 8px",
+                                        "border-radius": "4px",
+                                        "font-size": "10px",
+                                        "margin-top": "6px",
+                                        display: "inline-block",
+                                    }}
+                                >
+                                    Result
+                                </div>
+                            </div>
+                        </div>
+                    </Show>
+
                     {/* Command List */}
                     <div
                         style={{
@@ -319,8 +585,12 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                             background: "#2a2a2a",
                         }}
                     >
-                        <span>↑↓ Navigate</span>
-                        <span>Enter Select</span>
+                        <Show when={!isCalculatorMode()}>
+                            <span>↑↓ Navigate</span>
+                        </Show>
+                        <span>
+                            Enter {isCalculatorMode() ? "Copy to clipboard" : "Select"}
+                        </span>
                         <span>Esc Close</span>
                     </div>
                 </div>

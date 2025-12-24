@@ -76,3 +76,88 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+/* ====================================
+   ToolButton Tooltip Styles
+   Reference: plan.md Phase 0 → UI Infrastructure → Hover tooltips
+   ==================================== */
+
+.tool-button {
+    position: relative;
+}
+
+.tool-button-tooltip {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    white-space: nowrap;
+    min-width: 120px;
+    text-align: center;
+}
+
+.tool-button:hover .tool-button-tooltip {
+    opacity: 1;
+}
+
+.tooltip-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tooltip-description {
+    font-size: 12px;
+    color: #e0e0e0;
+    line-height: 1.3;
+}
+
+.tooltip-shortcut {
+    display: flex;
+    justify-content: center;
+}
+
+.tooltip-shortcut kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    color: #fff;
+    background: linear-gradient(180deg, #555 0%, #333 100%);
+    border: 1px solid #666;
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Tooltip arrow */
+.tool-button-tooltip::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid #444;
+}
+
+.tool-button-tooltip::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 5px solid #1a1a1a;
+}

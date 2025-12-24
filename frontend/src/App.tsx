@@ -311,6 +311,14 @@ const App: Component = () => {
                 setDeleteConfirmation({ id, name: feature.name });
               }
             }}
+            onUpdateFeature={(id, params) => {
+              send(`UPDATE_FEATURE:${JSON.stringify({ id, params })}`);
+            }}
+            onEditSketch={(id) => {
+              if (!sketchMode() && !sketchSetupMode()) {
+                handleStartSketch(id);
+              }
+            }}
           />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>
@@ -339,6 +347,11 @@ const App: Component = () => {
               constructionMode={constructionMode()}
               onToggleConstruction={() => setConstructionMode(!constructionMode())}
             />
+          )}
+
+          {/* Modeling Toolbar (same position as Sketch Toolbar, mode-aware) */}
+          {!sketchMode() && (
+            <ModelingToolbar onExtrude={handleExtrude} />
           )}
 
           {/* DOF (Degrees of Freedom) Status Indicator - Server Authoritative */}
@@ -607,10 +620,7 @@ const App: Component = () => {
           />
         )}
 
-        {/* Modeling Toolbar (only when not in sketch mode) */}
-        {!sketchMode() && (
-          <ModelingToolbar onExtrude={handleExtrude} />
-        )}
+
 
         {/* Extrude Modal */}
         {selectedFeature() && graph().nodes[selectedFeature()!]?.feature_type === 'Extrude' && (

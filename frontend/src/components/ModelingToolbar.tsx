@@ -1,51 +1,77 @@
 import type { Component } from 'solid-js';
+import ToolButton from './ToolButton';
+import { COMMAND_DEFINITIONS } from '../commandRegistry';
+
+/**
+ * ModelingToolbar - Toolbar displayed when in 3D Modeling Mode
+ * 
+ * Reference: plan.md Phase 0 → UI Infrastructure → Mode-aware toolbar system
+ *            plan.md Phase 0 → UI Infrastructure → Hover tooltips with descriptions
+ */
 
 interface ModelingToolbarProps {
     onExtrude: () => void;
 }
 
+// Helper to look up command info from registry
+const getCommandInfo = (actionId: string) => {
+    const cmd = COMMAND_DEFINITIONS.find(c => c.id === `action:${actionId}`);
+    return {
+        description: cmd?.description,
+        shortcut: cmd?.shortcut
+    };
+};
+
 const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
     return (
-        <div class="absolute top-4 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-lg shadow-lg flex items-center p-1 gap-1 z-10 border border-gray-700">
-
+        <div style={{
+            position: "absolute",
+            top: "50px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#444",
+            padding: "5px 10px",
+            "border-radius": "8px",
+            display: "flex",
+            gap: "8px",
+            "z-index": 1000,
+            color: "white",
+            border: "1px solid #666",
+            "align-items": "center"
+        }}>
             {/* Extrude Button */}
-            <button
-                class="p-2 rounded hover:bg-gray-700 text-gray-300 flex flex-col items-center gap-1 min-w-[60px] relative group"
+            <ToolButton
+                icon="⬆️"
+                label="Extrude"
+                isActive={false}
                 onClick={props.onExtrude}
-                title="Extrude Sketch"
-            >
-                <div class="text-xl">⬆️</div>
-                <span class="text-[10px] font-medium">Extrude</span>
-
-                {/* Tooltip */}
-                <div class="absolute top-full mt-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-black text-white text-xs rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50 border border-gray-700">
-                    Create 3D solid from sketch
-                </div>
-            </button>
+                {...getCommandInfo("extrude")}
+                minWidth="60px"
+            />
 
             {/* Placeholder for Revolve */}
-            <button
-                class="p-2 rounded hover:bg-gray-700 text-gray-500 flex flex-col items-center gap-1 min-w-[60px] cursor-not-allowed"
-                title="Revolve (Coming Soon)"
-                disabled
-            >
-                <div class="text-xl">🔄</div>
-                <span class="text-[10px] font-medium">Revolve</span>
-            </button>
+            <ToolButton
+                icon="🔄"
+                label="Revolve"
+                isActive={false}
+                disabled={true}
+                onClick={() => { }}
+                description="Coming soon: Revolve sketch around an axis"
+                minWidth="60px"
+            />
 
-            <div class="w-px h-8 bg-gray-700 mx-1"></div>
+            <div style={{ width: "1px", height: "24px", background: "#666" }} />
 
             {/* Placeholder for Fillet */}
-            <button
-                class="p-2 rounded hover:bg-gray-700 text-gray-500 flex flex-col items-center gap-1 min-w-[60px] cursor-not-allowed"
-                title="Fillet (Coming Soon)"
-                disabled
-            >
-                <div class="text-xl">⚪</div>
-                <span class="text-[10px] font-medium">Fillet</span>
-            </button>
-
-
+            <ToolButton
+                icon="⚪"
+                label="Fillet"
+                isActive={false}
+                disabled={true}
+                onClick={() => { }}
+                description="Coming soon: Add rounded edges"
+                minWidth="60px"
+            />
         </div>
     );
 };

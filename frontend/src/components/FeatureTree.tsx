@@ -1,5 +1,5 @@
-import { type Component, For } from 'solid-js';
-import { type Feature, type FeatureType, type FeatureGraphState } from '../types';
+import { type Component, For, createSignal } from 'solid-js';
+import { type Feature, type FeatureGraphState } from '../types';
 import './FeatureTree.css';
 
 
@@ -12,6 +12,8 @@ interface FeatureTreeProps {
     onDelete: (id: string) => void;
     expanded: Record<string, boolean>;
     onToggleExpand: (id: string) => void;
+    onUpdateFeature?: (id: string, params: Record<string, any>) => void;
+    onEditSketch?: (id: string) => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -40,31 +42,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                     class={`feature-item ${props.selectedId === id ? 'selected' : ''}`}
                                     onClick={() => props.onSelect(id)}
                                 >
-                                    {feature().feature_type === 'Sketch' && (
-                                        <span
-                                            class="feature-expander"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                props.onToggleExpand(id);
-                                            }}
-                                            style={{ "margin-right": "4px", "cursor": "pointer", "font-size": "10px", "width": "12px", "display": "inline-block" }}
-                                        >
-                                            {props.expanded[id] ? '▼' : '▶'}
-                                        </span>
-                                    )}
-                                    <span
-                                        class={`feature-toggle ${feature().suppressed ? 'suppressed' : ''}`}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            props.onToggle(id);
-                                        }}
-                                    >
-                                        {feature().suppressed ? '🚫' : '👁️'}
-                                    </span>
-                                    <span class="feature-icon">{getIcon(feature().feature_type)}</span>
-                                    <span class={`feature-name ${feature().suppressed ? 'text-suppressed' : ''}`}>
-                                        {feature().name}
-                                    </span>
+                                    {/* Delete button - far left, separated */}
                                     <span
                                         class="feature-delete"
                                         onClick={(e) => {
@@ -72,21 +50,70 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                             props.onDelete(id);
                                         }}
                                         title="Delete Feature"
-                                        style={{
-                                            "margin-left": "auto",
-                                            "cursor": "pointer",
-                                            "opacity": 0.5,
-                                            "font-size": "12px"
-                                        }}
                                     >
                                         🗑️
                                     </span>
+
+                                    {/* Feature name - flex grows to fill space */}
+                                    <span class={`feature-name ${feature().suppressed ? 'text-suppressed' : ''}`}>
+                                        {feature().name}
+                                    </span>
+
+                                    {/* Toggle visibility */}
+                                    <span
+                                        class={`feature-toggle ${feature().suppressed ? 'suppressed' : ''}`}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            props.onToggle(id);
+                                        }}
+                                        title={feature().suppressed ? "Show Feature" : "Hide Feature"}
+                                    >
+                                        {feature().suppressed ? '🚫' : '👁️'}
+                                    </span>
+
+                                    {/* Edit icon - for Sketch and Extrude */}
+                                    {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                        <span
+                                            class="feature-edit"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (feature().feature_type === 'Sketch') {
+                                                    props.onEditSketch?.(id);
+                                                } else {
+                                                    props.onSelect(id);
+                                                }
+                                            }}
+                                            title="Edit Feature"
+                                        >
+                                            ✏️
+                                        </span>
+                                    )}
+
+                                    {/* Expand/collapse arrow - far right (expandable features) */}
+                                    {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                        <span
+                                            class="feature-expander"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                props.onToggleExpand(id);
+                                            }}
+                                            title={props.expanded[id] ? "Collapse" : "Expand"}
+                                        >
+                                            {props.expanded[id] ? '▼' : '▶'}
+                                        </span>
+                                    )}
                                 </div>
                                 {feature().feature_type === 'Sketch' && props.expanded[id] && (
                                     <SketchHistory
                                         feature={feature()}
                                         selectedId={props.selectedId}
                                         onSelect={props.onSelect}
+                                    />
+                                )}
+                                {feature().feature_type === 'Extrude' && props.expanded[id] && (
+                                    <ExtrudeControls
+                                        feature={feature()}
+                                        onUpdate={(params) => props.onUpdateFeature?.(id, params)}
                                     />
                                 )}
                             </div>
@@ -124,14 +151,14 @@ const SketchHistory: Component<{ feature: Feature, selectedId: string | null, on
     if (!sketchData) {
         const isEmpty = Object.keys(feature.parameters || {}).length === 0;
         return (
-            <div class="feature-children" style={{ "padding-left": "20px", "font-size": "0.9em", "border-left": "1px solid #333", "margin-left": "10px" }}>
+            <div class="feature-children">
                 {isEmpty ? (
-                    <div style={{ color: "#aaa", "font-size": "10px", "font-style": "italic" }}>
+                    <div style={{ color: "#aaa", "font-size": "11px", "font-style": "italic" }}>
                         Empty (Pending Setup)
                     </div>
                 ) : (
-                    <div style={{ color: "red", "font-size": "10px" }}>
-                        Error: No Sketch Data found. Params keys: {Object.keys(feature.parameters || {}).join(", ")}
+                    <div style={{ color: "#ff6b6b", "font-size": "11px" }}>
+                        Error: No Sketch Data found
                     </div>
                 )}
             </div>
@@ -139,7 +166,7 @@ const SketchHistory: Component<{ feature: Feature, selectedId: string | null, on
     }
 
     return (
-        <div class="feature-children" style={{ "padding-left": "20px", "font-size": "0.9em", "border-left": "1px solid #333", "margin-left": "10px" }}>
+        <div class="feature-children">
             <For each={sketchData.history || []}>
                 {(op: any) => {
                     const geomId = op.AddGeometry?.id;
@@ -148,12 +175,7 @@ const SketchHistory: Component<{ feature: Feature, selectedId: string | null, on
                     return (
                         <div
                             class={`history-item ${isSelected ? 'selected' : ''}`}
-                            style={{
-                                "padding": "2px 0",
-                                "opacity": isSelected ? 1.0 : 0.8,
-                                "cursor": geomId ? "pointer" : "default",
-                                "background-color": isSelected ? "rgba(255, 255, 255, 0.1)" : "transparent"
-                            }}
+                            style={{ cursor: geomId ? "pointer" : "default" }}
                             onClick={(e) => {
                                 e.stopPropagation();
                                 if (geomId) {
@@ -161,7 +183,7 @@ const SketchHistory: Component<{ feature: Feature, selectedId: string | null, on
                                 }
                             }}
                         >
-                            <span style={{ "margin-right": "5px" }}>
+                            <span style={{ "margin-right": "6px", opacity: 0.7 }}>
                                 {getOpIcon(op)}
                             </span>
                             <span>{getOpName(op)}</span>
@@ -178,14 +200,72 @@ const SketchHistory: Component<{ feature: Feature, selectedId: string | null, on
     );
 };
 
-function getIcon(type: FeatureType) {
-    switch (type) {
-        case 'Sketch': return '✏️';
-        case 'Extrude': return '⬆️';
-        case 'Revolve': return '🔄';
-        default: return '📦';
-    }
-}
+// Sub-component for Extrude quick controls
+const ExtrudeControls: Component<{ feature: Feature, onUpdate: (params: Record<string, any>) => void }> = (props) => {
+    // Extract initial values from feature parameters
+    const getInitialDistance = () => {
+        const params = props.feature.parameters || {};
+        if (params.distance && typeof params.distance === 'object' && 'Float' in params.distance) {
+            return (params.distance as any).Float;
+        }
+        return 10.0;
+    };
+
+    const getInitialFlipped = () => {
+        const params = props.feature.parameters || {};
+        if (params.flip_direction && typeof params.flip_direction === 'object' && 'Bool' in params.flip_direction) {
+            return (params.flip_direction as any).Bool;
+        }
+        return false;
+    };
+
+    const [localDistance, setLocalDistance] = createSignal(getInitialDistance());
+    const [localFlipped, setLocalFlipped] = createSignal(getInitialFlipped());
+
+    const handleDistanceChange = (e: Event) => {
+        const input = e.target as HTMLInputElement;
+        const val = parseFloat(input.value);
+        if (!isNaN(val) && val > 0) {
+            setLocalDistance(val);
+            props.onUpdate({ distance: { Float: val } });
+        }
+    };
+
+    const handleFlipDirection = () => {
+        const newFlip = !localFlipped();
+        setLocalFlipped(newFlip);
+        props.onUpdate({ flip_direction: { Bool: newFlip } });
+    };
+
+    return (
+        <div class="feature-children extrude-controls">
+            <div class="extrude-control-row">
+                <label>Distance:</label>
+                <input
+                    type="number"
+                    class="extrude-input"
+                    value={localDistance()}
+                    min="0.1"
+                    step="0.5"
+                    onInput={handleDistanceChange}
+                    onClick={(e) => e.stopPropagation()}
+                />
+            </div>
+            <div class="extrude-control-row">
+                <button
+                    class="extrude-flip-btn"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        handleFlipDirection();
+                    }}
+                    title="Flip extrusion direction"
+                >
+                    🔄 Flip Direction
+                </button>
+            </div>
+        </div>
+    );
+};
 
 function getOpIcon(op: any) {
     if (op.AddGeometry) {
