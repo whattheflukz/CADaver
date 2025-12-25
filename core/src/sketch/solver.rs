@@ -253,6 +253,68 @@ impl SketchSolver {
                             }
                         }
                     },
+                    SketchConstraint::HorizontalDistance { points, value, .. } => {
+                        let p1 = Self::get_point(sketch, &id_map, points[0]);
+                        let p2 = Self::get_point(sketch, &id_map, points[1]);
+
+                        if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                            let dx = pos2[0] - pos1[0];
+                            let current_dist = dx.abs();
+                            
+                            let error = (current_dist - value).abs();
+                            if error > max_error { max_error = error; }
+
+                            if current_dist > epsilon {
+                                let scale = 0.5 * (1.0 - value / current_dist);
+                                let offset_x = dx * scale;
+
+                                let new_p1 = [pos1[0] + offset_x, pos1[1]];
+                                let new_p2 = [pos2[0] - offset_x, pos2[1]];
+
+                                Self::set_point(sketch, &id_map, points[0], new_p1);
+                                Self::set_point(sketch, &id_map, points[1], new_p2);
+                            } else {
+                                // Points coincide horizontally but distance should be > 0
+                                if *value > epsilon {
+                                     let mid_x = (pos1[0] + pos2[0]) * 0.5;
+                                     let half = value * 0.5;
+                                     Self::set_point(sketch, &id_map, points[0], [mid_x - half, pos1[1]]);
+                                     Self::set_point(sketch, &id_map, points[1], [mid_x + half, pos2[1]]);
+                                }
+                            }
+                        }
+                    },
+                    SketchConstraint::VerticalDistance { points, value, .. } => {
+                        let p1 = Self::get_point(sketch, &id_map, points[0]);
+                        let p2 = Self::get_point(sketch, &id_map, points[1]);
+
+                        if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                            let dy = pos2[1] - pos1[1];
+                            let current_dist = dy.abs();
+                            
+                            let error = (current_dist - value).abs();
+                            if error > max_error { max_error = error; }
+
+                            if current_dist > epsilon {
+                                let scale = 0.5 * (1.0 - value / current_dist);
+                                let offset_y = dy * scale;
+
+                                let new_p1 = [pos1[0], pos1[1] + offset_y];
+                                let new_p2 = [pos2[0], pos2[1] - offset_y];
+
+                                Self::set_point(sketch, &id_map, points[0], new_p1);
+                                Self::set_point(sketch, &id_map, points[1], new_p2);
+                            } else {
+                                // Points coincide vertically but distance should be > 0
+                                if *value > epsilon {
+                                     let mid_y = (pos1[1] + pos2[1]) * 0.5;
+                                     let half = value * 0.5;
+                                     Self::set_point(sketch, &id_map, points[0], [pos1[0], mid_y - half]);
+                                     Self::set_point(sketch, &id_map, points[1], [pos2[0], mid_y + half]);
+                                }
+                            }
+                        }
+                    },
                     SketchConstraint::Parallel { lines } => {
                         let l1_vec = Self::get_line_vector(sketch, &id_map, lines[0]);
                         let l2_vec = Self::get_line_vector(sketch, &id_map, lines[1]);
@@ -315,8 +377,7 @@ impl SketchSolver {
                                    // Better: Average the deviations.
                                    // Target for L2 is L1 rotated 90.
                                    // Target for L1 is L2 rotated -90.
-                                   // Let's just do a simple relaxation: Rotate L2 to be perp to L1.
-                                   // Or better: Rotate L2 to eliminate component along L1. 
+                                   // Let's just do a simple relaxation: Rotate L2 to eliminate component along L1. 
                                    // n2_new = n2 - dot * n1. Normalize.
                                    
                                    let n2_new_x = n2[0] - dot * n1[0];
@@ -561,6 +622,54 @@ impl SketchSolver {
                                 }
                             }
                         }
+                    },
+                    SketchConstraint::DistanceParallelLines { lines, value, .. } => {
+                        // Get both line geometries
+                        let l1_geo = Self::get_geometry_copy(sketch, &id_map, lines[0]);
+                        let l2_geo = Self::get_geometry_copy(sketch, &id_map, lines[1]);
+                        
+                        if let (Some(SketchGeometry::Line { start: s1, end: e1 }), 
+                                Some(SketchGeometry::Line { start: s2, end: e2 })) = (l1_geo, l2_geo) {
+                            // Direction vector of line 1 (use as reference)
+                            let dx1 = e1[0] - s1[0];
+                            let dy1 = e1[1] - s1[1];
+                            let len1 = (dx1 * dx1 + dy1 * dy1).sqrt();
+                            
+                            if len1 > epsilon {
+                                // Normal vector (perpendicular to line 1)
+                                let nx = -dy1 / len1;
+                                let ny = dx1 / len1;
+                                
+                                // Calculate perpendicular distance from L2's midpoint to L1
+                                let l2_mid = [(s2[0] + e2[0]) / 2.0, (s2[1] + e2[1]) / 2.0];
+                                let vx = l2_mid[0] - s1[0];
+                                let vy = l2_mid[1] - s1[1];
+                                let signed_dist = vx * nx + vy * ny;
+                                let current_dist = signed_dist.abs();
+                                
+                                let error = (current_dist - value).abs();
+                                if error > max_error { max_error = error; }
+                                
+                                if error > epsilon {
+                                    let target_signed_dist = if signed_dist >= 0.0 { *value } else { -*value };
+                                    let shift = target_signed_dist - signed_dist;
+                                    let l2_dx = nx * shift * 0.5;
+                                    let l2_dy = ny * shift * 0.5;
+                                    
+                                    // Move L1 (both endpoints)
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[0], index: 0 }, 
+                                        [s1[0] - l2_dx, s1[1] - l2_dy]);
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[0], index: 1 }, 
+                                        [e1[0] - l2_dx, e1[1] - l2_dy]);
+                                    
+                                    // Move L2 (both endpoints)
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[1], index: 0 }, 
+                                        [s2[0] + l2_dx, s2[1] + l2_dy]);
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[1], index: 1 }, 
+                                        [e2[0] + l2_dx, e2[1] + l2_dy]);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -734,6 +843,62 @@ impl SketchSolver {
                             }
                         }
                     },
+                    SketchConstraint::HorizontalDistance { points, value, .. } => {
+                        let p1 = Self::get_point(sketch, &id_map, points[0]);
+                        let p2 = Self::get_point(sketch, &id_map, points[1]);
+
+                        if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                            let dx = pos2[0] - pos1[0];
+                            let current_dist = dx.abs();
+                            
+                            let error = (current_dist - value).abs();
+                            if error > max_error { max_error = error; }
+
+                            if current_dist > epsilon {
+                                let scale = 0.5 * (1.0 - value / current_dist);
+                                let offset_x = dx * scale;
+
+                                let new_p1 = [pos1[0] + offset_x, pos1[1]];
+                                let new_p2 = [pos2[0] - offset_x, pos2[1]];
+
+                                Self::set_point(sketch, &id_map, points[0], new_p1);
+                                Self::set_point(sketch, &id_map, points[1], new_p2);
+                            } else if *value > epsilon {
+                                let mid_x = (pos1[0] + pos2[0]) * 0.5;
+                                let half = value * 0.5;
+                                Self::set_point(sketch, &id_map, points[0], [mid_x - half, pos1[1]]);
+                                Self::set_point(sketch, &id_map, points[1], [mid_x + half, pos2[1]]);
+                            }
+                        }
+                    },
+                    SketchConstraint::VerticalDistance { points, value, .. } => {
+                        let p1 = Self::get_point(sketch, &id_map, points[0]);
+                        let p2 = Self::get_point(sketch, &id_map, points[1]);
+
+                        if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                            let dy = pos2[1] - pos1[1];
+                            let current_dist = dy.abs();
+                            
+                            let error = (current_dist - value).abs();
+                            if error > max_error { max_error = error; }
+
+                            if current_dist > epsilon {
+                                let scale = 0.5 * (1.0 - value / current_dist);
+                                let offset_y = dy * scale;
+
+                                let new_p1 = [pos1[0], pos1[1] + offset_y];
+                                let new_p2 = [pos2[0], pos2[1] - offset_y];
+
+                                Self::set_point(sketch, &id_map, points[0], new_p1);
+                                Self::set_point(sketch, &id_map, points[1], new_p2);
+                            } else if *value > epsilon {
+                                let mid_y = (pos1[1] + pos2[1]) * 0.5;
+                                let half = value * 0.5;
+                                Self::set_point(sketch, &id_map, points[0], [pos1[0], mid_y - half]);
+                                Self::set_point(sketch, &id_map, points[1], [pos2[0], mid_y + half]);
+                            }
+                        }
+                    },
                     SketchConstraint::Parallel { lines } => {
                         let l1_vec = Self::get_line_vector(sketch, &id_map, lines[0]);
                         let l2_vec = Self::get_line_vector(sketch, &id_map, lines[1]);
@@ -831,6 +996,18 @@ impl SketchSolver {
                                 }
                             },
                             _ => {}
+                        }
+                    },
+                     SketchConstraint::Tangent { entities } => {
+                        let g1 = Self::get_geometry_copy(sketch, &id_map, entities[0]);
+                        let g2 = Self::get_geometry_copy(sketch, &id_map, entities[1]);
+                        
+                        if let (Some(geo1), Some(geo2)) = (g1, g2) {
+                             if let (SketchGeometry::Line { start, end }, SketchGeometry::Circle { center, radius }) = (&geo1, &geo2) {
+                                 Self::solve_line_circle_tangent(sketch, &id_map, entities[0], entities[1], *start, *end, *center, *radius, &mut max_error);
+                             } else if let (SketchGeometry::Circle { center, radius }, SketchGeometry::Line { start, end }) = (&geo1, &geo2) {
+                                 Self::solve_line_circle_tangent(sketch, &id_map, entities[1], entities[0], *start, *end, *center, *radius, &mut max_error);
+                             }
                         }
                     },
                     SketchConstraint::Fix { point, position } => {
@@ -1019,6 +1196,47 @@ impl SketchSolver {
                                 }
                             }
                         }
+                    },
+                    SketchConstraint::DistanceParallelLines { lines, value, .. } => {
+                        let l1_geo = Self::get_geometry_copy(sketch, &id_map, lines[0]);
+                        let l2_geo = Self::get_geometry_copy(sketch, &id_map, lines[1]);
+                        
+                        if let (Some(SketchGeometry::Line { start: s1, end: e1 }), 
+                                Some(SketchGeometry::Line { start: s2, end: e2 })) = (l1_geo, l2_geo) {
+                            let dx1 = e1[0] - s1[0];
+                            let dy1 = e1[1] - s1[1];
+                            let len1 = (dx1 * dx1 + dy1 * dy1).sqrt();
+                            
+                            if len1 > epsilon {
+                                let nx = -dy1 / len1;
+                                let ny = dx1 / len1;
+                                
+                                let l2_mid = [(s2[0] + e2[0]) / 2.0, (s2[1] + e2[1]) / 2.0];
+                                let vx = l2_mid[0] - s1[0];
+                                let vy = l2_mid[1] - s1[1];
+                                let signed_dist = vx * nx + vy * ny;
+                                let current_dist = signed_dist.abs();
+                                
+                                let error = (current_dist - value).abs();
+                                if error > max_error { max_error = error; }
+                                
+                                if error > epsilon {
+                                    let target_signed_dist = if signed_dist >= 0.0 { *value } else { -*value };
+                                    let shift = target_signed_dist - signed_dist;
+                                    let l2_dx = nx * shift * 0.5;
+                                    let l2_dy = ny * shift * 0.5;
+                                    
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[0], index: 0 }, 
+                                        [s1[0] - l2_dx, s1[1] - l2_dy]);
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[0], index: 1 }, 
+                                        [e1[0] - l2_dx, e1[1] - l2_dy]);
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[1], index: 0 }, 
+                                        [s2[0] + l2_dx, s2[1] + l2_dy]);
+                                    Self::set_point(sketch, &id_map, ConstraintPoint { id: lines[1], index: 1 }, 
+                                        [e2[0] + l2_dx, e2[1] + l2_dy]);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1156,6 +1374,8 @@ impl SketchSolver {
                 SketchConstraint::Horizontal { .. } => 1, // Removes 1 DOF (forces same y)
                 SketchConstraint::Vertical { .. } => 1,   // Removes 1 DOF (forces same x)
                 SketchConstraint::Distance { .. } => 1,   // Removes 1 DOF
+                SketchConstraint::HorizontalDistance { .. } => 1,
+                SketchConstraint::VerticalDistance { .. } => 1,
                 SketchConstraint::Angle { .. } => 1,      // Removes 1 DOF (angle between lines)
                 SketchConstraint::Parallel { .. } => 1,   // Removes 1 DOF (angle)
                 SketchConstraint::Perpendicular { .. } => 1, // Removes 1 DOF (angle)
@@ -1165,6 +1385,7 @@ impl SketchSolver {
                 SketchConstraint::Symmetric { .. } => 2,  // Removes 2 DOF (reflection is precise)
                 SketchConstraint::Radius { .. } => 1,     // Removes 1 DOF (radius)
                 SketchConstraint::DistancePointLine { .. } => 1, // Removes 1 DOF (distance)
+                SketchConstraint::DistanceParallelLines { .. } => 1, // Removes 1 DOF (distance between parallel lines)
             };
         }
 
@@ -1204,6 +1425,12 @@ impl SketchSolver {
                     // Distance removes 1 DOF, affects both points' entities
                     (vec![points[0].id, points[1].id], 1)
                 },
+                SketchConstraint::HorizontalDistance { points, .. } => {
+                    (vec![points[0].id, points[1].id], 1)
+                },
+                SketchConstraint::VerticalDistance { points, .. } => {
+                    (vec![points[0].id, points[1].id], 1)
+                },
                 SketchConstraint::Angle { lines, .. } => (vec![lines[0], lines[1]], 1),
                 SketchConstraint::Parallel { lines } => (vec![lines[0], lines[1]], 1),
                 SketchConstraint::Perpendicular { lines } => (vec![lines[0], lines[1]], 1),
@@ -1213,6 +1440,7 @@ impl SketchSolver {
                 SketchConstraint::Symmetric { p1, p2, axis } => (vec![p1.id, p2.id, *axis], 2), // 2 DOF distributed?
                 SketchConstraint::Radius { entity, .. } => (vec![*entity], 1),
                 SketchConstraint::DistancePointLine { point, line, .. } => (vec![point.id, *line], 1),
+                SketchConstraint::DistanceParallelLines { lines, .. } => (vec![lines[0], lines[1]], 1),
             };
             
             // Distribute the constraint DOF to affected entities
@@ -1344,6 +1572,18 @@ impl SketchSolver {
                     let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
                     format!("DIST:{}:{}:{:.6}", a, b, value)
                 },
+                SketchConstraint::HorizontalDistance { points, value, .. } => {
+                    let sig1 = point_sig(&points[0]);
+                    let sig2 = point_sig(&points[1]);
+                    let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
+                    format!("HDIST:{}:{}:{:.6}", a, b, value)
+                },
+                SketchConstraint::VerticalDistance { points, value, .. } => {
+                    let sig1 = point_sig(&points[0]);
+                    let sig2 = point_sig(&points[1]);
+                    let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
+                    format!("VDIST:{}:{}:{:.6}", a, b, value)
+                },
                 SketchConstraint::Parallel { lines } => {
                     let (a, b) = if lines[0] < lines[1] { (lines[0], lines[1]) } else { (lines[1], lines[0]) };
                     format!("PAR:{}:{}", a, b)
@@ -1379,6 +1619,10 @@ impl SketchSolver {
                 SketchConstraint::DistancePointLine { point, line, value, .. } => {
                     format!("DIST_PL:{}:{}:{:.6}", point_sig(point), line, value)
                 },
+                SketchConstraint::DistanceParallelLines { lines, value, .. } => {
+                    let (a, b) = if lines[0] < lines[1] { (lines[0], lines[1]) } else { (lines[1], lines[0]) };
+                    format!("DIST_LL:{}:{}:{:.6}", a, b, value)
+                },
             };
             
             // Check for exact duplicate
@@ -1402,6 +1646,18 @@ impl SketchSolver {
                             let sig2 = point_sig(&points[1]);
                             let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
                             format!("DIST:{}:{}:{:.6}", a, b, value)
+                        },
+                        SketchConstraint::HorizontalDistance { points, value, .. } => {
+                            let sig1 = point_sig(&points[0]);
+                            let sig2 = point_sig(&points[1]);
+                            let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
+                            format!("HDIST:{}:{}:{:.6}", a, b, value)
+                        },
+                        SketchConstraint::VerticalDistance { points, value, .. } => {
+                            let sig1 = point_sig(&points[0]);
+                            let sig2 = point_sig(&points[1]);
+                            let (a, b) = if sig1 < sig2 { (sig1, sig2) } else { (sig2, sig1) };
+                            format!("VDIST:{}:{}:{:.6}", a, b, value)
                         },
                         SketchConstraint::Parallel { lines } => {
                             let (a, b) = if lines[0] < lines[1] { (lines[0], lines[1]) } else { (lines[1], lines[0]) };
@@ -1437,6 +1693,10 @@ impl SketchSolver {
                         },
                         SketchConstraint::DistancePointLine { point, line, value, .. } => {
                             format!("DIST_PL:{}:{}:{:.6}", point_sig(point), line, value)
+                        },
+                        SketchConstraint::DistanceParallelLines { lines, value, .. } => {
+                            let (a, b) = if lines[0] < lines[1] { (lines[0], lines[1]) } else { (lines[1], lines[0]) };
+                            format!("DIST_LL:{}:{}:{:.6}", a, b, value)
                         },
                     };
                     other_sig == signature
@@ -1615,6 +1875,56 @@ impl SketchSolver {
                         }
                     }
                 }
+
+                // Check for conflicting HorizontalDistance constraints (same points, different values)
+                if let (
+                    SketchConstraint::HorizontalDistance { points: p1, value: v1, .. },
+                    SketchConstraint::HorizontalDistance { points: p2, value: v2, .. }
+                ) = (c1, c2) {
+                    let (a1, b1) = if p1[0].id < p1[1].id || (p1[0].id == p1[1].id && p1[0].index < p1[1].index) {
+                        (p1[0], p1[1])
+                    } else {
+                        (p1[1], p1[0])
+                    };
+                    let (a2, b2) = if p2[0].id < p2[1].id || (p2[0].id == p2[1].id && p2[0].index < p2[1].index) {
+                        (p2[0], p2[1])
+                    } else {
+                        (p2[1], p2[0])
+                    };
+                    
+                    if a1.id == a2.id && a1.index == a2.index && b1.id == b2.id && b1.index == b2.index {
+                        if (v1 - v2).abs() > epsilon {
+                            if !possible_conflicts.iter().any(|(a, b, _)| (*a == i && *b == j) || (*a == j && *b == i)) {
+                                possible_conflicts.push((i, j, format!("Conflicting horizontal distance values: {} vs {}", v1, v2)));
+                            }
+                        }
+                    }
+                }
+
+                // Check for conflicting VerticalDistance constraints (same points, different values)
+                if let (
+                    SketchConstraint::VerticalDistance { points: p1, value: v1, .. },
+                    SketchConstraint::VerticalDistance { points: p2, value: v2, .. }
+                ) = (c1, c2) {
+                    let (a1, b1) = if p1[0].id < p1[1].id || (p1[0].id == p1[1].id && p1[0].index < p1[1].index) {
+                        (p1[0], p1[1])
+                    } else {
+                        (p1[1], p1[0])
+                    };
+                    let (a2, b2) = if p2[0].id < p2[1].id || (p2[0].id == p2[1].id && p2[0].index < p2[1].index) {
+                        (p2[0], p2[1])
+                    } else {
+                        (p2[1], p2[0])
+                    };
+                    
+                    if a1.id == a2.id && a1.index == a2.index && b1.id == b2.id && b1.index == b2.index {
+                        if (v1 - v2).abs() > epsilon {
+                            if !possible_conflicts.iter().any(|(a, b, _)| (*a == i && *b == j) || (*a == j && *b == i)) {
+                                possible_conflicts.push((i, j, format!("Conflicting vertical distance values: {} vs {}", v1, v2)));
+                            }
+                        }
+                    }
+                }
             }
         }
         
@@ -1660,6 +1970,22 @@ impl SketchSolver {
                 let p2 = Self::get_point(sketch, id_map, points[1]);
                 if let (Some(pos1), Some(pos2)) = (p1, p2) {
                     let current_dist = ((pos2[0] - pos1[0]).powi(2) + (pos2[1] - pos1[1]).powi(2)).sqrt();
+                    (current_dist - value).abs()
+                } else { 0.0 }
+            },
+            SketchConstraint::HorizontalDistance { points, value, .. } => {
+                let p1 = Self::get_point(sketch, id_map, points[0]);
+                let p2 = Self::get_point(sketch, id_map, points[1]);
+                if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                    let current_dist = (pos2[0] - pos1[0]).abs();
+                    (current_dist - value).abs()
+                } else { 0.0 }
+            },
+            SketchConstraint::VerticalDistance { points, value, .. } => {
+                let p1 = Self::get_point(sketch, id_map, points[0]);
+                let p2 = Self::get_point(sketch, id_map, points[1]);
+                if let (Some(pos1), Some(pos2)) = (p1, p2) {
+                    let current_dist = (pos2[1] - pos1[1]).abs();
                     (current_dist - value).abs()
                 } else { 0.0 }
             },
@@ -1811,6 +2137,27 @@ impl SketchSolver {
                          (dx*dx + dy*dy).sqrt()
                      } else { 0.0 }
                 } else { 0.0 }
+            },
+            SketchConstraint::DistanceParallelLines { lines, value, .. } => {
+                let l1_geo = Self::get_geometry_copy(sketch, id_map, lines[0]);
+                let l2_geo = Self::get_geometry_copy(sketch, id_map, lines[1]);
+                
+                if let (Some(SketchGeometry::Line { start: s1, end: e1 }), 
+                        Some(SketchGeometry::Line { start: s2, end: e2 })) = (l1_geo, l2_geo) {
+                    let dx1 = e1[0] - s1[0];
+                    let dy1 = e1[1] - s1[1];
+                    let len1 = (dx1 * dx1 + dy1 * dy1).sqrt();
+                    
+                    if len1 > 1e-9 {
+                        let nx = -dy1 / len1;
+                        let ny = dx1 / len1;
+                        let l2_mid = [(s2[0] + e2[0]) / 2.0, (s2[1] + e2[1]) / 2.0];
+                        let vx = l2_mid[0] - s1[0];
+                        let vy = l2_mid[1] - s1[1];
+                        let current_dist = (vx * nx + vy * ny).abs();
+                        (current_dist - value).abs()
+                    } else { 0.0 }
+                } else { 0.0 }
             }
         }
     }
@@ -1822,6 +2169,8 @@ impl SketchSolver {
             SketchConstraint::Horizontal { entity } => vec![*entity],
             SketchConstraint::Vertical { entity } => vec![*entity],
             SketchConstraint::Distance { points, .. } => vec![points[0].id, points[1].id],
+            SketchConstraint::HorizontalDistance { points, .. } => vec![points[0].id, points[1].id],
+            SketchConstraint::VerticalDistance { points, .. } => vec![points[0].id, points[1].id],
             SketchConstraint::Fix { point, .. } => vec![point.id],
             SketchConstraint::Angle { lines, .. } => vec![lines[0], lines[1]],
             SketchConstraint::Parallel { lines } => vec![lines[0], lines[1]],
@@ -1831,6 +2180,7 @@ impl SketchSolver {
             SketchConstraint::Radius { entity, .. } => vec![*entity],
             SketchConstraint::Symmetric { p1, p2, axis } => vec![p1.id, p2.id, *axis],
             SketchConstraint::DistancePointLine { point, line, .. } => vec![point.id, *line],
+            SketchConstraint::DistanceParallelLines { lines, .. } => vec![lines[0], lines[1]],
         }
     }
     

@@ -82,6 +82,20 @@ pub enum SketchConstraint {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         style: Option<DimensionStyle>,
     },
+    /// Horizontal Distance (X-axis) between two points
+    HorizontalDistance { 
+        points: [ConstraintPoint; 2], 
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+    /// Vertical Distance (Y-axis) between two points
+    VerticalDistance { 
+        points: [ConstraintPoint; 2], 
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
     /// Angle constraint between two lines
     Angle {
         lines: [EntityId; 2],
@@ -107,6 +121,13 @@ pub enum SketchConstraint {
     DistancePointLine {
         point: ConstraintPoint,
         line: EntityId,
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<DimensionStyle>,
+    },
+    /// Distance between two parallel lines (perpendicular distance)
+    DistanceParallelLines {
+        lines: [EntityId; 2],
         value: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         style: Option<DimensionStyle>,
@@ -265,6 +286,16 @@ impl Sketch {
             
             match &mut entry.constraint {
                 SketchConstraint::Distance { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                SketchConstraint::HorizontalDistance { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                SketchConstraint::VerticalDistance { value, style, .. } => {
                     if resolve_expr_value(style, value, variables) {
                         resolved_count += 1;
                     }

@@ -1,0 +1,21 @@
+  /* ===== SYNC SKETCH SELECTION TO TOOL SELECTION ===== */
+  createEffect(() => {
+    const tool = sketchTool();
+    if (tool === "dimension") {
+      // When entering dimension mode, if there is an existing sketch selection, adopt it.
+      // But only if dimensionSelection is empty to avoid overwriting ongoing work.
+      const currentSketchSel = sketchSelection();
+      const currentDimSel = untrack(() => dimensionSelection());
+
+      if (currentDimSel.length === 0 && currentSketchSel.length > 0) {
+        // Filter out non-geometry (if any) or just take valid candidates
+        // For dimensioning, we generally want points and entities.
+        const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
+        if (valid.length > 0) {
+           console.log("Syncing sketch selection to dimension tool:", valid);
+           setDimensionSelection(valid);
+           analyzeDimensionSelection(valid);
+        }
+      }
+    }
+  });

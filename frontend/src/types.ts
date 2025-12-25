@@ -98,6 +98,8 @@ export interface SketchConstraint {
     Horizontal?: { entity: EntityId };
     Vertical?: { entity: EntityId };
     Distance?: { points: [ConstraintPoint, ConstraintPoint], value: number, style?: DimensionStyle };
+    HorizontalDistance?: { points: [ConstraintPoint, ConstraintPoint], value: number, style?: DimensionStyle };
+    VerticalDistance?: { points: [ConstraintPoint, ConstraintPoint], value: number, style?: DimensionStyle };
     Angle?: { lines: [EntityId, EntityId], value: number, style?: DimensionStyle };
     Radius?: { entity: EntityId, value: number, style?: DimensionStyle };
     Parallel?: { lines: [EntityId, EntityId] };
@@ -107,6 +109,7 @@ export interface SketchConstraint {
     Symmetric?: { p1: ConstraintPoint, p2: ConstraintPoint, axis: EntityId };
     Fix?: { point: ConstraintPoint, position: [number, number] };
     DistancePointLine?: { point: ConstraintPoint, line: EntityId, value: number, style?: DimensionStyle };
+    DistanceParallelLines?: { lines: [EntityId, EntityId], value: number, style?: DimensionStyle };
 }
 
 /** Wrapper for constraints with suppression state */
@@ -163,7 +166,8 @@ export type ParameterValue =
 // Snap types for sketch snapping
 export type SnapType =
     "Endpoint" | "Midpoint" | "Center" |
-    "Intersection" | "Origin" | "Grid";
+    "Intersection" | "Origin" | "Grid" |
+    "AxisX" | "AxisY";
 
 export interface SnapPoint {
     position: [number, number];

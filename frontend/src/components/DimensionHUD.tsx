@@ -4,7 +4,7 @@ import type { SketchEntity, SelectionCandidate } from "../types";
 
 interface ProposedAction {
     label: string;
-    type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "Unsupported";
+    type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "Unsupported";
     value?: number;
     isValid: boolean;
 }

@@ -1,4 +1,4 @@
-import { type Component, createSignal, createMemo, For, Show, onMount } from 'solid-js';
+import { type Component, createSignal, createMemo, createEffect, For, Show, onMount } from 'solid-js';
 import type { VariableStore } from '../types';
 import './ExpressionInput.css';
 
@@ -17,6 +17,14 @@ const ExpressionInput: Component<ExpressionInputProps> = (props) => {
     const [inputValue, setInputValue] = createSignal(props.value);
     const [showAutocomplete, setShowAutocomplete] = createSignal(false);
     const [selectedIndex, setSelectedIndex] = createSignal(0);
+
+    // Sync internal state with props.value when parent updates it
+    createEffect(() => {
+        const parentValue = props.value;
+        if (parentValue !== inputValue()) {
+            setInputValue(parentValue);
+        }
+    });
 
     // Get all variable names for autocomplete
     const variableNames = createMemo(() => {

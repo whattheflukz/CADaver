@@ -43,6 +43,8 @@ const SNAP_PRIORITY: Record<SnapType, number> = {
     Intersection: 3,
     Midpoint: 4,
     Origin: 5,
+    AxisX: 6,
+    AxisY: 6,
     Grid: 10,
 };
 
@@ -183,6 +185,20 @@ export function findSnapPoints(
         }
     }
 
+    // Axis snapping (X=0 line and Y=0 line)
+    // Snap to X axis (Y=0 line) when cursor is close
+    if (Math.abs(cursor[1]) <= config.snap_radius) {
+        const axisPoint: [number, number] = [cursor[0], 0];
+        const d = Math.abs(cursor[1]);
+        snaps.push({ position: axisPoint, snap_type: "AxisX", entity_id: null, distance: d });
+    }
+    // Snap to Y axis (X=0 line) when cursor is close
+    if (Math.abs(cursor[0]) <= config.snap_radius) {
+        const axisPoint: [number, number] = [0, cursor[1]];
+        const d = Math.abs(cursor[0]);
+        snaps.push({ position: axisPoint, snap_type: "AxisY", entity_id: null, distance: d });
+    }
+
     return snaps;
 }
 
@@ -220,4 +236,54 @@ export function applySnapping(
         return { position: snap.position, snap };
     }
     return { position: cursor, snap: null };
+}
+
+/**
+ * Angular snapping for line creation - snaps to horizontal/vertical angles
+ * Returns the snapped cursor position and whether snapping occurred
+ * @param startPoint The fixed start point of the line being drawn
+ * @param cursor The current cursor position
+ * @param angleTolerance Tolerance in radians for angle snapping (default ~5 degrees)
+ */
+export function applyAngularSnapping(
+    startPoint: [number, number],
+    cursor: [number, number],
+    angleTolerance: number = 0.087 // ~5 degrees in radians
+): { position: [number, number]; snapped: boolean; snapType: "horizontal" | "vertical" | null } {
+    const dx = cursor[0] - startPoint[0];
+    const dy = cursor[1] - startPoint[1];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 0.001) {
+        return { position: cursor, snapped: false, snapType: null };
+    }
+
+    // Calculate angle from start to cursor
+    const angle = Math.atan2(dy, dx);
+
+    // Check proximity to horizontal (0 or π)
+    const absAngle = Math.abs(angle);
+    if (absAngle < angleTolerance || Math.abs(absAngle - Math.PI) < angleTolerance) {
+        // Snap to horizontal - maintain same X direction, zero Y
+        const dir = dx >= 0 ? 1 : -1;
+        return {
+            position: [startPoint[0] + dir * dist, startPoint[1]],
+            snapped: true,
+            snapType: "horizontal"
+        };
+    }
+
+    // Check proximity to vertical (π/2 or -π/2)
+    const halfPi = Math.PI / 2;
+    if (Math.abs(absAngle - halfPi) < angleTolerance) {
+        // Snap to vertical - maintain same Y direction, zero X
+        const dir = dy >= 0 ? 1 : -1;
+        return {
+            position: [startPoint[0], startPoint[1] + dir * dist],
+            snapped: true,
+            snapType: "vertical"
+        };
+    }
+
+    return { position: cursor, snapped: false, snapType: null };
 }

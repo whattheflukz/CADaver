@@ -1,7 +1,7 @@
 import { createSignal, createEffect, createMemo, onCleanup, onMount, untrack, type Accessor } from 'solid-js';
 import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState } from '../types';
 import { getSketchAction } from '../sketchInputManager';
-import { applySnapping } from '../snapUtils';
+import { applySnapping, applyAngularSnapping } from '../snapUtils';
 
 interface UseSketchingProps {
   send: (msg: string) => void;
@@ -25,7 +25,7 @@ export function useSketching(props: UseSketchingProps) {
   const [sketchSetupMode, setSketchSetupMode] = createSignal(false);
   const [pendingSketchId, setPendingSketchId] = createSignal<string | null>(null);
   // Sketch Selection State (Local)
-  const [sketchSelection, setSketchSelection] = createSignal<string[]>([]);
+  const [sketchSelection, setSketchSelection] = createSignal<SelectionCandidate[]>([]);
 
   // State for multi-step constraint creation (e.g., Coincident needs 2 points)
   const [constraintSelection, setConstraintSelection] = createSignal<ConstraintPoint[]>([]);
@@ -113,13 +113,14 @@ export function useSketching(props: UseSketchingProps) {
     type: 'Distance' | 'Angle' | 'Radius';
     currentValue: number;
     expression?: string;
+    isNew?: boolean;
   } | null>(null);
 
   // Dimension Tool State
   const [dimensionSelection, setDimensionSelection] = createSignal<SelectionCandidate[]>([]);
   const [dimensionProposedAction, setDimensionProposedAction] = createSignal<{
     label: string;
-    type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "Unsupported";
+    type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "Unsupported";
     value?: number;
     isValid: boolean;
   } | null>(null);
@@ -370,27 +371,52 @@ export function useSketching(props: UseSketchingProps) {
       }
       // Handle Sketch Entity Selection locally
       let newSel = [...sketchSelection()];
+      // If dimension tool is active, use dimensionSelection instead
+      if (sketchTool() === "dimension") {
+        newSel = [...dimensionSelection()];
+      }
+
+      const areEqual = (a: SelectionCandidate, b: SelectionCandidate) => {
+        return a.id === b.id && a.type === b.type && a.index === b.index;
+      };
+
+      const candidate = topoId as SelectionCandidate;
+      const existingIdx = newSel.findIndex(s => areEqual(s, candidate));
+      const exists = existingIdx !== -1;
 
       // Handle Toggle behavior for "add" (Ctrl+Click)
       if (modifier === "add") {
-        if (newSel.includes(topoId)) {
+        if (exists) {
           // Toggle OFF
-          newSel = newSel.filter(id => id !== topoId);
+          newSel.splice(existingIdx, 1);
         } else {
           // Toggle ON
-          newSel.push(topoId);
+          newSel.push(candidate);
         }
       } else if (modifier === "remove") {
-        newSel = newSel.filter(id => id !== topoId);
+        if (exists) {
+          newSel.splice(existingIdx, 1);
+        }
       } else {
-        // Replace - but toggle off if clicking on already-selected single entity
-        if (newSel.length === 1 && newSel[0] === topoId) {
-          newSel = []; // Deselect
+        // Replace - default behavior
+        // Special handling for dimension tool: Allow accumulating up to 2 items even without modifier
+        if (sketchTool() === "dimension" && !exists && newSel.length < 2) {
+          newSel.push(candidate);
         } else {
-          newSel = [topoId];
+          // Standard replace behavior
+          if (newSel.length === 1 && exists) {
+            newSel = []; // Deselect if clicking single selected item
+          } else {
+            newSel = [candidate];
+          }
         }
       }
-      setSketchSelection(newSel);
+
+      if (sketchTool() === "dimension") {
+        setDimensionSelection(newSel);
+      } else {
+        setSketchSelection(newSel);
+      }
       return;
     }
 
@@ -444,6 +470,22 @@ export function useSketching(props: UseSketchingProps) {
     setCameraAlignPlane(plane);
     setTimeout(() => setCameraAlignPlane(null), 100);
   };
+
+  /* ===== DIMENSION PREVIEW EFFECT ===== */
+  createEffect(() => {
+    // When dimension selection changes, update the proposed action (preview)
+    const sel = dimensionSelection();
+    console.log("[DimPreview Effect] Selection changed:", sel.length, "items", sel);
+    if (sel.length > 0) {
+      analyzeDimensionSelection(sel);
+      console.log("[DimPreview Effect] After analyze:", {
+        proposedAction: dimensionProposedAction(),
+        placementMode: dimensionPlacementMode()
+      });
+    } else {
+      setDimensionProposedAction(null);
+    }
+  });
 
   /* ===== AUTOSTART SKETCH EFFECT ===== */
   createEffect(() => {
@@ -584,6 +626,8 @@ export function useSketching(props: UseSketchingProps) {
       entry.constraint.Distance.style.offset = newOffset;
     } else if (entry.constraint.Angle && entry.constraint.Angle.style) {
       entry.constraint.Angle.style.offset = newOffset;
+    } else if (entry.constraint.DistanceParallelLines && entry.constraint.DistanceParallelLines.style) {
+      entry.constraint.DistanceParallelLines.style.offset = newOffset;
     }
 
     setCurrentSketch({ ...sketch });
@@ -591,8 +635,12 @@ export function useSketching(props: UseSketchingProps) {
   };
 
   const handleSketchDelete = () => {
-    const toDelete = sketchSelection();
-    if (toDelete.length === 0) return;
+    const selection = sketchSelection();
+    if (selection.length === 0) return;
+
+    // Map to IDs for deletion. 
+    // Note: If a point on a line is selected, s.id is the Line ID. Deleting it deletes the line.
+    const toDelete = selection.map(s => s.id);
 
     const sketch = currentSketch();
     const newEntities = sketch.entities.filter(e => !toDelete.includes(e.id));
@@ -615,12 +663,19 @@ export function useSketching(props: UseSketchingProps) {
 
   // ===== UNIFIED DIMENSION TOOL (Multi-step) =====
 
-  const getCandidatePosition = (c: SelectionCandidate, _sketch: any): [number, number] | null => {
+  const getCandidatePosition = (c: SelectionCandidate, sketch: any): [number, number] | null => {
     if (c.type === "origin") return [0, 0];
     if (c.type === "point" && c.position) return c.position;
+
+    // Look up in sketch
+    const ent = sketch.entities.find((e: any) => e.id === c.id);
+    if (!ent) return null;
+
+    if (c.type === "point" && ent.geometry.Point) return ent.geometry.Point.pos;
     if (c.type === "entity") {
-      // Fallback for entities if needed, but usually we don't need pos for entity selection
-      return null;
+      if (ent.geometry.Line) return ent.geometry.Line.start; // Default
+      if (ent.geometry.Circle) return ent.geometry.Circle.center;
+      if (ent.geometry.Arc) return ent.geometry.Arc.center;
     }
     return null;
   };
@@ -668,8 +723,27 @@ export function useSketching(props: UseSketchingProps) {
     } else if (candidates.length === 2) {
       const [c1, c2] = candidates;
 
-      // Distance: Point-Point, Point-Origin
-      if ((c1.type === "point" || c1.type === "origin") && (c2.type === "point" || c2.type === "origin")) {
+      // Helper to check if a candidate represents a single point (endpoint, origin, or Point entity)
+      const isPointLike = (c: SelectionCandidate): boolean => {
+        if (c.type === "point" || c.type === "origin") {
+          console.log("[isPointLike] true for type:", c.type);
+          return true;
+        }
+        if (c.type === "entity") {
+          const e = sketch.entities.find(ent => ent.id === c.id);
+          const isPoint = !!e?.geometry.Point;
+          console.log("[isPointLike] entity check:", c.id, "has Point geometry:", isPoint, "entity:", e?.geometry);
+          return isPoint;
+        }
+        console.log("[isPointLike] false for type:", c.type);
+        return false;
+      };
+
+      console.log("[analyzeDimensionSelection] 2 candidates:", c1, c2);
+      console.log("[analyzeDimensionSelection] isPointLike(c1):", isPointLike(c1), "isPointLike(c2):", isPointLike(c2));
+
+      // Distance: Point-Point, Point-Origin, or Point Entity - Point Entity
+      if (isPointLike(c1) && isPointLike(c2)) {
         // Generic Distance
         // Calculate value for preview
         const p1 = getCandidatePosition(c1, sketch);
@@ -678,6 +752,7 @@ export function useSketching(props: UseSketchingProps) {
         if (p1 && p2) {
           dist = Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
         }
+        console.log("[analyzeDimensionSelection] Point-Point matched! p1:", p1, "p2:", p2, "dist:", dist);
 
         setDimensionProposedAction({
           label: `Distance (${dist.toFixed(2)})`,
@@ -689,69 +764,102 @@ export function useSketching(props: UseSketchingProps) {
         return;
       }
 
-      // Line + Line => Angle
+      // Line + Line => Check if parallel first, then decide Angle vs Distance
       if (c1.type === "entity" && c2.type === "entity") {
         const e1 = sketch.entities.find(e => e.id === c1.id);
         const e2 = sketch.entities.find(e => e.id === c2.id);
         if (e1?.geometry.Line && e2?.geometry.Line) {
           const l1 = e1.geometry.Line;
           const l2 = e2.geometry.Line;
-          // Calculate intersection to determine correct vectors relative to vertex
-          const x1 = l1.start[0], y1 = l1.start[1];
-          const x2 = l1.end[0], y2 = l1.end[1];
-          const x3 = l2.start[0], y3 = l2.start[1];
-          const x4 = l2.end[0], y4 = l2.end[1];
 
-          const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-          let center: [number, number];
+          // Calculate direction vectors
+          const dx1 = l1.end[0] - l1.start[0];
+          const dy1 = l1.end[1] - l1.start[1];
+          const dx2 = l2.end[0] - l2.start[0];
+          const dy2 = l2.end[1] - l2.start[1];
 
-          if (Math.abs(denom) > 0.0001) {
-            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
-            center = [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
-          } else {
-            center = [(x2 + x3) / 2, (y2 + y3) / 2];
+          const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+          const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+          if (len1 > 0.0001 && len2 > 0.0001) {
+            // Normalized direction vectors
+            const n1x = dx1 / len1, n1y = dy1 / len1;
+            const n2x = dx2 / len2, n2y = dy2 / len2;
+
+            // Cross product to check parallelism (sin of angle)
+            const cross = n1x * n2y - n1y * n2x;
+            let isParallel = Math.abs(cross) < 0.1; // ~6 degree tolerance for geometry
+
+            // Also check if there's an existing Parallel or Angle=0 constraint between these lines
+            const hasParallelConstraint = sketch.constraints.some(entry => {
+              if (entry.suppressed) return false;
+              const c = entry.constraint;
+              if (c.Parallel) {
+                const [l1id, l2id] = c.Parallel.lines;
+                return (l1id === e1.id && l2id === e2.id) || (l1id === e2.id && l2id === e1.id);
+              }
+              if (c.Angle) {
+                const [l1id, l2id] = c.Angle.lines;
+                const sameLines = (l1id === e1.id && l2id === e2.id) || (l1id === e2.id && l2id === e1.id);
+                // Check if angle is 0 or 180 (parallel)
+                const angleValue = c.Angle.value;
+                const isZeroOrPi = Math.abs(angleValue) < 0.01 || Math.abs(angleValue - Math.PI) < 0.01;
+                return sameLines && isZeroOrPi;
+              }
+              return false;
+            });
+
+            // If there's an existing parallel constraint, treat as parallel
+            if (hasParallelConstraint) {
+              isParallel = true;
+            }
+
+            console.log("Line-Line dimension: isParallel=", isParallel, "hasParallelConstraint=", hasParallelConstraint, "cross=", cross);
+
+            if (isParallel) {
+              // Lines are parallel - offer distance between them
+              // Calculate perpendicular distance from L2's midpoint to L1's infinite line
+              const l2MidX = (l2.start[0] + l2.end[0]) / 2;
+              const l2MidY = (l2.start[1] + l2.end[1]) / 2;
+
+              // Normal vector to L1 (perpendicular)
+              const nx = -n1y;
+              const ny = n1x;
+
+              // Vector from L1 start to L2 midpoint
+              const vx = l2MidX - l1.start[0];
+              const vy = l2MidY - l1.start[1];
+
+              // Perpendicular distance
+              const dist = Math.abs(vx * nx + vy * ny);
+
+              setDimensionProposedAction({
+                label: `Distance (${dist.toFixed(2)})`,
+                type: "DistanceParallelLines",
+                value: dist,
+                isValid: true
+              });
+              setDimensionPlacementMode(true);
+              return;
+            } else {
+              // Lines are NOT parallel - offer angle dimension
+              // Calculate angle between the lines
+              const dot = n1x * n2x + n1y * n2y;
+              const angle = Math.acos(Math.min(1, Math.max(-1, Math.abs(dot))));
+
+              setDimensionProposedAction({
+                label: `Angle (${(angle * 180 / Math.PI).toFixed(1)}°)`,
+                type: "Angle",
+                value: angle,
+                isValid: true
+              });
+              setDimensionPlacementMode(true);
+              return;
+            }
           }
-
-          // Determine correct direction vectors by checking which endpoint is further from intersection
-          const dStart1 = (x1 - center[0]) ** 2 + (y1 - center[1]) ** 2;
-          const dEnd1 = (x2 - center[0]) ** 2 + (y2 - center[1]) ** 2;
-          let dx1, dy1;
-          if (dEnd1 > dStart1) {
-            dx1 = x2 - center[0];
-            dy1 = y2 - center[1];
-          } else {
-            dx1 = x1 - center[0];
-            dy1 = y1 - center[1];
-          }
-
-          const dStart2 = (x3 - center[0]) ** 2 + (y3 - center[1]) ** 2;
-          const dEnd2 = (x4 - center[0]) ** 2 + (y4 - center[1]) ** 2;
-          let dx2, dy2;
-          if (dEnd2 > dStart2) {
-            dx2 = x4 - center[0];
-            dy2 = y4 - center[1];
-          } else {
-            dx2 = x3 - center[0];
-            dy2 = y3 - center[1];
-          }
-
-          const angle1 = Math.atan2(dy1, dx1);
-          const angle2 = Math.atan2(dy2, dx2);
-          let diff = angle2 - angle1;
-          while (diff > Math.PI) diff -= 2 * Math.PI;
-          while (diff < -Math.PI) diff += 2 * Math.PI;
-          const angle = Math.abs(diff);
-
-          setDimensionProposedAction({
-            label: `Angle (${(angle * 180 / Math.PI).toFixed(1)}°)`,
-            type: "Angle",
-            value: angle,
-            isValid: true
-          });
-          setDimensionPlacementMode(true);
-          return;
         }
       }
+
 
       // Line + Point/Origin => Distance (Start to Point) OR Point-Line Distance
       if ((c1.type === "entity" && (c2.type === "point" || c2.type === "origin")) ||
@@ -855,30 +963,64 @@ export function useSketching(props: UseSketchingProps) {
           point: getConstraintPoint(pointCand),
           line: lineCand.id,
           value: action.value!,
-          style: { driven: false, offset: offsetOverride || [0, 1.0] }
         }
       };
-    } else if (action.type === "Distance") {
-      // Point-Point
-      const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
+    } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
+      // Point-Point or Inferred Line endpoints
+      let p1: { id: string, index: number } | null = null;
+      let p2: { id: string, index: number } | null = null;
 
-        if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
-
-        if (c.type === "point") return { id: c.id, index: c.index || 0 };
-
-        // Fallback or error if entity passed here
-        return null;
-      };
-
-      const p1 = getPoint(selections[0]);
-      const p2 = getPoint(selections[1]);
+      if (selections.length === 2) {
+        const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
+          if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+          if (c.type === "point") return { id: c.id, index: c.index || 0 };
+          if (c.type === "entity") return { id: c.id, index: c.index || 0 };
+          return null;
+        };
+        p1 = getPoint(selections[0]);
+        p2 = getPoint(selections[1]);
+      } else if (selections.length === 1 && selections[0].type === 'entity') {
+        // Single line selection -> using endpoints 0 and 1
+        p1 = { id: selections[0].id, index: 0 };
+        p2 = { id: selections[0].id, index: 1 };
+      }
 
       if (p1 && p2) {
+        if (action.type === "HorizontalDistance") {
+          constraint = {
+            HorizontalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else if (action.type === "VerticalDistance") {
+          constraint = {
+            VerticalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else {
+          constraint = {
+            Distance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        }
+      }
+    } else if (action.type === "DistanceParallelLines") {
+      // Two parallel lines - constrain distance between them
+      const [c1, c2] = selections;
+      if (c1.type === "entity" && c2.type === "entity") {
         constraint = {
-          Distance: {
-            points: [p1, p2],
+          DistanceParallelLines: {
+            lines: [c1.id, c2.id],
             value: action.value!,
-            style: { driven: false, offset: [0, 1.0] }
+            style: { driven: false, offset: offsetOverride || [0, 1.0] }
           }
         };
       }
@@ -890,12 +1032,22 @@ export function useSketching(props: UseSketchingProps) {
       updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
       setCurrentSketch(updated);
       sendSketchUpdate(updated); // Send to backend to persist and solve
-      console.log("Added Advanced Dimension:", action.type);
+
+      // Trigger edit mode for the newly created constraint
+      const newIndex = updated.constraints.length - 1;
+      setEditingDimension({
+        constraintIndex: newIndex,
+        type: action.type === 'Radius' ? 'Radius' : (action.type === 'Angle' ? 'Angle' : 'Distance'),
+        currentValue: action.value!,
+        isNew: true
+      });
+      // console.log("Added Advanced Dimension and triggered edit:", action.type);
     }
 
     // Cleanup
     setDimensionSelection([]);
     setDimensionProposedAction(null);
+    setDimensionPlacementMode(false);
     setSketchTool("select");
   };
 
@@ -928,7 +1080,40 @@ export function useSketching(props: UseSketchingProps) {
     }
 
     // Use snapped position for all geometry operations
-    const effectivePoint: [number, number] = snappedPos;
+    // Apply angular snapping for line tool when we have a start point
+    let effectivePoint: [number, number] = snappedPos;
+    const tool = sketchTool();
+    const startPt = tempPoint();
+
+    // For line/rectangle tools, apply angular snapping which may also land on axes
+    if ((tool === "line" || tool === "rectangle") && startPt) {
+      // First try angular snapping (H/V constraint)
+      const angularResult = applyAngularSnapping(startPt, snappedPos);
+      if (angularResult.snapped) {
+        effectivePoint = angularResult.position;
+        console.log("Angular snap:", angularResult.snapType);
+
+        // Check if the angular-snapped point is also on an axis
+        const axisThreshold = snapConfig().snap_radius;
+        if (Math.abs(effectivePoint[1]) < axisThreshold) {
+          // Snap to X axis (Y=0) - keep X, set Y to 0
+          effectivePoint = [effectivePoint[0], 0];
+          console.log("Combined snap: angular + AxisX");
+        } else if (Math.abs(effectivePoint[0]) < axisThreshold) {
+          // Snap to Y axis (X=0) - keep Y, set X to 0
+          effectivePoint = [0, effectivePoint[1]];
+          console.log("Combined snap: angular + AxisY");
+        }
+      } else if (!snap) {
+        // No angular snap and no entity snap - check for axis-only snap
+        const axisThreshold = snapConfig().snap_radius;
+        if (Math.abs(effectivePoint[1]) < axisThreshold) {
+          effectivePoint = [effectivePoint[0], 0];
+        } else if (Math.abs(effectivePoint[0]) < axisThreshold) {
+          effectivePoint = [0, effectivePoint[1]];
+        }
+      }
+    }
 
     // Helper for auto-constraining new entities based on snaps
     const applyAutoConstraints = (
@@ -1020,6 +1205,86 @@ export function useSketching(props: UseSketchingProps) {
         const entry = sketch.constraints[i];
         const constraint = entry.constraint;
 
+        console.log("Checking constraint", i, ":", Object.keys(constraint), "hasDistanceParallelLines:", !!constraint.DistanceParallelLines);
+
+        // DistanceParallelLines dimension editing - check FIRST before other constraints
+        if (constraint.DistanceParallelLines) {
+          const dplConstraint = constraint.DistanceParallelLines;
+          const line1Entity = sketch.entities.find(e => e.id === dplConstraint.lines[0]);
+          const line2Entity = sketch.entities.find(e => e.id === dplConstraint.lines[1]);
+
+          console.log("DPL: line1Entity=", !!line1Entity, "line2Entity=", !!line2Entity);
+
+          if (line1Entity?.geometry.Line && line2Entity?.geometry.Line) {
+            const l1 = line1Entity.geometry.Line;
+            const l2 = line2Entity.geometry.Line;
+
+            // Calculate midpoints
+            const mid1: [number, number] = [(l1.start[0] + l1.end[0]) / 2, (l1.start[1] + l1.end[1]) / 2];
+            const mid2: [number, number] = [(l2.start[0] + l2.end[0]) / 2, (l2.start[1] + l2.end[1]) / 2];
+
+            // Get line1 direction for perpendicular
+            const dx1 = l1.end[0] - l1.start[0];
+            const dy1 = l1.end[1] - l1.start[1];
+            const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+
+            if (len1 > 0.001) {
+              // Line direction (ux, uy) and normal (nx, ny)
+              const ux = dx1 / len1;
+              const uy = dy1 / len1;
+              const nx = -uy;
+              const ny = ux;
+
+              // Project mid2 onto normal from mid1
+              const vx = mid2[0] - mid1[0];
+              const vy = mid2[1] - mid1[1];
+              const projDist = vx * nx + vy * ny;
+
+              // Extension line end points (same as Viewport.tsx rendering)
+              // mid2X/Y for line2 projected position
+              const mid1X = mid1[0];
+              const mid1Y = mid1[1];
+              const mid2X = mid1X + projDist * nx;
+              const mid2Y = mid1Y + projDist * ny;
+
+              // Extension line endpoints (dimension line is between these)
+              const ext1End: [number, number] = [
+                mid1X + (projDist / 2) * nx,
+                mid1Y + (projDist / 2) * ny
+              ];
+              const ext2End: [number, number] = [
+                mid2X - (projDist / 2) * nx,
+                mid2Y - (projDist / 2) * ny
+              ];
+
+              // Text position matches Viewport.tsx rendering
+              const textX = (ext1End[0] + ext2End[0]) / 2 + ux * 0.3;
+              const textY = (ext1End[1] + ext2End[1]) / 2 + uy * 0.3;
+
+              // Hitbox check with larger area
+              const valueText = dplConstraint.value.toFixed(2);
+              const textWidth = Math.max(1.5, valueText.length * 0.3);
+              const textHeight = 1.2;
+
+              console.log("DPL hitbox:", {
+                rawPoint, textX, textY, textWidth, textHeight,
+                distX: Math.abs(rawPoint[0] - textX), distY: Math.abs(rawPoint[1] - textY)
+              });
+
+              if (Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight) {
+                console.log("Editing DistanceParallelLines dimension at index", i);
+                setEditingDimension({
+                  constraintIndex: i,
+                  type: 'Distance', // Reuse Distance type for editing
+                  currentValue: dplConstraint.value,
+                  expression: dplConstraint.style?.expression
+                });
+                return;
+              }
+            }
+          }
+        }
+
         if (constraint.Distance && constraint.Distance.style) {
           // Find distance dimension text position
           const cp1 = constraint.Distance.points[0];
@@ -1030,7 +1295,9 @@ export function useSketching(props: UseSketchingProps) {
             if (cp.id === "00000000-0000-0000-0000-000000000000") return [0, 0];
             const e = sketch.entities.find(ent => ent.id === cp.id);
             if (!e) return null;
-            if (e.geometry.Line) {
+            if (e.geometry.Point) {
+              return e.geometry.Point.pos;
+            } else if (e.geometry.Line) {
               return cp.index === 0 ? e.geometry.Line.start : e.geometry.Line.end;
             } else if (e.geometry.Circle) {
               return e.geometry.Circle.center;
@@ -1169,113 +1436,221 @@ export function useSketching(props: UseSketchingProps) {
             const x4 = l2.end[0], y4 = l2.end[1];
 
             const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+
+            let centerX: number, centerY: number;
+
             if (Math.abs(denom) > 0.0001) {
+              // Lines intersect - use intersection point
               const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
-              const centerX = x1 + t * (x2 - x1);
-              const centerY = y1 + t * (y2 - y1);
+              centerX = x1 + t * (x2 - x1);
+              centerY = y1 + t * (y2 - y1);
+            } else {
+              // Lines are parallel (including when angle=0)
+              // Use midpoint between closest endpoints as center
+              const midL1 = [(x1 + x2) / 2, (y1 + y2) / 2];
+              const midL2 = [(x3 + x4) / 2, (y3 + y4) / 2];
+              centerX = (midL1[0] + midL2[0]) / 2;
+              centerY = (midL1[1] + midL2[1]) / 2;
+            }
 
-              // Calculate start/end angles relative to center to place text correctly
-              // This matches visual rendering in Viewport.tsx
-              const dx1 = x2 - centerX;
-              const dy1 = y2 - centerY;
-              const dx2 = x4 - centerX;
-              const dy2 = y4 - centerY;
+            // Calculate start/end angles relative to center to place text correctly
+            // This MUST match visual rendering in Viewport.tsx exactly
 
-              const angle1 = Math.atan2(dy1, dx1);
-              const angle2 = Math.atan2(dy2, dx2);
+            // Use same logic as Viewport.tsx - check which endpoint is further from center
+            const dStart1 = (x1 - centerX) ** 2 + (y1 - centerY) ** 2;
+            const dEnd1 = (x2 - centerX) ** 2 + (y2 - centerY) ** 2;
+            let dx1, dy1;
+            if (dEnd1 > dStart1) {
+              dx1 = x2 - centerX;
+              dy1 = y2 - centerY;
+            } else {
+              dx1 = x1 - centerX;
+              dy1 = y1 - centerY;
+            }
 
-              let startAngle = angle1;
-              let endAngle = angle2;
-              let diff = endAngle - startAngle;
-              while (diff > Math.PI) diff -= 2 * Math.PI;
-              while (diff < -Math.PI) diff += 2 * Math.PI;
+            const dStart2 = (x3 - centerX) ** 2 + (y3 - centerY) ** 2;
+            const dEnd2 = (x4 - centerX) ** 2 + (y4 - centerY) ** 2;
+            let dx2, dy2;
+            if (dEnd2 > dStart2) {
+              dx2 = x4 - centerX;
+              dy2 = y4 - centerY;
+            } else {
+              dx2 = x3 - centerX;
+              dy2 = y3 - centerY;
+            }
 
-              const arcRadius = 1.5;
-              const textAngle = startAngle + diff / 2;
-              // Text is at arcRadius * 1.5
-              const textX = centerX + arcRadius * 1.5 * Math.cos(textAngle);
-              const textY = centerY + arcRadius * 1.5 * Math.sin(textAngle);
+            const angle1 = Math.atan2(dy1, dx1);
+            const angle2 = Math.atan2(dy2, dx2);
 
-              // Text dimensions (approximate)
-              const angleDeg = constraint.Angle!.value * 180 / Math.PI;
-              const textStr = angleDeg.toFixed(1) + "°";
-              const textWidth = Math.max(0.5, textStr.length * 0.15);
+            let startAngle = angle1;
+            let endAngle = angle2;
+            let diff = endAngle - startAngle;
+            while (diff > Math.PI) diff -= 2 * Math.PI;
+            while (diff < -Math.PI) diff += 2 * Math.PI;
+
+            const baseRadius = 1.5;
+            const radiusOffset = constraint.Angle!.style.offset?.[1] || 0;
+            const arcRadius = Math.max(0.5, baseRadius + radiusOffset);
+            const textAngle = startAngle + diff / 2;
+            // Text is at arcRadius + 0.3 (matches Viewport.tsx rendering)
+            const textX = centerX + (arcRadius + 0.3) * Math.cos(textAngle);
+            const textY = centerY + (arcRadius + 0.3) * Math.sin(textAngle);
+
+            // Text dimensions - make larger for easier clicking
+            const angleDeg = constraint.Angle!.value * 180 / Math.PI;
+            const textStr = angleDeg.toFixed(1) + "°";
+            const textWidth = Math.max(1.5, textStr.length * 0.3);
+            const textHeight = 1.5;
+
+            console.log("Angle hitbox check:", {
+              rawPoint, textX, textY, textWidth, textHeight, arcRadius, textAngle,
+              centerX, centerY,
+              distX: Math.abs(rawPoint[0] - textX), distY: Math.abs(rawPoint[1] - textY),
+              isHit: Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight
+            });
+
+            // Check if point is inside rectangle
+            if (Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight) {
+              console.log("Editing Angle dimension at index", i);
+              setEditingDimension({
+                constraintIndex: i,
+                type: 'Angle',
+                currentValue: constraint.Angle!.value
+              });
+              setEditingDimension({
+                constraintIndex: i,
+                type: 'Angle',
+                currentValue: constraint.Angle!.value,
+                expression: constraint.Angle!.style?.expression
+              });
+              return;
+            }
+          }
+
+          if (constraint.Radius && constraint.Radius.style) {
+            // Radius dimension editing
+            const entityId = constraint.Radius.entity;
+            const entity = sketch.entities.find(e => e.id === entityId);
+
+            if (entity && (entity.geometry.Circle || entity.geometry.Arc)) {
+              let center: [number, number];
+              let radius: number;
+
+              if (entity.geometry.Circle) {
+                center = entity.geometry.Circle.center;
+                radius = entity.geometry.Circle.radius;
+              } else if (entity.geometry.Arc) {
+                center = entity.geometry.Arc.center;
+                radius = entity.geometry.Arc.radius;
+              } else {
+                return;
+              }
+
+              // Calculation from Viewport.tsx to match visual position
+              // Default to 45 deg if not set or 0? Viewport checks || which implies 0 -> 45deg
+              const angle = constraint.Radius.style.offset[1] || (Math.PI / 4);
+
+              const cos = Math.cos(angle);
+              const sin = Math.sin(angle);
+              const extraLen = 1.0;
+
+              // Leader end point (outside circle)
+              const leaderEnd: [number, number] = [
+                center[0] + (radius + extraLen) * cos,
+                center[1] + (radius + extraLen) * sin
+              ];
+
+              // Text Position (shifted +0.3 in Y relative to leader end)
+              const textX = leaderEnd[0];
+              const textY = leaderEnd[1] + 0.3;
+
+              // Hitbox Check
+              const valueText = "R " + constraint.Radius.value.toFixed(2);
+              const textWidth = Math.max(0.5, valueText.length * 0.15);
               const textHeight = 0.5;
 
-              // Check if point is inside rectangle
               if (Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight) {
-                console.log("Editing Angle dimension at index", i);
+                console.log("Editing Radius dimension at index", i);
                 setEditingDimension({
                   constraintIndex: i,
-                  type: 'Angle',
-                  currentValue: constraint.Angle!.value
+                  type: 'Radius',
+                  currentValue: constraint.Radius.value
                 });
                 setEditingDimension({
                   constraintIndex: i,
-                  type: 'Angle',
-                  currentValue: constraint.Angle!.value,
-                  expression: constraint.Angle!.style?.expression
+                  type: 'Radius',
+                  currentValue: constraint.Radius.value,
+                  expression: constraint.Radius.style?.expression
                 });
                 return;
               }
             }
           }
-        } else if (constraint.Radius && constraint.Radius.style) {
-          // Radius dimension editing
-          const entityId = constraint.Radius.entity;
-          const entity = sketch.entities.find(e => e.id === entityId);
 
-          if (entity && (entity.geometry.Circle || entity.geometry.Arc)) {
-            let center: [number, number];
-            let radius: number;
+          // DistanceParallelLines dimension editing
+          if (constraint.DistanceParallelLines) {
+            console.log("DistanceParallelLines constraint found:", constraint.DistanceParallelLines);
+            const dplConstraint = constraint.DistanceParallelLines;
+            const line1Entity = sketch.entities.find(e => e.id === dplConstraint.lines[0]);
+            const line2Entity = sketch.entities.find(e => e.id === dplConstraint.lines[1]);
 
-            if (entity.geometry.Circle) {
-              center = entity.geometry.Circle.center;
-              radius = entity.geometry.Circle.radius;
-            } else if (entity.geometry.Arc) {
-              center = entity.geometry.Arc.center;
-              radius = entity.geometry.Arc.radius;
-            } else {
-              return;
-            }
+            if (line1Entity?.geometry.Line && line2Entity?.geometry.Line) {
+              const l1 = line1Entity.geometry.Line;
+              const l2 = line2Entity.geometry.Line;
 
-            // Calculation from Viewport.tsx to match visual position
-            // Default to 45 deg if not set or 0? Viewport checks || which implies 0 -> 45deg
-            const angle = constraint.Radius.style.offset[1] || (Math.PI / 4);
+              // Calculate midpoints
+              const mid1: [number, number] = [(l1.start[0] + l1.end[0]) / 2, (l1.start[1] + l1.end[1]) / 2];
+              const mid2: [number, number] = [(l2.start[0] + l2.end[0]) / 2, (l2.start[1] + l2.end[1]) / 2];
 
-            const cos = Math.cos(angle);
-            const sin = Math.sin(angle);
-            const extraLen = 1.0;
+              // Get line1 direction for perpendicular
+              const dx1 = l1.end[0] - l1.start[0];
+              const dy1 = l1.end[1] - l1.start[1];
+              const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
 
-            // Leader end point (outside circle)
-            const leaderEnd: [number, number] = [
-              center[0] + (radius + extraLen) * cos,
-              center[1] + (radius + extraLen) * sin
-            ];
+              if (len1 > 0.001) {
+                // Normal to line1
+                const nx = -dy1 / len1;
+                const ny = dx1 / len1;
 
-            // Text Position (shifted +0.3 in Y relative to leader end)
-            const textX = leaderEnd[0];
-            const textY = leaderEnd[1] + 0.3;
+                // Project mid2 onto normal from mid1
+                const vx = mid2[0] - mid1[0];
+                const vy = mid2[1] - mid1[1];
+                const projDist = vx * nx + vy * ny;
+                const dimOffset = dplConstraint.style!.offset?.[1] || 0;
 
-            // Hitbox Check
-            const valueText = "R " + constraint.Radius.value.toFixed(2);
-            const textWidth = Math.max(0.5, valueText.length * 0.15);
-            const textHeight = 0.5;
+                // Calculate text position (midpoint of dimension line)
+                const dStart: [number, number] = [mid1[0] + nx * dimOffset, mid1[1] + ny * dimOffset];
+                const dEnd: [number, number] = [mid1[0] + projDist * nx + nx * dimOffset, mid1[1] + projDist * ny + ny * dimOffset];
+                const textX = (dStart[0] + dEnd[0]) / 2;
+                const textY = (dStart[1] + dEnd[1]) / 2;
 
-            if (Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight) {
-              console.log("Editing Radius dimension at index", i);
-              setEditingDimension({
-                constraintIndex: i,
-                type: 'Radius',
-                currentValue: constraint.Radius.value
-              });
-              setEditingDimension({
-                constraintIndex: i,
-                type: 'Radius',
-                currentValue: constraint.Radius.value,
-                expression: constraint.Radius.style?.expression
-              });
-              return;
+                // Hitbox check
+                const valueText = dplConstraint.value.toFixed(2);
+                const textWidth = Math.max(0.8, valueText.length * 0.2);
+                const textHeight = 0.8;
+
+                console.log("DistanceParallelLines hitbox check:", {
+                  rawPoint,
+                  textX,
+                  textY,
+                  textWidth,
+                  textHeight,
+                  distX: Math.abs(rawPoint[0] - textX),
+                  distY: Math.abs(rawPoint[1] - textY),
+                  isHit: Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight
+                });
+
+                if (Math.abs(rawPoint[0] - textX) < textWidth && Math.abs(rawPoint[1] - textY) < textHeight) {
+                  console.log("Editing DistanceParallelLines dimension at index", i);
+                  setEditingDimension({
+                    constraintIndex: i,
+                    type: 'Distance', // Reuse Distance type for editing
+                    currentValue: dplConstraint.value,
+                    expression: dplConstraint.style?.expression
+                  });
+                  return;
+                }
+              }
             }
           }
         }
@@ -2612,7 +2987,7 @@ export function useSketching(props: UseSketchingProps) {
               const { start, end } = e.geometry.Line;
               const dStart = Math.sqrt((px - start[0]) ** 2 + (py - start[1]) ** 2);
               const dEnd = Math.sqrt((px - end[0]) ** 2 + (py - end[1]) ** 2);
-              const ptThreshold = 0.4; // Slightly tighter for points
+              const ptThreshold = 0.25; // Tight threshold for point selection - allows body selection outside this
 
               if (dStart < ptThreshold && dStart < minD) {
                 minD = dStart;
@@ -2640,7 +3015,7 @@ export function useSketching(props: UseSketchingProps) {
             }
           }
 
-          if (best && minD < 0.3) return best; // High priority return
+          if (best && minD < 0.15) return best; // High priority return for very close point matches only
 
           // 3. Check Bodies (if no point matched well)
           for (const e of sketch.entities) {
@@ -2664,11 +3039,14 @@ export function useSketching(props: UseSketchingProps) {
               const { center, radius } = e.geometry.Arc;
               const distCenter = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
               d = Math.abs(distCenter - radius);
+            } else if (e.geometry.Point) {
+              const { pos } = e.geometry.Point;
+              d = Math.sqrt((px - pos[0]) ** 2 + (py - pos[1]) ** 2);
             }
 
             if (d < 0.5 && d < minD) {
               minD = d;
-              best = { id: e.id, type: "entity" };
+              best = { id: e.id, type: e.geometry.Point ? "point" : "entity", position: e.geometry.Point?.pos };
             }
           }
 
@@ -2677,9 +3055,12 @@ export function useSketching(props: UseSketchingProps) {
 
         const hit = findSelectionCandidate(effectivePoint[0], effectivePoint[1]);
 
-        // PRIORITY: If in placement mode, clicking ANYWHERE finishes placement
-        // (even if we're clicking near an entity - we want to place the dimension, not add more selections)
-        if (dimensionPlacementMode() && dimensionProposedAction()?.isValid) {
+        // PRIORITY: If in placement mode AND clicking AWAY from entities, finish placement
+        // But if clicking ON an entity and we can still add more selections, add the selection instead
+        const canAddMoreSelections = dimensionSelection().length < 2;
+        const shouldFinishPlacement = dimensionPlacementMode() && dimensionProposedAction()?.isValid && (!hit || !canAddMoreSelections);
+
+        if (shouldFinishPlacement) {
           // Calculate offset based on click and finish
           const action = dimensionProposedAction()!;
           const sel = dimensionSelection();
@@ -2691,7 +3072,7 @@ export function useSketching(props: UseSketchingProps) {
           const py = effectivePoint[1];
 
           // Re-derive geometry to compute offset
-          if (action.type === "Distance" && sel.length === 2) {
+          if ((action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") && sel.length === 2) {
             const getPos = (c: SelectionCandidate) => {
               if (c.type === "origin") return [0, 0];
               if (c.type === "point") return c.position;
@@ -2709,6 +3090,24 @@ export function useSketching(props: UseSketchingProps) {
             if (p1 && p2) {
               let dx = p2[0] - p1[0];
               let dy = p2[1] - p1[1];
+              if (action.type === "HorizontalDistance") {
+                // For horizontal, measure dx only? No, constraint is dx, but offset is usually perpendicular
+                // Viewport logic: Ext lines vertical, Dim line horizontal
+                // dimLine is at Y. offset[1] controls Y relative to p1/p2?
+                // Standard Distance logic projects click onto normal.
+                // For Horizontal: normal is (0, 1) or (0, -1).
+                // Let's rely on standard logic but maybe simplify?
+                // Actually standard logic works if we consider the 'vector' is diagonal but we project onto normal.
+                // But wait, the standard logic computes 'len' as diagonal.
+                // If we use standard diagonal math, it will produce a diagonal offset.
+                // For Horizontal/Vertical, we probably want strictly orthogonal offsets?
+                // Let's stick to standard logic for now to avoid breaking it, as it projects onto the line-normal.
+                // Wait, if it's Horizontal, the 'line' is virtual horizontal line? No.
+                // It's distance between two points.
+                // If I want a horizontal dimension, the text should be above/below.
+                // Let's just use the diagonal math for now.
+              }
+
               let len = Math.sqrt(dx * dx + dy * dy);
               if (len < 0.001) { dx = 1; dy = 0; len = 1; }
               const nx = dx / len;
@@ -2760,27 +3159,135 @@ export function useSketching(props: UseSketchingProps) {
         }
 
         if (hit) {
-          // ... existing selection logic ...
-          const current = dimensionSelection();
-          const isSelected = current.some(c => c.id === hit.id && c.type === hit.type && c.index === hit.index);
-
-          if (isSelected) {
-            // Deselect
-            const next = current.filter(c => !(c.id === hit.id && c.type === hit.type && c.index === hit.index));
-            setDimensionSelection(next);
-            analyzeDimensionSelection(next);
-          } else {
-            // Select
-            // Limit to 2 items max for now
-            if (current.length < 2) {
-              const next = [...current, hit];
-              setDimensionSelection(next);
-              analyzeDimensionSelection(next);
-              console.log("Dimension selected:", hit);
-            }
-          }
+          // If we hit a valid entity, we let the Viewport's onSelect handle the selection.
+          // This avoids a race condition where mousedown selects the entity here, 
+          // and then click (onSelect) sees it selected and toggles it off.
+          return;
         } else {
           // No hit - check if we are in placement mode
+          if (dimensionPlacementMode()) {
+            // Update dimension type based on cursor position relative to selection bbox
+            const action = dimensionProposedAction();
+            const selections = dimensionSelection();
+
+            // Point-Point or Line (endpoints) Inference
+            if (selections.length === 2 &&
+              ((selections[0].type === 'point' || selections[0].type === 'origin' || selections[0].type === 'entity') &&
+                (selections[1].type === 'point' || selections[1].type === 'origin' || selections[1].type === 'entity'))) {
+              // This covers Point-Point and also Line endpoints if we treat Line selection as 2 points in analyze
+              // Actually analyze already set up the action. We just need to modify the TYPE and VALUE.
+
+              // Re-calculate positions to be sure
+              const getPos = (c: SelectionCandidate) => getCandidatePosition(c, currentSketch());
+              const p1 = getPos(selections[0]);
+              const p2 = getPos(selections[1]);
+
+              if (p1 && p2) {
+                const dx = Math.abs(p1[0] - p2[0]);
+                const dy = Math.abs(p1[1] - p2[1]);
+
+                // Mouse position in sketch space
+                const mx = effectivePoint[0];
+                const my = effectivePoint[1];
+
+                // Bounding box of the two points
+                const minX = Math.min(p1[0], p2[0]);
+                const maxX = Math.max(p1[0], p2[0]);
+                const minY = Math.min(p1[1], p2[1]);
+                const maxY = Math.max(p1[1], p2[1]);
+
+                // Inference Logic
+                // If mouse is strictly within X range (with padding) -> Vertical Dimension
+                // If mouse is strictly within Y range (with padding) -> Horizontal Dimension
+                // Else -> Aligned / True Distance
+
+                let newType: "Distance" | "HorizontalDistance" | "VerticalDistance" = "Distance";
+                let label = "";
+                let val = 0;
+
+                // Relaxed zones slightly outside the bbox
+                const buffer = 0.5; // units
+
+                const inXBand = mx >= minX - buffer && mx <= maxX + buffer;
+                const inYBand = my >= minY - buffer && my <= maxY + buffer;
+
+                if (inXBand && !inYBand) {
+                  // Above or Below -> Measure Horizontal Distance (width)
+                  newType = "HorizontalDistance";
+                  val = dx;
+                  label = `Horizontal (${val.toFixed(2)})`;
+                } else if (inYBand && !inXBand) {
+                  // Left or Right -> Measure Vertical Distance (height)
+                  newType = "VerticalDistance";
+                  val = dy;
+                  label = `Vertical (${val.toFixed(2)})`;
+                } else {
+                  // Diagonal / Free Zone
+                  newType = "Distance";
+                  val = Math.sqrt(dx * dx + dy * dy);
+                  label = `Distance (${val.toFixed(2)})`;
+                }
+
+                // Only update if changed to avoid unnecessary renders, though solid signals handle equality check
+                setDimensionProposedAction({
+                  ...action!,
+                  type: newType,
+                  label: label,
+                  value: val
+                });
+              }
+            } else if (selections.length === 1 && selections[0].type === 'entity') {
+              // Line Selection -> Treat like 2 points (endpoints)
+              const sk = currentSketch();
+              const ent = sk.entities.find(e => e.id === selections[0].id);
+              if (ent && ent.geometry.Line) {
+                const l = ent.geometry.Line;
+                const p1 = l.start;
+                const p2 = l.end;
+
+                const dx = Math.abs(p1[0] - p2[0]);
+                const dy = Math.abs(p1[1] - p2[1]);
+
+                const mx = effectivePoint[0];
+                const my = effectivePoint[1];
+                const minX = Math.min(p1[0], p2[0]);
+                const maxX = Math.max(p1[0], p2[0]);
+                const minY = Math.min(p1[1], p2[1]);
+                const maxY = Math.max(p1[1], p2[1]);
+                const buffer = 0.5;
+
+                const inXBand = mx >= minX - buffer && mx <= maxX + buffer;
+                const inYBand = my >= minY - buffer && my <= maxY + buffer;
+
+                let newType: "Length" | "HorizontalDistance" | "VerticalDistance" = "Length";
+                let label = "";
+                let val = 0;
+
+                if (inXBand && !inYBand) {
+                  // Above/Below -> Horizontal
+                  newType = "HorizontalDistance";
+                  val = dx;
+                  label = `Horizontal (${val.toFixed(2)})`;
+                } else if (inYBand && !inXBand) {
+                  // Left/Right -> Vertical
+                  newType = "VerticalDistance";
+                  val = dy;
+                  label = `Vertical (${val.toFixed(2)})`;
+                } else {
+                  newType = "Length";
+                  val = Math.sqrt(dx * dx + dy * dy);
+                  label = `Length (${val.toFixed(2)})`;
+                }
+
+                setDimensionProposedAction({
+                  ...action!,
+                  type: newType,
+                  label: label,
+                  value: val
+                });
+              }
+            }
+          }
           if (dimensionPlacementMode() && dimensionProposedAction()?.isValid) {
             // Calculate offset based on click and finish
             const action = dimensionProposedAction()!;
@@ -3070,7 +3577,9 @@ export function useSketching(props: UseSketchingProps) {
   function handleOffsetTool() {
     const isPanelCurrentlyOpen = untrack(() => offsetState().isPanelOpen);
     console.log("handleOffsetTool called. sketchSelection:", sketchSelection(), "isPanelOpen:", isPanelCurrentlyOpen);
-    const selection = sketchSelection();
+    const selectionCandidates = sketchSelection();
+    // Offset needs Entity IDs
+    const selection = selectionCandidates.map(s => s.id);
 
     // Support Verb-Noun: If empty, stay in offset tool and wait for selection
     if (selection.length === 0) {
@@ -3096,7 +3605,7 @@ export function useSketching(props: UseSketchingProps) {
       isPanelOpen: true,
       distance: initialDist,
       flip: initialFlip,
-      selection: selection,
+      selection: selection, // offsetState expects string[]? Check types.
       previewGeometry: result ? result.entities : []
     });
   };
@@ -3361,6 +3870,28 @@ export function useSketching(props: UseSketchingProps) {
     setCircularPatternState({ centerType: null, centerId: null, entities: [], count: 6, totalAngle: 360, activeField: 'center', flipDirection: false, previewGeometry: [] });
     setSketchTool("select");
   };
+
+  /* ===== SYNC SKETCH SELECTION TO TOOL SELECTION ===== */
+  createEffect(() => {
+    const tool = sketchTool();
+    if (tool === "dimension") {
+      // When entering dimension mode, if there is an existing sketch selection, adopt it.
+      // But only if dimensionSelection is empty to avoid overwriting ongoing work.
+      const currentSketchSel = sketchSelection();
+      const currentDimSel = untrack(() => dimensionSelection());
+
+      if (currentDimSel.length === 0 && currentSketchSel.length > 0) {
+        // Filter out non-geometry (if any) or just take valid candidates
+        // For dimensioning, we generally want points and entities.
+        const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
+        if (valid.length > 0) {
+          setDimensionSelection(valid);
+          // Also trigger analysis to set proposed action
+          analyzeDimensionSelection(valid);
+        }
+      }
+    }
+  });
 
   return {
     sketchMode, setSketchMode,

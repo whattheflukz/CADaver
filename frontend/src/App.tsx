@@ -21,6 +21,7 @@ import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import VariablesPanel from './components/VariablesPanel';
 import NamedSelectionsPanel from './components/NamedSelectionsPanel';
 import SelectionPanel from './components/SelectionPanel';
+import SketchSelectionPanel from './components/SketchSelectionPanel';
 import ExpressionInput from './components/ExpressionInput';
 import { parseValueOrExpression } from './expressionEvaluator';
 import { DimensionEditModal } from './components/DimensionEditModal';
@@ -425,7 +426,12 @@ const App: Component = () => {
           <Viewport
             tessellation={lastTessellation()}
             onSelect={handleSelect}
-            selection={sketchMode() ? sketchSelection() : selection()}
+            selection={sketchMode()
+              ? (sketchTool() === "dimension" || constraintSelection().length > 0
+                ? [...dimensionSelection(), ...constraintSelection()]
+                : sketchSelection())
+              : selection()
+            }
             clientSketch={
               sketchMode() ? currentSketch() :
                 // When extrude modal is open, pass the sketch data from extrude's dependency
@@ -483,7 +489,22 @@ const App: Component = () => {
               : ""
           }
           variables={graph().variables || { variables: {}, order: [] }}
-          onCancel={() => setEditingDimension(null)}
+          onCancel={() => {
+            const editing = editingDimension();
+            if (editing?.isNew) {
+              // User cancelled a newly creation dimension -> Delete it
+              const sketch = currentSketch();
+              const updated = { ...sketch };
+              // Remove the constraint at the index
+              updated.constraints = sketch.constraints.filter((_, i) => i !== editing.constraintIndex);
+              // Also remove from history if possible? 
+              // Usually history is append-only for undo, but this is "cancelling the action".
+              // Let's just update layout.
+              setCurrentSketch(updated);
+              sendSketchUpdate(updated);
+            }
+            setEditingDimension(null);
+          }}
           onApply={(val, expr) => {
             const editing = editingDimension()!;
             const sketch = currentSketch();
@@ -512,6 +533,12 @@ const App: Component = () => {
               constraint.Radius.value = finalValue;
               if (constraint.Radius.style) {
                 constraint.Radius.style.expression = expr;
+              }
+            } else if (editing.type === 'Distance' && constraint.DistanceParallelLines) {
+              // DistanceParallelLines uses 'Distance' type for the modal
+              constraint.DistanceParallelLines.value = finalValue;
+              if (constraint.DistanceParallelLines.style) {
+                constraint.DistanceParallelLines.style.expression = expr;
               }
             }
 
@@ -693,7 +720,6 @@ const App: Component = () => {
           onClose={() => setShowNamedSelectionsPanel(false)}
         />
 
-        {/* Selection Panel - Shows current selection with deselect buttons */}
         <SelectionPanel
           selection={selection()}
           onDeselect={(topoId) => {
@@ -701,6 +727,41 @@ const App: Component = () => {
           }}
           onClearAll={() => {
             send(`CLEAR_SELECTION`);
+          }}
+        />
+
+        {/* Sketch Selection Panel */}
+        <SketchSelectionPanel
+          selection={sketchTool() === "dimension" ? dimensionSelection() : sketchSelection()}
+          entities={sketchMode() ? currentSketch().entities : []}
+          onDeselect={(candidate) => {
+            // Remove specific candidate
+            if (sketchTool() === "dimension") {
+              const current = dimensionSelection();
+              const next = current.filter(c =>
+                !(c.id === candidate.id &&
+                  c.type === candidate.type &&
+                  (c.type === 'point' ? c.index === candidate.index : true)
+                )
+              );
+              setDimensionSelection(next);
+            } else {
+              const current = sketchSelection();
+              const next = current.filter(c =>
+                !(c.id === candidate.id &&
+                  c.type === candidate.type &&
+                  (c.type === 'point' ? c.index === candidate.index : true)
+                )
+              );
+              setSketchSelection(next);
+            }
+          }}
+          onClearAll={() => {
+            if (sketchTool() === "dimension") {
+              setDimensionSelection([]);
+            } else {
+              setSketchSelection([]);
+            }
           }}
         />
       </main >

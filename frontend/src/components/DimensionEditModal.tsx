@@ -1,4 +1,4 @@
-import { createSignal, createEffect, on, type Component } from 'solid-js';
+import { createSignal, createEffect, type Component } from 'solid-js';
 import { BaseModal } from './BaseModal';
 import ExpressionInput from './ExpressionInput';
 import { parseValueOrExpression } from '../expressionEvaluator';
@@ -16,17 +16,24 @@ interface DimensionEditModalProps {
 export const DimensionEditModal: Component<DimensionEditModalProps> = (props) => {
     const [inputValue, setInputValue] = createSignal("");
 
-    // Reset input when modal opens or initialValue changes while open
-    // Using on() to explicitly track props.isOpen and props.initialValue
-    createEffect(on(
-        () => [props.isOpen, props.initialValue] as const,
-        ([isOpen, initialValue]) => {
-            if (isOpen) {
-                // Sync to initialValue whenever open (catches both opening and value changes)
-                setInputValue(initialValue || "");
-            }
+    // Track previous open state to detect when modal opens
+    let wasOpen = false;
+
+    // Reset input when modal opens
+    createEffect(() => {
+        const isOpen = props.isOpen;
+        const initialValue = props.initialValue;
+
+        console.log("[DimensionEditModal] Effect running: isOpen=", isOpen, "initialValue=", initialValue, "wasOpen=", wasOpen);
+
+        // When transitioning from closed to open, or if open and initialValue changes
+        if (isOpen && !wasOpen) {
+            console.log("[DimensionEditModal] Setting input to:", initialValue);
+            setInputValue(initialValue || "");
         }
-    ));
+
+        wasOpen = isOpen;
+    });
 
     const handleApply = () => {
         const inputExpr = inputValue();

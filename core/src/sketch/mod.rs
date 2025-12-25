@@ -27,3 +27,6 @@ mod tests_distance_pl;
 
 #[cfg(test)]
 mod tests_suppression;
+
+#[cfg(test)]
+mod tests_dimensions_hv;

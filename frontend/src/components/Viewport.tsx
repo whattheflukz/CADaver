@@ -16,7 +16,7 @@ interface ViewportProps {
     sketchSetupMode?: boolean;
     onSelectPlane?: (plane: SketchPlane) => void;
     previewDimension?: {
-        type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "Unsupported";
+        type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "Unsupported";
         value: number;
         selections: any[];
     };
@@ -597,7 +597,18 @@ const Viewport: Component<ViewportProps> = (props) => {
                 if (hit.object.userData && hit.object.userData.idMap) {
                     let idx = hit.index ?? hit.faceIndex;
                     if (idx !== undefined && idx !== null && hit.object.userData.idMap[idx]) {
-                        topoId = hit.object.userData.idMap[idx];
+                        const entId = hit.object.userData.idMap[idx];
+                        let type: "entity" | "point" | "origin" = "entity";
+
+                        // Check if it's a point entity
+                        if (props.clientSketch) {
+                            const ent = props.clientSketch.entities.find((e: any) => e.id === entId);
+                            if (ent && ent.geometry.Point) {
+                                type = "point";
+                            }
+                        }
+
+                        topoId = { id: entId, type: type };
                         break;
                     }
                     continue;
@@ -740,7 +751,26 @@ const Viewport: Component<ViewportProps> = (props) => {
 
             props.clientSketch.entities.forEach((ent: any) => {
                 const isConstruction = ent.is_construction === true;
-                const isSelected = props.selection && props.selection.includes(ent.id);
+
+                let isSelected = false;
+                if (props.selection) {
+                    isSelected = props.selection.some((s: any) => {
+                        // String match (Topology ID)
+                        if (typeof s === 'string') return s === ent.id;
+                        // Object match (Sketch Selection Candidate)
+                        if (typeof s === 'object' && s.id === ent.id) {
+                            // If it's a Point entity, we match on ID.
+                            if (ent.geometry.Point) return true;
+
+                            // If it's NOT a Point entity (e.g. Line, Circle),
+                            // we only highlight the whole entity if the selection type is NOT 'point' (which implies vertex selection).
+                            // e.g. type='entity', 'line', 'circle' ALL imply full entity selection.
+                            // type='point' on a Line means an Endpoint. We don't highlight the whole line for that.
+                            return s.type !== 'point';
+                        }
+                        return false;
+                    });
+                }
 
                 const vertices = isConstruction ? constructionVertices : solidVertices;
                 const indices = isConstruction ? constructionIndices : solidIndices;
@@ -1254,6 +1284,8 @@ const Viewport: Component<ViewportProps> = (props) => {
                     if (cp.index === 0) return center;
                     const angle = cp.index === 1 ? start_angle : end_angle;
                     return [center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)];
+                } else if (entity.geometry.Point) {
+                    return entity.geometry.Point.pos;
                 }
                 return null;
             };
@@ -1557,8 +1589,12 @@ const Viewport: Component<ViewportProps> = (props) => {
                                 const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
                                 center = [x1 + t * (x2 - x1), y1 + t * (y2 - y1)];
                             } else {
-                                // Parallel lines - use midpoint of closest endpoints
-                                center = [(x2 + x3) / 2, (y2 + y3) / 2];
+                                // Parallel lines - use the midpoint between the two lines' midpoints
+                                const mid1X = (x1 + x2) / 2;
+                                const mid1Y = (y1 + y2) / 2;
+                                const mid2X = (x3 + x4) / 2;
+                                const mid2Y = (y3 + y4) / 2;
+                                center = [(mid1X + mid2X) / 2, (mid1Y + mid2Y) / 2];
                             }
 
                             // Create arc to show angle
@@ -1650,26 +1686,26 @@ const Viewport: Component<ViewportProps> = (props) => {
                             arcLine.renderOrder = 10000;
                             indicatorGroup.add(arcLine);
 
-                            // Value text at arc midpoint
+                            // Value text at arc midpoint - position slightly outside arc
                             const textAngle = startAngle + diff / 2;
-                            const textX = center[0] + arcRadius * 1.5 * Math.cos(textAngle);
-                            const textY = center[1] + arcRadius * 1.5 * Math.sin(textAngle);
+                            const textX = center[0] + (arcRadius + 0.3) * Math.cos(textAngle);
+                            const textY = center[1] + (arcRadius + 0.3) * Math.sin(textAngle);
                             const valueText = angleDeg.toFixed(1) + "°";
                             const textColor = dimStyle.driven ? "#888888" : "#ff8800";
                             const textSprite = createTextSprite(valueText, textColor, 1.2);
                             textSprite.position.set(textX, textY, 0.02);
                             indicatorGroup.add(textSprite);
 
-                            // Add hitbox rectangle for Angle dimension
+                            // Add hitbox rectangle for Angle dimension - make it larger for easier clicking
                             const textStr = angleDeg.toFixed(1) + "°";
-                            const textWidth = textStr.length * 0.12;
-                            const textHeight = 0.3;
+                            const textWidth = Math.max(1.0, textStr.length * 0.2);
+                            const textHeight = 0.8;
 
                             // HITBOX CORRECTNESS: Use Sprite
                             const hitboxMat = new THREE.SpriteMaterial({ color: 0xff00ff, depthTest: false, transparent: true, opacity: 0.0 });
                             const hitboxLine = new THREE.Sprite(hitboxMat);
                             hitboxLine.position.set(textX, textY, 0);
-                            hitboxLine.scale.set(textWidth * 2, textHeight * 2, 1);
+                            hitboxLine.scale.set(textWidth * 2.5, textHeight * 2.5, 1);
                             hitboxLine.renderOrder = 9999;
                             hitboxLine.userData = {
                                 isDimensionHitbox: true,
@@ -1751,6 +1787,159 @@ const Viewport: Component<ViewportProps> = (props) => {
                                 center: center,
                             };
                             indicatorGroup.add(hitboxLine);
+                        }
+                    } else if (constraint.DistanceParallelLines && constraint.DistanceParallelLines.style) {
+                        // Distance between parallel lines dimension - Onshape style
+                        const line1 = getLineById(constraint.DistanceParallelLines.lines[0]);
+                        const line2 = getLineById(constraint.DistanceParallelLines.lines[1]);
+
+                        if (line1 && line2) {
+                            const dimStyle = constraint.DistanceParallelLines.style;
+                            const value = constraint.DistanceParallelLines.value;
+
+                            // Get line 1's direction (the parallel direction)
+                            const dx1 = line1.end[0] - line1.start[0];
+                            const dy1 = line1.end[1] - line1.start[1];
+                            const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+
+                            if (len1 > 0.001) {
+                                // Unit direction along the lines (parallel direction)
+                                const ux = dx1 / len1;
+                                const uy = dy1 / len1;
+
+                                // Normal (perpendicular) direction
+                                const nx = -uy;
+                                const ny = ux;
+
+                                // Find perpendicular distance from line1 to line2
+                                // Project any point on line2 onto the perpendicular of line1
+                                const vx = line2.start[0] - line1.start[0];
+                                const vy = line2.start[1] - line1.start[1];
+                                const perpDist = vx * nx + vy * ny;
+
+
+                                // Choose points on each line to connect with the dimension
+                                // Use midpoints for a clean look (like Onshape)
+                                const mid1X = (line1.start[0] + line1.end[0]) / 2;
+                                const mid1Y = (line1.start[1] + line1.end[1]) / 2;
+
+                                // Project mid1 perpendicularly onto line2
+                                // Point on line2 closest to mid1 in perpendicular sense
+                                const mid2X = mid1X + perpDist * nx;
+                                const mid2Y = mid1Y + perpDist * ny;
+
+
+                                // Extension line start points (on each line)
+                                const ext1Start: [number, number] = [mid1X, mid1Y];
+                                const ext2Start: [number, number] = [mid2X, mid2Y];
+
+                                // Extension lines go from the sketch lines perpendicular to the dimension line location
+                                // They start on the sketch lines and end at the same parallel position as the dimension
+                                const ext1End: [number, number] = [
+                                    mid1X + (perpDist / 2) * nx,
+                                    mid1Y + (perpDist / 2) * ny
+                                ];
+                                const ext2End: [number, number] = [
+                                    mid2X - (perpDist / 2) * nx,
+                                    mid2Y - (perpDist / 2) * ny
+                                ];
+
+                                const dimColor = dimStyle.driven ? 0x888888 : 0xff00ff;
+                                const dimMat = new THREE.LineBasicMaterial({ color: dimColor, depthTest: false });
+
+                                // Extension line 1 (from line1 to dimension line)
+                                const extGeo1 = new THREE.BufferGeometry().setFromPoints([
+                                    new THREE.Vector3(ext1Start[0], ext1Start[1], 0.01),
+                                    new THREE.Vector3(ext1End[0], ext1End[1], 0.01)
+                                ]);
+                                const extLine1 = new THREE.Line(extGeo1, dimMat);
+                                extLine1.renderOrder = 10000;
+                                indicatorGroup.add(extLine1);
+
+                                // Extension line 2 (from line2 to dimension line)
+                                const extGeo2 = new THREE.BufferGeometry().setFromPoints([
+                                    new THREE.Vector3(ext2Start[0], ext2Start[1], 0.01),
+                                    new THREE.Vector3(ext2End[0], ext2End[1], 0.01)
+                                ]);
+                                const extLine2 = new THREE.Line(extGeo2, dimMat);
+                                extLine2.renderOrder = 10000;
+                                indicatorGroup.add(extLine2);
+
+                                // Dimension line (runs parallel to the sketch lines)
+                                const dimGeo = new THREE.BufferGeometry().setFromPoints([
+                                    new THREE.Vector3(ext1End[0], ext1End[1], 0.01),
+                                    new THREE.Vector3(ext2End[0], ext2End[1], 0.01)
+                                ]);
+                                const dimLine = new THREE.Line(dimGeo, dimMat);
+                                dimLine.renderOrder = 10000;
+                                indicatorGroup.add(dimLine);
+
+                                // Arrow heads at the ends of the dimension line
+                                const arrowSize = 0.15;
+                                // Arrow pointing toward line1 (at ext1End)
+                                const arrow1Pts = [
+                                    new THREE.Vector3(ext1End[0], ext1End[1], 0.01),
+                                    new THREE.Vector3(ext1End[0] + nx * arrowSize + ux * arrowSize * 0.5, ext1End[1] + ny * arrowSize + uy * arrowSize * 0.5, 0.01),
+                                ];
+                                const arrow1Pts2 = [
+                                    new THREE.Vector3(ext1End[0], ext1End[1], 0.01),
+                                    new THREE.Vector3(ext1End[0] + nx * arrowSize - ux * arrowSize * 0.5, ext1End[1] + ny * arrowSize - uy * arrowSize * 0.5, 0.01),
+                                ];
+                                const arrow1Geo = new THREE.BufferGeometry().setFromPoints(arrow1Pts);
+                                const arrow1Line = new THREE.Line(arrow1Geo, dimMat);
+                                arrow1Line.renderOrder = 10000;
+                                indicatorGroup.add(arrow1Line);
+                                const arrow1Geo2 = new THREE.BufferGeometry().setFromPoints(arrow1Pts2);
+                                const arrow1Line2 = new THREE.Line(arrow1Geo2, dimMat);
+                                arrow1Line2.renderOrder = 10000;
+                                indicatorGroup.add(arrow1Line2);
+
+                                // Arrow pointing toward line2 (at ext2End)
+                                const arrow2Pts = [
+                                    new THREE.Vector3(ext2End[0], ext2End[1], 0.01),
+                                    new THREE.Vector3(ext2End[0] - nx * arrowSize + ux * arrowSize * 0.5, ext2End[1] - ny * arrowSize + uy * arrowSize * 0.5, 0.01),
+                                ];
+                                const arrow2Pts2 = [
+                                    new THREE.Vector3(ext2End[0], ext2End[1], 0.01),
+                                    new THREE.Vector3(ext2End[0] - nx * arrowSize - ux * arrowSize * 0.5, ext2End[1] - ny * arrowSize - uy * arrowSize * 0.5, 0.01),
+                                ];
+                                const arrow2Geo = new THREE.BufferGeometry().setFromPoints(arrow2Pts);
+                                const arrow2Line = new THREE.Line(arrow2Geo, dimMat);
+                                arrow2Line.renderOrder = 10000;
+                                indicatorGroup.add(arrow2Line);
+                                const arrow2Geo2 = new THREE.BufferGeometry().setFromPoints(arrow2Pts2);
+                                const arrow2Line2 = new THREE.Line(arrow2Geo2, dimMat);
+                                arrow2Line2.renderOrder = 10000;
+                                indicatorGroup.add(arrow2Line2);
+
+                                // Value text at midpoint of dimension line
+                                const textX = (ext1End[0] + ext2End[0]) / 2;
+                                const textY = (ext1End[1] + ext2End[1]) / 2;
+                                const valueText = value.toFixed(2);
+                                const textColor = dimStyle.driven ? "#888888" : "#ff00ff";
+                                const textSprite = createTextSprite(valueText, textColor, 1.0);
+                                // Offset text slightly perpendicular to avoid overlapping the line
+                                textSprite.position.set(textX + ux * 0.3, textY + uy * 0.3, 0.02);
+                                indicatorGroup.add(textSprite);
+
+                                // Hitbox for click detection
+                                const textStr = valueText;
+                                const textWidth = textStr.length * 0.15;
+                                const textHeight = 0.4;
+                                const hitboxMat = new THREE.SpriteMaterial({ color: 0xff00ff, depthTest: false, transparent: true, opacity: 0.0 });
+                                const hitboxSprite = new THREE.Sprite(hitboxMat);
+                                hitboxSprite.position.set(textX + ux * 0.3, textY + uy * 0.3, 0);
+                                hitboxSprite.scale.set(textWidth * 2, textHeight * 2, 1);
+                                hitboxSprite.renderOrder = 9999;
+                                hitboxSprite.userData = {
+                                    isDimensionHitbox: true,
+                                    index: index,
+                                    type: "DistanceParallelLines",
+                                    dirX: ux,  // Line direction for drag calculation
+                                    dirY: uy,
+                                };
+                                indicatorGroup.add(hitboxSprite);
+                            }
                         }
                     }
                 });
@@ -1877,7 +2066,7 @@ const Viewport: Component<ViewportProps> = (props) => {
     // State must be outside effect to persist across sketch updates
     let isDragging = false;
     let dragIndex = -1;
-    let dragType: "Distance" | "Angle" | "Radius" | null = null;
+    let dragType: "Distance" | "Angle" | "Radius" | "DistanceParallelLines" | null = null;
     let startOffset = [0, 0];
     let dragUserData: any = null;
     let dragStartPoint = new THREE.Vector3(); // World
@@ -1937,6 +2126,8 @@ const Viewport: Component<ViewportProps> = (props) => {
                         startOffset = [...constraint.Angle.style.offset];
                     } else if (dragType === "Radius" && constraint.Radius && constraint.Radius.style) {
                         startOffset = [...constraint.Radius.style.offset];
+                    } else if (dragType === "DistanceParallelLines" && constraint.DistanceParallelLines && constraint.DistanceParallelLines.style) {
+                        startOffset = [...constraint.DistanceParallelLines.style.offset];
                     }
 
                     // Disable orbit controls
@@ -2032,6 +2223,26 @@ const Viewport: Component<ViewportProps> = (props) => {
                     startOffset[1] + deltaAngle
                 ];
                 if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
+            } else if (dragType === "DistanceParallelLines") {
+                // For DistanceParallelLines, use similar logic to Distance
+                // The offset controls perpendicular position of the dimension line
+                const dx = currentLocal.x - dragStartLocal.x;
+                const dy = currentLocal.y - dragStartLocal.y;
+
+                // Use dirX, dirY if available, otherwise use delta directly for offset[1]
+                const { dirX, dirY } = dragUserData || { dirX: 1, dirY: 0 };
+                const normalX = -dirY;
+                const normalY = dirX;
+
+                const deltaPara = dx * dirX + dy * dirY;
+                const deltaPerp = dx * normalX + dy * normalY;
+
+                const newOffset: [number, number] = [
+                    startOffset[0] + deltaPara,
+                    startOffset[1] + deltaPerp
+                ];
+
+                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
             }
         };
 
@@ -2076,7 +2287,9 @@ const Viewport: Component<ViewportProps> = (props) => {
         };
 
         // Hover logic
-        if (!props.tessellation || !mainMesh) return;
+        // Hover logic
+        // if (!props.tessellation || !mainMesh) return; // Moved check down
+
 
         // Project mouse to world for preview
         const rect = containerRef!.getBoundingClientRect();
@@ -2085,8 +2298,33 @@ const Viewport: Component<ViewportProps> = (props) => {
         const vec = new THREE.Vector3(x, y, 0.5);
         vec.unproject(camera);
         const dir = vec.sub(camera.position).normalize();
-        const distance = -camera.position.z / dir.z;
-        const worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+
+        // Calculate intersection with sketch plane or default z=0
+        let worldPos = new THREE.Vector3();
+        const matrix = new THREE.Matrix4();
+
+        if (props.clientSketch && props.clientSketch.plane) {
+            const plane = props.clientSketch.plane;
+            const origin = new THREE.Vector3().fromArray(plane.origin);
+            const xAxis = new THREE.Vector3().fromArray(plane.x_axis);
+            const yAxis = new THREE.Vector3().fromArray(plane.y_axis);
+            const zAxis = new THREE.Vector3().fromArray(plane.normal);
+
+            matrix.makeBasis(xAxis, yAxis, zAxis);
+            matrix.setPosition(origin);
+
+            const normal = zAxis.clone();
+            const denom = dir.dot(normal);
+            if (Math.abs(denom) > 0.0001) {
+                const t = origin.clone().sub(camera.position).dot(normal) / denom;
+                const hit = camera.position.clone().add(dir.clone().multiplyScalar(t));
+                // Transform Hit to Local Sketch Space
+                worldPos = hit.clone().applyMatrix4(matrix.clone().invert());
+            }
+        } else {
+            const distance = -camera.position.z / dir.z;
+            worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
+        }
 
         // Update Preview Dimension
         const PREVIEW_DIMENSION_NAME = "preview_dimension";
@@ -2099,30 +2337,60 @@ const Viewport: Component<ViewportProps> = (props) => {
             });
         }
 
+        console.log("[Viewport onPointerMove] previewDimension:", props.previewDimension);
+
         if (props.previewDimension && props.previewDimension.selections.length > 0) {
+            console.log("[Viewport] Rendering preview dimension:", props.previewDimension);
+            let textPos: [number, number] | null = null;
             previewGroup = new THREE.Group();
             previewGroup.name = PREVIEW_DIMENSION_NAME;
+
+            // Apply Sketch Plane Transform
+            if (props.clientSketch && props.clientSketch.plane) {
+                previewGroup.matrixAutoUpdate = false;
+                previewGroup.matrix.copy(matrix);
+            }
 
             const selections = props.previewDimension.selections;
 
             // Simplified Helper to get positions
             const getPos = (c: any): [number, number] | null => {
+                console.log("[getPos] Input:", c);
                 if (c.type === "origin") return [0, 0];
-                if (c.type === "point") return c.position;
+                if (c.type === "point") {
+                    // First check if position is directly on the candidate
+                    if (c.position) {
+                        console.log("[getPos] point with position:", c.position);
+                        return c.position;
+                    }
+                    // Otherwise, look up by entity ID (for Point entities selected as "point" type)
+                    if (c.id) {
+                        const sk = props.clientSketch;
+                        if (sk) {
+                            const ent = sk.entities.find((e: any) => e.id === c.id);
+                            if (ent?.geometry.Point) {
+                                console.log("[getPos] point entity lookup:", ent.geometry.Point.pos);
+                                return ent.geometry.Point.pos;
+                            }
+                        }
+                    }
+                }
                 if (c.type === "entity") {
                     const sk = props.clientSketch;
                     if (!sk) return null;
                     const ent = sk.entities.find((e: any) => e.id === c.id);
-                    if (ent?.geometry.Line) return ent.geometry.Line.start; // Default to start
+                    if (ent?.geometry.Point) return ent.geometry.Point.pos;
+                    if (ent?.geometry.Line) return ent.geometry.Line.start;
                     if (ent?.geometry.Circle) return ent.geometry.Circle.center;
                     if (ent?.geometry.Arc) return ent.geometry.Arc.center;
                 }
+                console.log("[getPos] returning null for:", c);
                 return null;
             };
 
             const type = props.previewDimension.type;
 
-            if (type === "Distance" && selections.length >= 1) {
+            if ((type === "Distance" || type === "HorizontalDistance" || type === "VerticalDistance" || type === "Length") && selections.length >= 1) {
                 let p1 = getPos(selections[0]);
                 let p2 = selections.length > 1 ? getPos(selections[1]) : null;
 
@@ -2142,45 +2410,79 @@ const Viewport: Component<ViewportProps> = (props) => {
                 }
 
                 if (p1 && p2) {
-                    // Calculate vectors
-                    let dx = p2[0] - p1[0];
-                    let dy = p2[1] - p1[1];
-                    let len = Math.sqrt(dx * dx + dy * dy);
-                    if (len < 0.001) { dx = 1; dy = 0; len = 1; }
-                    const nx = dx / len;
-                    const ny = dy / len;
+                    const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
 
-                    // Project mouse to find offset
-                    const vx = worldPos.x - p1[0];
-                    const vy = worldPos.y - p1[1];
-                    const perp = vx * -ny + vy * nx; // Perpendicular distance
+                    if (type === "HorizontalDistance") {
+                        // Horizontal Dimension: Extension lines vertical, Dim line horizontal
+                        const y = worldPos.y;
+                        // Ext lines: (p1.x, p1.y) -> (p1.x, y)
+                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1[0], y, 0)]);
+                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2[0], y, 0)]);
+                        // Dim Line: (p1.x, y) -> (p2.x, y)
+                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], y, 0), new THREE.Vector3(p2[0], y, 0)]);
 
-                    // Constuct visual
-                    // Base line p1-p2 (not drawn, but reference)
-                    // Dimension line is parallel to base line, shifted by perp
-                    // Extent lines go from p1,p2 to dimension line
+                        previewGroup.add(new THREE.Line(ext1, dimMat));
+                        previewGroup.add(new THREE.Line(ext2, dimMat));
+                        previewGroup.add(new THREE.Line(dimLine, dimMat));
 
-                    const p1_ext = [p1[0] - ny * perp, p1[1] + nx * perp]; // shift by perp along normal (-ny, nx)
-                    const p2_ext = [p2[0] - ny * perp, p2[1] + nx * perp];
+                        // Text Position
+                        const midX = (p1[0] + p2[0]) / 2;
+                        textPos = [midX, y];
 
-                    const dimMat = new LineMaterial({ color: 0x00dddd, linewidth: 2, resolution: new THREE.Vector2(rect.width, rect.height) });
+                    } else if (type === "VerticalDistance") {
+                        // Vertical Dimension: Extension lines horizontal, Dim line vertical
+                        const x = worldPos.x;
+                        // Ext lines: (p1.x, p1.y) -> (x, p1.y)
+                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(x, p1[1], 0)]);
+                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(x, p2[1], 0)]);
+                        // Dim Line: (x, p1.y) -> (x, p2.y)
+                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, p1[1], 0), new THREE.Vector3(x, p2[1], 0)]);
 
-                    // Extension lines
-                    const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1_ext[0], p1_ext[1], 0)]);
-                    previewGroup.add(new THREE.Line(ext1, dimMat));
-                    const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
-                    previewGroup.add(new THREE.Line(ext2, dimMat));
+                        previewGroup.add(new THREE.Line(ext1, dimMat));
+                        previewGroup.add(new THREE.Line(ext2, dimMat));
+                        previewGroup.add(new THREE.Line(dimLine, dimMat));
 
-                    // Dimension line
-                    const dimLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1_ext[0], p1_ext[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
-                    previewGroup.add(new THREE.Line(dimLineGeo, dimMat));
+                        // Text Position
+                        const midY = (p1[1] + p2[1]) / 2;
+                        textPos = [x, midY];
 
-                    // Text
-                    const mid = [(p1_ext[0] + p2_ext[0]) / 2, (p1_ext[1] + p2_ext[1]) / 2];
+                    } else {
+                        // Aligned Distance
+                        let dx = p2[0] - p1[0];
+                        let dy = p2[1] - p1[1];
+                        let len = Math.sqrt(dx * dx + dy * dy);
+                        if (len < 0.001) { dx = 1; dy = 0; len = 1; }
+                        const nx = dx / len;
+                        const ny = dy / len;
+
+                        // Project mouse to find offset
+                        const vx = worldPos.x - p1[0];
+                        const vy = worldPos.y - p1[1];
+                        const perp = vx * -ny + vy * nx; // Perpendicular distance
+
+                        const p1_ext = [p1[0] - ny * perp, p1[1] + nx * perp];
+                        const p2_ext = [p2[0] - ny * perp, p2[1] + nx * perp];
+
+                        // Extension lines
+                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1_ext[0], p1_ext[1], 0)]);
+                        previewGroup.add(new THREE.Line(ext1, dimMat));
+                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
+                        previewGroup.add(new THREE.Line(ext2, dimMat)); // Fixed typo here (was ext1)
+
+                        // Dimension Line
+                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1_ext[0], p1_ext[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
+                        previewGroup.add(new THREE.Line(dimLine, dimMat));
+
+                        // Text Position
+                        textPos = [(p1_ext[0] + p2_ext[0]) / 2, (p1_ext[1] + p2_ext[1]) / 2];
+                    }
+                }
+                if (textPos) {
                     const textSprite = createTextSprite(props.previewDimension.value.toFixed(2), "#00dddd", 1.0);
-                    textSprite.position.set(mid[0], mid[1], 0.02);
+                    textSprite.position.set(textPos[0], textPos[1], 0.02);
                     previewGroup.add(textSprite);
                 }
+
             } else if (type === "Radius" && selections.length === 1) {
                 const center = getPos(selections[0]);
                 if (center) {
@@ -2190,7 +2492,7 @@ const Viewport: Component<ViewportProps> = (props) => {
 
 
 
-                    const dimMat = new LineMaterial({ color: 0x00dddd, linewidth: 2, resolution: new THREE.Vector2(rect.width, rect.height) });
+                    const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
 
                     const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(center[0], center[1], 0), new THREE.Vector3(worldPos.x, worldPos.y, 0)]);
                     previewGroup.add(new THREE.Line(lineGeo, dimMat));
@@ -2217,10 +2519,10 @@ const Viewport: Component<ViewportProps> = (props) => {
         const intersects = getIntersects(event.clientX, event.clientY);
 
         const indices: number[] = [];
-        if (intersects.length > 0) {
+        if (intersects.length > 0 && props.tessellation) {
             const hit = intersects[0];
             if (hit.faceIndex !== undefined) {
-                const hoveredId = props.tessellation!.triangle_ids[hit.faceIndex!];
+                const hoveredId = props.tessellation.triangle_ids[hit.faceIndex!];
 
                 // Find all triangles with this ID (inefficient linear scan, OK for small models)
                 props.tessellation.triangle_ids.forEach((tid, triIdx) => {
@@ -2274,8 +2576,6 @@ const Viewport: Component<ViewportProps> = (props) => {
         if (!currentSelection || currentSelection.length === 0) {
             return;
         }
-
-        console.log("[Viewport] Selection update:", currentSelection.length, "items selected");
 
         // Helper: compare TopoIds robustly (handles large numbers as strings)
         const topoIdMatches = (a: any, b: any): boolean => {
@@ -2351,8 +2651,6 @@ const Viewport: Component<ViewportProps> = (props) => {
         }
 
         if (edgeSegments.length > 0) {
-            console.log("[Viewport] Highlighting", edgeSegments.length / 6, "edge segments");
-            // Create thick line for selected edges
             const lineGeo = new LineSegmentsGeometry();
             lineGeo.setPositions(edgeSegments);
 
@@ -2370,7 +2668,6 @@ const Viewport: Component<ViewportProps> = (props) => {
             mainMesh.add(edgeHighlight);
         } else if (edgeSelections.length > 0) {
             // Debug: we have edge selections but no matches found
-            console.warn("[Viewport] No edge matches found! Selection:", edgeSelections[0], "First line_id:", data.line_ids?.[0]);
         }
 
         // === VERTEX SELECTION (points) ===
