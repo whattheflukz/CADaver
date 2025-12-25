@@ -320,6 +320,9 @@ export function useSketching(props: UseSketchingProps) {
       // Only active in Sketch Mode
       if (!sketchMode()) return;
 
+      // Skip keyboard shortcuts when dimension modal is open
+      if (editingDimension()) return;
+
       const action = getSketchAction(e);
       if (!action) return;
 

@@ -610,6 +610,28 @@ impl Runtime {
                                             tessellation.add_triangle(v1_bottom, v1_top, v2_bottom, side_face_id);
                                             tessellation.add_triangle(v2_bottom, v1_top, v2_top, side_face_id);
                                         }
+                                        
+                                        // === ADD EDGES FOR SELECTION ===
+                                        // Bottom edge
+                                        let bottom_edge_id = ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                        tessellation.add_line(v1_bottom, v2_bottom, bottom_edge_id);
+                                        
+                                        // Top edge
+                                        let top_edge_id = ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                        tessellation.add_line(v1_top, v2_top, top_edge_id);
+                                        
+                                        // Vertical edge (only once per corner, at v1)
+                                        let vert_edge_id = ctx.derive(&format!("VertEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                        tessellation.add_line(v1_bottom, v1_top, vert_edge_id);
+                                        
+                                        // === ADD VERTICES FOR SELECTION ===
+                                        // Bottom corner vertex
+                                        let bottom_vertex_id = ctx.derive(&format!("BottomVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
+                                        tessellation.add_point(v1_bottom, bottom_vertex_id);
+                                        
+                                        // Top corner vertex
+                                        let top_vertex_id = ctx.derive(&format!("TopVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
+                                        tessellation.add_point(v1_top, top_vertex_id);
                                     }
                                 }
                             }
@@ -940,8 +962,8 @@ mod tests {
         assert!(res.topology_manifest.len() >= 2, "Should have face TopoIds in manifest");
         
         // Check logs for success message
-        assert!(res.logs.iter().any(|l| l.contains("Generated extrusion")), 
-                "Logs should indicate successful extrusion");
+        assert!(res.logs.iter().any(|l| l.contains("Processing") && l.contains("loops for extrusion")), 
+                "Logs should indicate successful extrusion processing: {:?}", res.logs);
     }
 
     #[test]

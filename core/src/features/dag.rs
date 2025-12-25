@@ -457,8 +457,8 @@ mod tests {
                  assert_eq!(name, &format!("feat_{}", f2.id));
                  if let crate::microcad_kernel::ast::Expression::Call(c) = expr {
                      assert_eq!(c.function, "extrude");
-                     // New format: 2 args (distance, operation) when no sketch_data
-                     assert_eq!(c.args.len(), 2, "Extrude should have 2 args: distance, operation");
+                     // Format: 3 args (distance, operation, start_offset) when no sketch_data
+                     assert_eq!(c.args.len(), 3, "Extrude should have 3 args: distance, operation, start_offset");
                      // First arg should be distance (number)
                      match &c.args[0] {
                          crate::microcad_kernel::ast::Expression::Value(
@@ -476,6 +476,15 @@ mod tests {
                              assert_eq!(op, "Add", "Default operation should be Add");
                          },
                          _ => panic!("Expected string arg for operation"),
+                     }
+                     // Third arg should be start_offset (number)
+                     match &c.args[2] {
+                         crate::microcad_kernel::ast::Expression::Value(
+                             crate::microcad_kernel::ast::Value::Number(o)
+                         ) => {
+                             assert!((*o - 0.0).abs() < 1e-6, "Default start_offset should be 0.0");
+                         },
+                         _ => panic!("Expected number arg for start_offset"),
                      }
                  } else { panic!("Expected call"); }
              },

@@ -234,6 +234,14 @@ export const COMMAND_DEFINITIONS: Command[] = [
         category: "modeling",
     },
     {
+        id: "action:deselect_all",
+        name: "Deselect All",
+        description: "Clear all selected entities",
+        shortcut: "Escape",
+        modes: ["modeling"],
+        category: "action",
+    },
+    {
         id: "action:new_sketch",
         name: "New Sketch",
         description: "Create a new sketch on a plane or face",
@@ -257,6 +265,21 @@ export const COMMAND_DEFINITIONS: Command[] = [
         description: "View and customize keyboard shortcuts",
         shortcut: "Ctrl+,",
         modes: ["all"],
+        category: "action",
+    },
+    {
+        id: "action:save_selection_group",
+        name: "Save Selection as Group",
+        description: "Save current selection as a named group",
+        shortcut: "Ctrl+G",
+        modes: ["modeling"],
+        category: "action",
+    },
+    {
+        id: "action:manage_selection_groups",
+        name: "Manage Selection Groups",
+        description: "View and restore saved selection groups",
+        modes: ["modeling"],
         category: "action",
     },
 ];

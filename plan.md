@@ -196,7 +196,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Selection filters (face/edge/vertex/body)
 - [x] Persistent selections
 - [x] Preselection & hover logic
-- [ ] Named selections / selection sets
+- [x] Named selections / selection sets *(Added)*
 
 ### Rendering Pipeline
 - [x] WebGL/WebGPU renderer

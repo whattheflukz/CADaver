@@ -188,6 +188,72 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 selection_state.set_filter(filter);
                 info!("Selection Filter set to {:?}", filter);
 
+            } else if text == "CLEAR_SELECTION" {
+                selection_state.clear();
+                info!("Cleared all selections");
+                
+                // Broadcast empty selection
+                if socket.send(Message::Text("SELECTION_UPDATE:[]".to_string())).await.is_err() {
+                    return;
+                }
+
+            } else if text.starts_with("SELECTION_GROUP_CREATE:") {
+                // Format: SELECTION_GROUP_CREATE:GroupName
+                let name = text.trim_start_matches("SELECTION_GROUP_CREATE:");
+                if name.is_empty() {
+                    warn!("Empty group name provided");
+                } else {
+                    selection_state.create_group(name);
+                    info!("Created selection group '{}' with {} items", name, selection_state.selected.len());
+                    
+                    // Send updated groups list
+                    let groups = selection_state.list_groups();
+                    let groups_json = serde_json::to_string(&groups).unwrap_or("[]".into());
+                    if socket.send(Message::Text(format!("SELECTION_GROUPS_UPDATE:{}", groups_json))).await.is_err() {
+                        return;
+                    }
+                }
+
+            } else if text.starts_with("SELECTION_GROUP_RESTORE:") {
+                // Format: SELECTION_GROUP_RESTORE:GroupName
+                let name = text.trim_start_matches("SELECTION_GROUP_RESTORE:");
+                if selection_state.restore_group(name) {
+                    info!("Restored selection group '{}' with {} items", name, selection_state.selected.len());
+                    
+                    // Broadcast Selection Update
+                    let update = serde_json::to_string(&selection_state.selected).unwrap_or("[]".into());
+                    if socket.send(Message::Text(format!("SELECTION_UPDATE:{}", update))).await.is_err() {
+                        return;
+                    }
+                } else {
+                    warn!("Selection group '{}' not found", name);
+                }
+
+            } else if text.starts_with("SELECTION_GROUP_DELETE:") {
+                // Format: SELECTION_GROUP_DELETE:GroupName
+                let name = text.trim_start_matches("SELECTION_GROUP_DELETE:");
+                if selection_state.delete_group(name) {
+                    info!("Deleted selection group '{}'", name);
+                    
+                    // Send updated groups list
+                    let groups = selection_state.list_groups();
+                    let groups_json = serde_json::to_string(&groups).unwrap_or("[]".into());
+                    if socket.send(Message::Text(format!("SELECTION_GROUPS_UPDATE:{}", groups_json))).await.is_err() {
+                        return;
+                    }
+                } else {
+                    warn!("Selection group '{}' not found for deletion", name);
+                }
+
+            } else if text == "SELECTION_GROUPS_LIST" {
+                // Returns list of all selection groups with item counts
+                let groups = selection_state.list_groups();
+                let groups_json = serde_json::to_string(&groups).unwrap_or("[]".into());
+                info!("Listing {} selection groups", groups.len());
+                if socket.send(Message::Text(format!("SELECTION_GROUPS_UPDATE:{}", groups_json))).await.is_err() {
+                    return;
+                }
+
             } else if text.starts_with("TOGGLE_SUPPRESSION:") {
                 let id_str = text.trim_start_matches("TOGGLE_SUPPRESSION:");
                 if let Ok(id) = uuid::Uuid::parse_str(id_str) {

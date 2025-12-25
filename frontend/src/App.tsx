@@ -19,6 +19,8 @@ import ModelingToolbar from './components/ModelingToolbar';
 import CommandPalette from './components/CommandPalette';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import VariablesPanel from './components/VariablesPanel';
+import NamedSelectionsPanel from './components/NamedSelectionsPanel';
+import SelectionPanel from './components/SelectionPanel';
 import ExpressionInput from './components/ExpressionInput';
 import { parseValueOrExpression } from './expressionEvaluator';
 import { DimensionEditModal } from './components/DimensionEditModal';
@@ -44,6 +46,8 @@ const App: Component = () => {
   const [showVariablesPanel, setShowVariablesPanel] = createSignal(false);
   // Keyboard Shortcuts Modal state
   const [showKeyboardShortcutsModal, setShowKeyboardShortcutsModal] = createSignal(false);
+  // Named Selections Panel state
+  const [showNamedSelectionsPanel, setShowNamedSelectionsPanel] = createSignal(false);
 
   const toggleTreeExpand = (id: string) => {
     const current = treeExpanded();
@@ -68,6 +72,7 @@ const App: Component = () => {
     // @ts-ignore
     setGraph,
     backendRegions,
+    selectionGroups,
   } = useMicrocadConnection({
     autostartNextSketch: () => false, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
@@ -252,6 +257,17 @@ const App: Component = () => {
         break;
       case 'action:keyboard_shortcuts':
         setShowKeyboardShortcutsModal(true);
+        break;
+      case 'action:save_selection_group':
+        // Show panel for entering group name
+        setShowNamedSelectionsPanel(true);
+        break;
+      case 'action:manage_selection_groups':
+        setShowNamedSelectionsPanel(true);
+        break;
+      case 'action:deselect_all':
+        // Clear all selections when Escape is pressed in modeling mode
+        send('CLEAR_SELECTION');
         break;
     }
   };
@@ -658,6 +674,34 @@ const App: Component = () => {
           resetShortcut={keyboardShortcuts.resetShortcut}
           resetAllShortcuts={keyboardShortcuts.resetAllShortcuts}
           hasConflict={keyboardShortcuts.hasConflict}
+        />
+
+        {/* Named Selections Panel */}
+        <NamedSelectionsPanel
+          isOpen={showNamedSelectionsPanel()}
+          groups={selectionGroups()}
+          currentSelectionCount={selection().length}
+          onCreateGroup={(name) => {
+            send(`SELECTION_GROUP_CREATE:${name}`);
+          }}
+          onRestoreGroup={(name) => {
+            send(`SELECTION_GROUP_RESTORE:${name}`);
+          }}
+          onDeleteGroup={(name) => {
+            send(`SELECTION_GROUP_DELETE:${name}`);
+          }}
+          onClose={() => setShowNamedSelectionsPanel(false)}
+        />
+
+        {/* Selection Panel - Shows current selection with deselect buttons */}
+        <SelectionPanel
+          selection={selection()}
+          onDeselect={(topoId) => {
+            send(`SELECT:${JSON.stringify({ id: topoId, modifier: "remove" })}`);
+          }}
+          onClearAll={() => {
+            send(`CLEAR_SELECTION`);
+          }}
         />
       </main >
     </div >

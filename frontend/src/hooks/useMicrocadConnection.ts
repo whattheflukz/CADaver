@@ -1,6 +1,11 @@
 import { createSignal, onMount, onCleanup, type Accessor } from 'solid-js';
 import { type FeatureGraphState, type Tessellation, type SolveResult, type Sketch } from '../types';
 
+export interface SelectionGroup {
+    name: string;
+    count: number;
+}
+
 interface MicrocadConnectionProps {
     onAutoStartSketch: (id: string) => void;
     onSketchSolved: (id: string, sketch: Sketch) => void;
@@ -16,6 +21,7 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
     const [zombies, setZombies] = createSignal<any[]>([]);
     const [solveResult, setSolveResult] = createSignal<SolveResult | null>(null);
     const [backendRegions, setBackendRegions] = createSignal<any[] | null>(null);
+    const [selectionGroups, setSelectionGroups] = createSignal<SelectionGroup[]>([]);
 
     // We can track selectedFeature here or just let App handle it via effect on graph?
     // The original code set selectedFeature logic inside onmessage.
@@ -137,6 +143,17 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
                     } catch (e) {
                         console.error("Failed to parse regions update", e);
                     }
+                } else if (msg.startsWith("SELECTION_GROUPS_UPDATE:")) {
+                    try {
+                        const json = msg.substring("SELECTION_GROUPS_UPDATE:".length);
+                        const data: [string, number][] = JSON.parse(json);
+                        // Convert from [name, count][] to SelectionGroup[]
+                        const groups: SelectionGroup[] = data.map(([name, count]) => ({ name, count }));
+                        console.log("Got selection groups update:", groups.length, "groups");
+                        setSelectionGroups(groups);
+                    } catch (e) {
+                        console.error("Failed to parse selection groups update", e);
+                    }
                 } else {
                     console.log("Msg:", msg);
                 }
@@ -176,6 +193,7 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         setGraph, // Needed if App wants to manually update graph? Probably not.
         setSelection, // App handleSelect clears selection locally? Yes.
         backendRegions,
-        setBackendRegions
+        setBackendRegions,
+        selectionGroups
     };
 }

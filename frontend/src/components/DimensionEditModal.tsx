@@ -1,4 +1,4 @@
-import { createSignal, type Component } from 'solid-js';
+import { createSignal, createEffect, on, type Component } from 'solid-js';
 import { BaseModal } from './BaseModal';
 import ExpressionInput from './ExpressionInput';
 import { parseValueOrExpression } from '../expressionEvaluator';
@@ -14,14 +14,19 @@ interface DimensionEditModalProps {
 }
 
 export const DimensionEditModal: Component<DimensionEditModalProps> = (props) => {
-    const [inputValue, setInputValue] = createSignal(props.initialValue || "");
+    const [inputValue, setInputValue] = createSignal("");
 
-    // Reset input when modal opens or initialValue changes
-    // We can't easily listen to "open" in a declarative way without an effect on isOpen or initialValue
-    // But since this component is likely conditionally rendered or re-rendered, we can initialize signal above.
-    // However, if the component stays mounted and isOpen toggles, we need to reset.
-    // Actually, looking at App.tsx, it conditionally renders: {editingDimension() && ...}
-    // So it remounts every time. Initial state is fine.
+    // Reset input when modal opens or initialValue changes while open
+    // Using on() to explicitly track props.isOpen and props.initialValue
+    createEffect(on(
+        () => [props.isOpen, props.initialValue] as const,
+        ([isOpen, initialValue]) => {
+            if (isOpen) {
+                // Sync to initialValue whenever open (catches both opening and value changes)
+                setInputValue(initialValue || "");
+            }
+        }
+    ));
 
     const handleApply = () => {
         const inputExpr = inputValue();

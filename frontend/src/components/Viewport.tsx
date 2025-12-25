@@ -45,6 +45,9 @@ const Viewport: Component<ViewportProps> = (props) => {
 
     // Raycaster reused
     const raycaster = new THREE.Raycaster();
+    // Increase threshold for easier line/point selection
+    raycaster.params.Line = { threshold: 4.0 };  // Large hitbox for edges
+    raycaster.params.Points = { threshold: 5.0 }; // Larger hitbox for vertices
     const mouse = new THREE.Vector2();
 
     const [ready, setReady] = createSignal(false);
@@ -197,7 +200,7 @@ const Viewport: Component<ViewportProps> = (props) => {
             mainMesh = new THREE.Mesh(geometry, material);
             scene.add(mainMesh);
 
-            // Lines for Sketches
+            // Lines for Sketches / Edges
             if (data.line_indices && data.line_indices.length > 0) {
                 // Convert indexed geometry to segment soup for LineSegmentsGeometry
                 const segmentPositions: number[] = [];
@@ -215,10 +218,10 @@ const Viewport: Component<ViewportProps> = (props) => {
 
                 const resolution = (window as any).viewportLineResolution || new THREE.Vector2(window.innerWidth, window.innerHeight);
 
-                // Global thickness for ALL sketch lines (not just active)
+                // Edge lines - subtle gray for 3D body edges
                 const lineMat = new LineMaterial({
-                    color: 0xffffff,
-                    linewidth: 2, // Consistent thickness
+                    color: 0x444444, // Dark gray - subtle
+                    linewidth: 10, // Wide enough to click easily
                     resolution: resolution,
                     depthTest: true
                 });
@@ -235,9 +238,10 @@ const Viewport: Component<ViewportProps> = (props) => {
                 pointGeo.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
                 pointGeo.setIndex(data.point_indices);
 
+                // Vertex points - orange dots at corners
                 const pointMat = new THREE.PointsMaterial({
-                    color: 0xffaa00,
-                    size: 8, // Pixel size
+                    color: 0xffaa00, // Orange
+                    size: 6, // Moderate size
                     sizeAttenuation: false,
                     depthTest: false, // Always on top
                 });
@@ -384,7 +388,8 @@ const Viewport: Component<ViewportProps> = (props) => {
         if (indices.length === 0) {
             if (mesh) {
                 mainMesh.remove(mesh);
-                (mesh.geometry as THREE.BufferGeometry).dispose();
+                // Don't dispose geometry - it references mainMesh's position attribute
+                // Just dispose the material
                 (mesh.material as THREE.Material).dispose();
             }
             return;
@@ -392,22 +397,31 @@ const Viewport: Component<ViewportProps> = (props) => {
 
         if (!mesh) {
             const highlightGeo = new THREE.BufferGeometry();
+            // Share the position attribute (no need to clone since we're only changing indices)
             highlightGeo.setAttribute('position', mainMesh.geometry.getAttribute('position'));
             highlightGeo.setIndex(indices);
 
             const highlightMat = new THREE.MeshBasicMaterial({
                 color: color,
-                depthTest: false,
+                depthTest: true, // Enable depth test but use polygon offset
+                depthWrite: false,
                 transparent: true,
                 opacity: opacity,
-                side: THREE.DoubleSide
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -1
             });
             mesh = new THREE.Mesh(highlightGeo, highlightMat);
             mesh.name = name;
-            mesh.renderOrder = 999;
+            mesh.renderOrder = 998; // Hover is below selection (1001)
             mainMesh.add(mesh);
         } else {
             mesh.geometry.setIndex(indices);
+            // Update material properties in case they changed
+            const mat = mesh.material as THREE.MeshBasicMaterial;
+            mat.color.setHex(color);
+            mat.opacity = opacity;
         }
     };
 
@@ -562,52 +576,62 @@ const Viewport: Component<ViewportProps> = (props) => {
         }
 
         if (intersects.length > 0) {
-            const hit = intersects[0];
             let topoId = null;
 
+            // Iterate through intersections to find the right one based on filter
+            for (const hit of intersects) {
 
-
-            if (hit.object.userData && hit.object.userData.idMap) {
-                // Sketch Entity Selection
-                // LineSegments2 uses 'faceIndex' for segment index, regular LineSegments uses 'index'
-                let idx = hit.index;
-                if (idx === undefined || idx === null) {
-                    idx = hit.faceIndex ?? undefined; // LineSegments2 fallback
+                // Skip highlight meshes
+                if (hit.object.name.includes('highlight') || hit.object.name.includes('selection')) {
+                    continue;
                 }
-                // console.log("Hit:", hit.object.name, "Index:", idx);
 
-                if (idx !== undefined && idx !== null && hit.object.userData.idMap[idx]) {
-                    topoId = hit.object.userData.idMap[idx];
-                } else {
-                    // console.log("Failed to resolve ID for index:", idx, "Map length:", hit.object.userData.idMap.length);
-                }
-            } else if (hit.object.name === 'sketch_defining_points') {
-                // Sketch defining points don't have individual IDs for selection yet.
-                // Skip this hit and try the next one in the intersects array.
-                // Find the next valid hit
-                for (let i = 1; i < intersects.length; i++) {
-                    const nextHit = intersects[i];
-                    if (nextHit.object.userData && nextHit.object.userData.idMap) {
-                        let idx = nextHit.index;
-                        if (idx !== undefined && idx !== null && nextHit.object.userData.idMap[idx]) {
-                            topoId = nextHit.object.userData.idMap[idx];
-                            console.log("Fallback Resolved ID:", topoId);
-                            break;
-                        }
+                // 1. SKETCH ENTITY SELECTION (has userData.idMap) - highest priority
+                if (hit.object.userData && hit.object.userData.idMap) {
+                    let idx = hit.index ?? hit.faceIndex;
+                    if (idx !== undefined && idx !== null && hit.object.userData.idMap[idx]) {
+                        topoId = hit.object.userData.idMap[idx];
+                        console.log("[Click] Sketch entity:", topoId);
+                        break;
                     }
+                    continue;
                 }
-            } else if (hit.object.type === 'Points' && hit.index !== undefined && props.tessellation && props.tessellation.point_ids && props.tessellation.point_ids.length > 0) {
-                // Check if it's tessellation edge
-                if (props.tessellation && props.tessellation.line_ids) {
-                    const idx = hit.index!;
-                    topoId = props.tessellation.line_ids[idx];
-                    console.log("Clicked Edge:", topoId);
+
+                // 2. FACE SELECTION (mainMesh with faceIndex) - most common 3D selection
+                if (hit.object === mainMesh && hit.faceIndex !== undefined &&
+                    props.tessellation?.triangle_ids?.length > 0) {
+                    const idx = hit.faceIndex;
+                    if (idx >= 0 && idx < props.tessellation.triangle_ids.length) {
+                        topoId = props.tessellation.triangle_ids[idx];
+                        console.log("[Click] Face:", topoId);
+                        break;
+                    }
+                    continue;
                 }
-            } else if (hit.faceIndex !== undefined && hit.faceIndex !== null) {
-                // Check if it's tessellation face
-                if (props.tessellation && props.tessellation.triangle_ids) {
-                    topoId = props.tessellation.triangle_ids[hit.faceIndex];
-                    console.log("Clicked Face:", topoId);
+
+                // 3. EDGE SELECTION (LineSegments2 named "sketch_lines")
+                if (hit.object.name === 'sketch_lines' && hit.faceIndex !== undefined &&
+                    props.tessellation?.line_ids?.length > 0) {
+                    // LineSegments2 uses faceIndex as segment index
+                    const idx = hit.faceIndex;
+                    if (idx >= 0 && idx < props.tessellation.line_ids.length) {
+                        topoId = props.tessellation.line_ids[idx];
+                        console.log("[Click] Edge:", topoId);
+                        break;
+                    }
+                    continue;
+                }
+
+                // 4. VERTEX SELECTION (Points geometry named "vertices") - last priority
+                if (hit.object.name === 'vertices' && hit.index !== undefined &&
+                    props.tessellation?.point_ids?.length > 0) {
+                    const idx = hit.index;
+                    if (idx >= 0 && idx < props.tessellation.point_ids.length) {
+                        topoId = props.tessellation.point_ids[idx];
+                        console.log("[Click] Vertex:", topoId);
+                        break;
+                    }
+                    continue;
                 }
             }
 
@@ -2215,24 +2239,186 @@ const Viewport: Component<ViewportProps> = (props) => {
     };
 
 
-    // React to selection updates
+    // React to selection updates - highlight faces, edges, and vertices
     createEffect(() => {
-        if (!mainMesh || !props.tessellation) return;
+        // CRITICAL: Access reactive signals FIRST so SolidJS tracks them as dependencies
+        // If we return early before accessing them, they won't trigger re-runs
+        const currentSelection = props.selection;
+        const currentTessellation = props.tessellation;
 
-        const indices: number[] = [];
-        if (props.selection && props.selection.length > 0) {
-            props.tessellation.triangle_ids.forEach((tid, triIdx) => {
-                const isSelected = props.selection?.some(s => JSON.stringify(s) === JSON.stringify(tid));
+        // Now we can safely check non-reactive conditions
+        if (!mainMesh || !currentTessellation) return;
+
+        const data = currentTessellation;
+        const SEL_EDGE_NAME = "selection_edge_highlight";
+        const SEL_FACE_NAME = "selection_highlight";
+
+        // Clear existing face highlight first (always clean start)
+        const existingFaceHighlight = mainMesh.getObjectByName(SEL_FACE_NAME);
+        if (existingFaceHighlight) {
+            mainMesh.remove(existingFaceHighlight);
+            (existingFaceHighlight as THREE.Mesh).geometry?.dispose();
+            ((existingFaceHighlight as THREE.Mesh).material as THREE.Material)?.dispose();
+        }
+
+        // Clear existing edge highlights
+        const existingEdgeHighlight = mainMesh.getObjectByName(SEL_EDGE_NAME);
+        if (existingEdgeHighlight) {
+            mainMesh.remove(existingEdgeHighlight);
+            existingEdgeHighlight.traverse((child) => {
+                if ((child as any).geometry) (child as any).geometry.dispose();
+                if ((child as any).material) (child as any).material.dispose();
+            });
+        }
+
+        if (!currentSelection || currentSelection.length === 0) {
+            return;
+        }
+
+        console.log("[Viewport] Selection update:", currentSelection.length, "items selected");
+
+        // Helper: compare TopoIds robustly (handles large numbers as strings)
+        const topoIdMatches = (a: any, b: any): boolean => {
+            if (!a || !b) return false;
+            // Compare feature_id as string, local_id as string, rank as string
+            return String(a.feature_id) === String(b.feature_id)
+                && String(a.local_id) === String(b.local_id)
+                && String(a.rank) === String(b.rank);
+        };
+
+        // === FACE SELECTION (triangles) ===
+        const faceIndices: number[] = [];
+        data.triangle_ids.forEach((tid, triIdx) => {
+            const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
+            if (isSelected) {
+                faceIndices.push(data.indices[triIdx * 3]);
+                faceIndices.push(data.indices[triIdx * 3 + 1]);
+                faceIndices.push(data.indices[triIdx * 3 + 2]);
+            }
+        });
+
+        if (faceIndices.length > 0) {
+            console.log("[Viewport] Highlighting", faceIndices.length / 3, "triangles (faces)");
+
+            // Create face highlight mesh directly here (not via updateHighlightMesh)
+            const highlightGeo = new THREE.BufferGeometry();
+            highlightGeo.setAttribute('position', mainMesh.geometry.getAttribute('position'));
+            highlightGeo.setIndex(faceIndices);
+
+            const highlightMat = new THREE.MeshBasicMaterial({
+                color: 0xffaa00,
+                depthTest: true,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.7,
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: -2,
+                polygonOffsetUnits: -2
+            });
+
+            const mesh = new THREE.Mesh(highlightGeo, highlightMat);
+            mesh.name = SEL_FACE_NAME;
+            mesh.renderOrder = 1001; // Higher than hover
+            mainMesh.add(mesh);
+        }
+
+        // === EDGE SELECTION (lines) ===
+        const SEL_VERTEX_NAME = "selection_vertex_highlight";
+        const edgeSegments: number[] = [];
+
+        // Debug: log what we're looking for
+        const edgeSelections = currentSelection.filter(s => s.rank === "Edge");
+        if (edgeSelections.length > 0) {
+            console.log("[Viewport] Looking for edges:", edgeSelections.length, "edge selections");
+            console.log("[Viewport] Available line_ids:", data.line_ids?.length || 0);
+        }
+
+        if (data.line_ids && data.line_indices) {
+            // line_ids: one ID per line segment (2 consecutive indices per segment)
+            data.line_ids.forEach((tid, lineIdx) => {
+                const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
                 if (isSelected) {
-                    indices.push(props.tessellation!.indices[triIdx * 3]);
-                    indices.push(props.tessellation!.indices[triIdx * 3 + 1]);
-                    indices.push(props.tessellation!.indices[triIdx * 3 + 2]);
+                    const idx1 = data.line_indices[lineIdx * 2];
+                    const idx2 = data.line_indices[lineIdx * 2 + 1];
+                    // Get world positions
+                    edgeSegments.push(
+                        data.vertices[idx1 * 3], data.vertices[idx1 * 3 + 1], data.vertices[idx1 * 3 + 2],
+                        data.vertices[idx2 * 3], data.vertices[idx2 * 3 + 1], data.vertices[idx2 * 3 + 2]
+                    );
                 }
             });
         }
 
-        // Color 0xffaa00 (Gold/Orange), Opacity 0.5
-        updateHighlightMesh({ current: selectionMesh }, indices, 0xffaa00, 0.5, "selection_highlight");
+        if (edgeSegments.length > 0) {
+            console.log("[Viewport] Highlighting", edgeSegments.length / 6, "edge segments");
+            // Create thick line for selected edges
+            const lineGeo = new LineSegmentsGeometry();
+            lineGeo.setPositions(edgeSegments);
+
+            const lineMat = new LineMaterial({
+                color: 0x00ffff, // CYAN for edges (distinct from orange faces)
+                linewidth: 8, // Thick to stand out
+                resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
+                depthTest: true
+            });
+
+            const edgeHighlight = new LineSegments2(lineGeo, lineMat);
+            edgeHighlight.name = SEL_EDGE_NAME;
+            edgeHighlight.renderOrder = 1002; // Above face highlight
+            edgeHighlight.computeLineDistances();
+            mainMesh.add(edgeHighlight);
+        } else if (edgeSelections.length > 0) {
+            // Debug: we have edge selections but no matches found
+            console.warn("[Viewport] No edge matches found! Selection:", edgeSelections[0], "First line_id:", data.line_ids?.[0]);
+        }
+
+        // === VERTEX SELECTION (points) ===
+        // Clear existing vertex highlight
+        const existingVertexHighlight = mainMesh.getObjectByName(SEL_VERTEX_NAME);
+        if (existingVertexHighlight) {
+            mainMesh.remove(existingVertexHighlight);
+            const mat = (existingVertexHighlight as THREE.Points).material as THREE.Material;
+            mat?.dispose();
+        }
+
+        const vertexPositions: number[] = [];
+        const vertexSelections = currentSelection.filter(s => s.rank === "Vertex");
+
+        if (vertexSelections.length > 0 && data.point_ids && data.point_indices) {
+            console.log("[Viewport] Looking for vertices:", vertexSelections.length, "vertex selections");
+
+            data.point_ids.forEach((tid, ptIdx) => {
+                const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
+                if (isSelected) {
+                    const idx = data.point_indices[ptIdx];
+                    vertexPositions.push(
+                        data.vertices[idx * 3],
+                        data.vertices[idx * 3 + 1],
+                        data.vertices[idx * 3 + 2]
+                    );
+                }
+            });
+        }
+
+        if (vertexPositions.length > 0) {
+            console.log("[Viewport] Highlighting", vertexPositions.length / 3, "vertices");
+
+            const pointGeo = new THREE.BufferGeometry();
+            pointGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertexPositions, 3));
+
+            const pointMat = new THREE.PointsMaterial({
+                color: 0x00ff00, // GREEN for vertices (distinct from orange faces and cyan edges)
+                size: 16,
+                sizeAttenuation: false,
+                depthTest: false // Always visible
+            });
+
+            const vertexHighlight = new THREE.Points(pointGeo, pointMat);
+            vertexHighlight.name = SEL_VERTEX_NAME;
+            vertexHighlight.renderOrder = 1003; // Above everything
+            mainMesh.add(vertexHighlight);
+        }
     });
 
     // ... init/cleanup ... 
