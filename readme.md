@@ -33,29 +33,93 @@ The project is structured into several phases to achieve professional-grade pari
 
 ### Status & Implemented Features
 
+#### Phase 0: Foundations & CAD Correctness
 - [x] **Core Infrastructure**
-    - [x] Rust/SolidJS Workspace
-    - [x] WebSocket-based model synchronization
-    - [x] Mode-aware toolbar system
-    - [x] Customizable Keyboard Shortcut system
-    - [x] Command Palette with fuzzy search
+    - [x] Rust workspace & module boundaries
+    - [x] SolidJS frontend scaffold
+    - [x] Backend API framework
+    - [x] WebSocket-based model sync
+    - [x] Deterministic UUID & entity ID system
+    - [ ] Math & geometry utility layer
     - [x] Unit system (mm, inch, deg, etc.)
-- [x] **Parametric Sketching Engine**
-    - [x] Explicit plane selection (Face, Default planes, Construction planes)
-    - [x] Robust Snapping (Endpoint, Center, Intersection, Grid, etc.)
-    - [x] Full Geometry Suite (Lines, Arcs, Polygons, Splines, etc.)
-    - [x] Advanced Editing (Offset, Mirror, Trim, Construction lines)
-    - [x] Driving Dimensions (Linear, Angular, Radial)
-    - [x] Constraint Solver (Coincident, Parallel, Tangent, Horizontal/Vertical, etc.)
-    - [x] Over/Under-constraint visual indicators
-- [x] **Feature History & Modeling**
-    - [x] Feature DAG & History Tree
-    - [x] Persistent entity IDs (Topological Naming)
-    - [x] Feature suppression & reordering groundwork
-    - [x] Selection Filters (Face, Edge, Vertex)
-- [x] **Rendering**
-    - [x] High-performance WebGL/WebGPU Viewport
-    - [x] Advanced Camera Controls (Orbit/Pan/Zoom)
+- [x] **UI Infrastructure**
+    - [x] Mode-aware toolbar system
+    - [x] Persistent layout (toolbar always visible)
+    - [x] Hover tooltips with descriptions
+    - [x] Keyboard shortcut system (with customization)
+    - [x] Command palette infrastructure
+- [x] **Reusable UI Components**
+    - [x] `BaseModal` (Draggable, theme-consistent)
+    - [x] `CommandPalette` (Fuzzy search, mode-aware)
+    - [ ] `SelectionField` (Pick-to-select input)
+    - [x] `NumericInput` (Unit & variable support)
+    - [x] `ToolButton` (Rich tooltips & shortcuts)
+- [ ] **Geometry Kernel (MicroCAD Integration)**
+    - [ ] Embed MicroCAD Runtime
+    - [x] Program generation layer
+    - [x] MicroCAD AST/source mapping
+    - [ ] Deterministic evaluation guarantees
+    - [ ] Kernel error propagation to UI
+- [ ] **Topological Naming & References**
+    - [x] Persistent face/edge/vertex IDs
+    - [x] Reference tracking across regenerations
+    - [ ] Stable selection resolution
+    - [ ] Failure recovery strategies
+    - [x] Explicit “reference broken” reporting
+- [x] **Selection System**
+    - [x] Selection filters (face/edge/vertex/body)
+    - [x] Persistent selections
+    - [x] Preselection & hover logic
+    - [x] Named selections / selection sets
+- [ ] **Rendering Pipeline**
+    - [x] WebGL/WebGPU renderer
+    - [ ] Tessellation from MicroCAD
+    - [ ] Normals & edge rendering
+    - [ ] Face/edge/vertex picking
+    - [x] Camera controls (orbit/pan/zoom)
+    - [ ] LOD groundwork
+
+#### Phase 1: Parametric Core & Sketching
+- [ ] **Feature Tree System**
+    - [x] Feature DAG
+    - [x] Deterministic regeneration order
+    - [ ] Rollback & roll-forward preview
+    - [x] Feature suppression
+    - [ ] Feature reordering
+    - [ ] Insert/replace features mid-tree
+    - [ ] Dependency visualization
+- [x] **Sketch Mode & Plane Selection**
+    - [x] Explicit sketch creation workflow
+    - [x] Plane selection (Planes, Planar faces, Construction planes)
+    - [x] Visual active plane confirmation
+    - [x] Automatic camera alignment
+- [x] **2D Sketching Engine**
+    - [x] **Snapping:** Endpoint, Midpoint, Center, Intersection, Origin, Grid
+    - [ ] Constraint inference previews
+    - [x] **Geometry:** Lines, Arcs, Circles, Splines, Points, Rectangles, Slots, Polygons, Ellipses
+    - [x] **Editing:** Trim/Extend, Offset, Mirror, Patterns, Construction geometry, Fix/Unfix
+    - [x] **Dimensions:** Linear, Angular, Radial, Driven/Driving, Inline editing
+    - [x] **Constraints:** Coincident, Parallel, Perpendicular, Tangent, Horiz/Vert, Equal, Fix, Distance, Angle
+    - [x] **Solver:** Incremental solving, Conflict detection, Constrained state indicators
+
+#### Phase 2-3: Solid & Surface Modeling
+- [ ] **Solid Features** (Fillet, Chamfer, Shell, Draft, Offset faces, Patterns, Mirror)
+- [ ] **Reference Geometry** (Construction planes, Axes, Points, Midplanes)
+- [ ] **Parametrics & Configurations** (Global parameters, Expressions, Equations, Tables)
+- [ ] **Body & Part Management** (Folders, Boolean scope, Part derivation)
+- [ ] **Surface Modeling** (Extrude/Revolve/Sweep/Loft, Trim, Knit, Offset)
+
+#### Phase 4-6: Assemblies & Manufacturing
+- [ ] **Assemblies** (Multi-part docs, Sub-assemblies, Mates, Joints, Exploded views)
+- [ ] **Manufacturing Prep** (Section views, Measure tool, Mass properties, Draft analysis)
+- [ ] **Import/Export** (STEP, IGES, STL, OBJ, DXF)
+- [ ] **2D Drawings** (Standard views, Section views, Associative dimensions, GD&T, PDF export)
+
+#### Phase 7+: Platform & Advanced Features
+- [ ] **Collaboration & Versioning** (Branching, Merging, Live cursors, Multi-user sessions)
+- [ ] **Extensibility** (Plugin architecture, Custom features/commands, Scripting hooks)
+- [ ] **Performance & Scale** (Incremental rebuilds, Geometry caching, Occlusion culling, Background regeneration)
+- [ ] **CAM Integration**
 
 For a detailed roadmap, see [plan.md](./plan.md).
 
