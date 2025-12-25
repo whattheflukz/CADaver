@@ -1,4 +1,4 @@
-use super::Point3;
+use super::{Point3, Vector3};
 use crate::topo::naming::TopoId;
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,27 @@ impl Tessellation {
             self.normals.push(normal.y as f32);
             self.normals.push(normal.z as f32);
         }
+        
+        self.triangle_ids.push(id);
+    }
+
+    pub fn add_triangle_with_normals(&mut self, p1: Point3, p2: Point3, p3: Point3, n1: Vector3, n2: Vector3, n3: Vector3, id: TopoId) {
+        let idx = (self.vertices.len() / 3) as u32;
+        
+        // Add vertices
+        self.vertices.push(p1.x as f32); self.vertices.push(p1.y as f32); self.vertices.push(p1.z as f32);
+        self.vertices.push(p2.x as f32); self.vertices.push(p2.y as f32); self.vertices.push(p2.z as f32);
+        self.vertices.push(p3.x as f32); self.vertices.push(p3.y as f32); self.vertices.push(p3.z as f32);
+
+        // Add indices
+        self.indices.push(idx);
+        self.indices.push(idx + 1);
+        self.indices.push(idx + 2);
+
+        // Add explicit vertex normals
+        self.normals.push(n1.x as f32); self.normals.push(n1.y as f32); self.normals.push(n1.z as f32);
+        self.normals.push(n2.x as f32); self.normals.push(n2.y as f32); self.normals.push(n2.z as f32);
+        self.normals.push(n3.x as f32); self.normals.push(n3.y as f32); self.normals.push(n3.z as f32);
         
         self.triangle_ids.push(id);
     }

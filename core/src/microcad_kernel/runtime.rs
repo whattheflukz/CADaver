@@ -14,6 +14,29 @@ pub enum KernelError {
     NotImplemented(String),
 }
 
+/// Source entity type for a profile segment - used to group curved surfaces
+#[derive(Debug, Clone)]
+pub enum ProfileSegmentSource {
+    /// Planar face from line extrusion
+    Line { entity_id: String },
+    /// Cylindrical face from full circle extrusion
+    Circle { entity_id: String, center: [f64; 2], radius: f64 },
+    /// Partial cylindrical face from arc extrusion
+    Arc { entity_id: String, center: [f64; 2], radius: f64 },
+    /// Elliptical cylinder face
+    Ellipse { entity_id: String, center: [f64; 2] },
+    /// Unknown source (fallback - treat as separate faces)
+    Unknown,
+}
+
+/// A segment of a profile loop with metadata about its source
+#[derive(Debug, Clone)]
+pub struct ProfileSegment {
+    pub p1: [f64; 2],
+    pub p2: [f64; 2],
+    pub source: ProfileSegmentSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationResult {
     /// IDs of entities created or modified
@@ -408,11 +431,29 @@ impl Runtime {
                         // Determine which loops to extrude
                         // Priority: profile_regions (exact boundary points) > find_closed_loops
                         // Type: Vec<Vec<Vec<[f64; 2]>>> where inner is [Outer, Hole1, Hole2...]
+                        
+                        // Segment metadata for side face grouping (populated in else branch)
+                        // Structure: loop_segments[profile_idx][loop_idx] = Vec<ProfileSegment>
+                        let mut loop_segments: Vec<Vec<Vec<ProfileSegment>>> = Vec::new();
+                        
                         let loops_2d: Vec<Vec<Vec<[f64; 2]>>> = if let Some(regions) = profile_regions {
                             // Use provided region boundary points directly
-                            logs.push(format!("Using {} provided profile regions", regions.len()));
+                            // No entity info available - segments will be empty, falling back to segment-per-face
+                            logs.push(format!("DEBUG: Using profile_regions branch. Regions count: {}", regions.len()));
+                            if !loop_segments.is_empty() {
+                                logs.push(format!("DEBUG: loop_segments NOT empty somehow? len: {}", loop_segments.len()));
+                            } else {
+                                logs.push("DEBUG: loop_segments is empty (expected for regions branch)".to_string());
+                            }
                             regions
                         } else {
+                            logs.push("DEBUG: Using sketch entity extraction branch".to_string());
+                            if let Some(sel) = &profile_selection {
+                                logs.push(format!("DEBUG: profile_selection has {} items", sel.len()));
+                            } else {
+                                logs.push("DEBUG: profile_selection is None".to_string());
+                            }
+                            
                             // Fallback: filter entities and use find_closed_loops
                             let filtered_entities: Vec<crate::sketch::types::SketchEntity> = match profile_selection {
                                 Some(selection) if !selection.is_empty() => {
@@ -426,12 +467,25 @@ impl Runtime {
                             let loops = crate::sketch::chains::find_closed_loops(&filtered_entities);
                             logs.push(format!("Found {} closed loops for extrusion", loops.len()));
                             
-                            // Convert chain loops to 2D point arrays
-                            loops.into_iter().map(|chain| {
+                            // Convert chain loops to 2D point arrays AND collect segment metadata
+                            // loop_segments tracks source entity for each segment (for face grouping)
+                            
+                            let points_result: Vec<Vec<Vec<[f64; 2]>>> = loops.into_iter().map(|chain| {
                                 let mut points: Vec<[f64; 2]> = Vec::new();
+                                let mut segments: Vec<ProfileSegment> = Vec::new();
+                                
                                 for entity in chain {
+                                    let entity_id = entity.id.to_string();
+                                    
                                     match &entity.geometry {
                                         crate::sketch::types::SketchGeometry::Line { start, end } => {
+                                            // Single segment from line
+                                            segments.push(ProfileSegment {
+                                                p1: *start,
+                                                p2: *end,
+                                                source: ProfileSegmentSource::Line { entity_id: entity_id.clone() },
+                                            });
+                                            
                                             if points.is_empty() || 
                                                (points.last().unwrap()[0] - start[0]).abs() > 1e-6 ||
                                                (points.last().unwrap()[1] - start[1]).abs() > 1e-6 {
@@ -440,49 +494,159 @@ impl Runtime {
                                             points.push(*end);
                                         },
                                         crate::sketch::types::SketchGeometry::Circle { center, radius } => {
-                                            let segments = 32;
-                                            for j in 0..segments {
-                                                let angle = (j as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
-                                                points.push([
-                                                    center[0] + radius * angle.cos(),
-                                                    center[1] + radius * angle.sin()
-                                                ]);
+                                            // Circle creates ~32 segments, all with same source
+                                            let num_segments = 32;
+                                            for j in 0..num_segments {
+                                                let angle1 = (j as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
+                                                let angle2 = ((j + 1) as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
+                                                let p1 = [center[0] + radius * angle1.cos(), center[1] + radius * angle1.sin()];
+                                                let p2 = [center[0] + radius * angle2.cos(), center[1] + radius * angle2.sin()];
+                                                
+                                                segments.push(ProfileSegment {
+                                                    p1,
+                                                    p2,
+                                                    source: ProfileSegmentSource::Circle { 
+                                                        entity_id: entity_id.clone(), 
+                                                        center: *center, 
+                                                        radius: *radius 
+                                                    },
+                                                });
+                                                points.push(p1);
                                             }
                                         },
                                         crate::sketch::types::SketchGeometry::Ellipse { center, semi_major, semi_minor, rotation } => {
-                                            let segments = 32;
+                                            let num_segments = 32;
                                             let cos_r = rotation.cos();
                                             let sin_r = rotation.sin();
-                                            for j in 0..segments {
-                                                let t = (j as f64 / segments as f64) * 2.0 * std::f64::consts::PI;
-                                                let x_local = semi_major * t.cos();
-                                                let y_local = semi_minor * t.sin();
-                                                points.push([
-                                                    center[0] + x_local * cos_r - y_local * sin_r,
-                                                    center[1] + x_local * sin_r + y_local * cos_r
-                                                ]);
+                                            for j in 0..num_segments {
+                                                let t1 = (j as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
+                                                let t2 = ((j + 1) as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
+                                                let x1 = semi_major * t1.cos();
+                                                let y1 = semi_minor * t1.sin();
+                                                let x2 = semi_major * t2.cos();
+                                                let y2 = semi_minor * t2.sin();
+                                                let p1 = [center[0] + x1 * cos_r - y1 * sin_r, center[1] + x1 * sin_r + y1 * cos_r];
+                                                let p2 = [center[0] + x2 * cos_r - y2 * sin_r, center[1] + x2 * sin_r + y2 * cos_r];
+                                                
+                                                segments.push(ProfileSegment {
+                                                    p1,
+                                                    p2,
+                                                    source: ProfileSegmentSource::Ellipse { entity_id: entity_id.clone(), center: *center },
+                                                });
+                                                points.push(p1);
                                             }
                                         },
                                         crate::sketch::types::SketchGeometry::Arc { center, radius, start_angle, end_angle } => {
-                                            let segments = 16;
+                                            let num_segments = 16;
                                             let angle_span = end_angle - start_angle;
-                                            for j in 0..=segments {
-                                                let t = j as f64 / segments as f64;
-                                                let angle = start_angle + t * angle_span;
-                                                points.push([
-                                                    center[0] + radius * angle.cos(),
-                                                    center[1] + radius * angle.sin()
-                                                ]);
+                                            for j in 0..num_segments {
+                                                let t1 = j as f64 / num_segments as f64;
+                                                let t2 = (j + 1) as f64 / num_segments as f64;
+                                                let a1 = start_angle + t1 * angle_span;
+                                                let a2 = start_angle + t2 * angle_span;
+                                                let p1 = [center[0] + radius * a1.cos(), center[1] + radius * a1.sin()];
+                                                let p2 = [center[0] + radius * a2.cos(), center[1] + radius * a2.sin()];
+                                                
+                                                segments.push(ProfileSegment {
+                                                    p1,
+                                                    p2,
+                                                    source: ProfileSegmentSource::Arc { 
+                                                        entity_id: entity_id.clone(), 
+                                                        center: *center, 
+                                                        radius: *radius 
+                                                    },
+                                                });
+                                                points.push(p1);
                                             }
+                                            // Push final point of arc
+                                            let final_pt = [center[0] + radius * end_angle.cos(), center[1] + radius * end_angle.sin()];
+                                            points.push(final_pt);
                                         },
                                         _ => {}
                                     }
                                 }
+                                // Store segments for this loop in the outer-scoped variable
+                                loop_segments.push(vec![segments]);
+                                
                                 vec![points] // Wrap single loop as a profile with no holes
-                            }).collect()
+                            }).collect();
+                            
+                            points_result
                         };
                         
-                        logs.push(format!("Processing {} loops for extrusion", loops_2d.len()));
+                        logs.push(format!("Processing {} profiles for extrusion", loops_2d.len()));
+
+                        // If loop_segments is empty (because we used profile_regions), try to reconstruct metadata
+                        // by geometrically matching segments back to sketch entities.
+                        if loop_segments.is_empty() { 
+                            {
+                                logs.push("Attempting to reconstruct segment metadata from sketch geometry...".to_string());
+                                let entities = &sketch.entities;
+                                let EPSILON = 1e-4;
+
+                                for profile_loops in &loops_2d {
+                                    let mut profile_segs = Vec::new();
+                                    for loop_pts in profile_loops {
+                                        let mut segments = Vec::new();
+                                        let len = loop_pts.len();
+                                        if len > 0 {
+                                            for i in 0..len {
+                                                let p1 = loop_pts[i];
+                                                // Handle closed loop wrapping
+                                                let p2 = loop_pts[(i + 1) % len];
+                                                
+                                                let mut source = ProfileSegmentSource::Unknown;
+                                                
+                                                // Try to match against sketch entities
+                                                for entity in entities {
+                                                    match &entity.geometry {
+                                                        crate::sketch::types::SketchGeometry::Circle { center, radius } => {
+                                                            let d1 = ((p1[0]-center[0]).powi(2) + (p1[1]-center[1]).powi(2)).sqrt();
+                                                            let d2 = ((p2[0]-center[0]).powi(2) + (p2[1]-center[1]).powi(2)).sqrt();
+                                                            if (d1 - radius).abs() < EPSILON && (d2 - radius).abs() < EPSILON {
+                                                                source = ProfileSegmentSource::Circle {
+                                                                    entity_id: entity.id.to_string(),
+                                                                    center: *center,
+                                                                    radius: *radius,
+                                                                };
+                                                                break;
+                                                            }
+                                                        },
+                                                        crate::sketch::types::SketchGeometry::Arc { center, radius, .. } => {
+                                                            let d1 = ((p1[0]-center[0]).powi(2) + (p1[1]-center[1]).powi(2)).sqrt();
+                                                            let d2 = ((p2[0]-center[0]).powi(2) + (p2[1]-center[1]).powi(2)).sqrt();
+                                                            if (d1 - radius).abs() < EPSILON && (d2 - radius).abs() < EPSILON {
+                                                                // Ideally check angles too, but distance is sufficient for now
+                                                                // to distinguish from other geometry
+                                                                source = ProfileSegmentSource::Arc {
+                                                                    entity_id: entity.id.to_string(),
+                                                                    center: *center,
+                                                                    radius: *radius,
+                                                                };
+                                                                break;
+                                                            }
+                                                        },
+                                                        crate::sketch::types::SketchGeometry::Line { start, end } => {
+                                                            // Check if points are on the line segment
+                                                            // Distance from point to line check
+                                                            // For now, if it's not a curve, we don't strictly need to group it 
+                                                            // unless we want single-face selection for collinear segments?
+                                                            // Current behavior for lines is fine (Plane).
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                }
+                                                
+                                                segments.push(ProfileSegment { p1, p2, source });
+                                            }
+                                        }
+                                        profile_segs.push(segments);
+                                    }
+                                    loop_segments.push(profile_segs);
+                                }
+                                logs.push("Reconstructed segment metadata.".to_string());
+                            }
+                        }
 
                         let to_3d = |u: f64, v: f64| -> [f64; 3] {
                             [
@@ -560,9 +724,15 @@ impl Runtime {
                                 }
                                 
                                 // Maintain side faces (loop over ALL loops: outer + holes)
-                                // Only logic change: iterate through all loops in current profile
+                                // Use a cache to assign single face ID per source entity
+                                let mut face_id_cache: std::collections::HashMap<String, crate::topo::naming::TopoId> = std::collections::HashMap::new();
+                                
                                 for (sub_idx, loop_pts_2d) in profile_loops_2d.iter().enumerate() {
                                     let profile_points: Vec<[f64; 3]> = loop_pts_2d.iter().map(|pt| to_3d(pt[0], pt[1])).collect();
+                                    
+                                    // Get segments for this loop if available
+                                    let segments_opt = loop_segments.get(profile_idx)
+                                        .and_then(|p| p.get(sub_idx));
                                     
                                     for i in 0..profile_points.len() {
                                         let j = (i + 1) % profile_points.len();
@@ -572,66 +742,254 @@ impl Runtime {
                                         let dist_sq = (p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2) + (p1[2]-p2[2]).powi(2);
                                         if dist_sq < 1e-9 { continue; }
 
-                                        let side_face_id = ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face);
+                                        // Determine face ID based on source entity (curved surfaces share same ID)
+                                        let (side_face_id, is_new_face) = if let Some(segments) = segments_opt {
+                                            if let Some(seg) = segments.get(i) {
+                                                // Get entity_id from source
+                                                let entity_id = match &seg.source {
+                                                    ProfileSegmentSource::Line { entity_id } => entity_id.clone(),
+                                                    ProfileSegmentSource::Circle { entity_id, .. } => entity_id.clone(),
+                                                    ProfileSegmentSource::Arc { entity_id, .. } => entity_id.clone(),
+                                                    ProfileSegmentSource::Ellipse { entity_id, .. } => entity_id.clone(),
+                                                    ProfileSegmentSource::Unknown => format!("unknown_{}_{}_{}", profile_idx, sub_idx, i),
+                                                };
+                                                
+                                                // Cache lookup: same entity_id = same face_id
+                                                let cache_key = format!("{}_{}", profile_idx, entity_id);
+                                                if let Some(&cached_id) = face_id_cache.get(&cache_key) {
+                                                    (cached_id, false) // Reuse existing face ID
+                                                } else {
+                                                    // Create new face ID for this source entity
+                                                    let face_name = match &seg.source {
+                                                        ProfileSegmentSource::Circle { .. } => format!("CylinderFace_{}_{}", profile_idx, entity_id),
+                                                        ProfileSegmentSource::Arc { .. } => format!("ArcFace_{}_{}", profile_idx, entity_id),
+                                                        ProfileSegmentSource::Ellipse { .. } => format!("EllipseFace_{}_{}", profile_idx, entity_id),
+                                                        _ => format!("PlaneFace_{}_{}", profile_idx, entity_id),
+                                                    };
+                                                    let new_id = ctx.derive(&face_name, TopoRank::Face);
+                                                    face_id_cache.insert(cache_key, new_id);
+                                                    (new_id, true) // New face ID
+                                                }
+                                            } else {
+                                                // Fallback: no segment info, create per-segment face
+                                                (ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face), true)
+                                            }
+                                        } else {
+                                            // No segment metadata (from profile_regions path), create per-segment face  
+                                            (ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face), true)
+                                        };
                                         
                                         let v1_bottom = Point3::new(p1[0] + vec_bottom[0], p1[1] + vec_bottom[1], p1[2] + vec_bottom[2]);
                                         let v2_bottom = Point3::new(p2[0] + vec_bottom[0], p2[1] + vec_bottom[1], p2[2] + vec_bottom[2]);
                                         let v1_top = Point3::new(p1[0] + vec_top[0], p1[1] + vec_top[1], p1[2] + vec_top[2]);
                                         let v2_top = Point3::new(p2[0] + vec_top[0], p2[1] + vec_top[1], p2[2] + vec_top[2]);
                                         
-                                        // Side normal approximation (planar walls)
-                                        let dx = p2[0] - p1[0];
-                                        let dy = p2[1] - p1[1];
-                                        let dz = p2[2] - p1[2];
-                                        let tx = dx; let ty = dy; let tz = dz;
-                                        let nx = ty * normal[2] - tz * normal[1];
-                                        let ny = tz * normal[0] - tx * normal[2];
-                                        let nz = tx * normal[1] - ty * normal[0];
-                                        let len = (nx*nx + ny*ny + nz*nz).sqrt();
-                                        let side_normal = if len > 1e-6 { [nx/len, ny/len, nz/len] } else { [0.0, 0.0, 1.0] };
-
-                                        // Register side entity
-                                        let side_entity = KernelEntity {
-                                            id: side_face_id,
-                                            geometry: AnalyticGeometry::Plane {
-                                                origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
-                                                normal: side_normal,
+                                        // Explicitly calculate smooth normals for rendering (every segment)
+                                        let mut smooth_normal_1: Option<Vector3> = None;
+                                        let mut smooth_normal_2: Option<Vector3> = None;
+                                        
+                                        if let Some(segments) = segments_opt {
+                                            if let Some(seg) = segments.get(i) {
+                                                match &seg.source {
+                                                    ProfileSegmentSource::Circle { center, .. } |
+                                                    ProfileSegmentSource::Arc { center, .. } => {
+                                                        // Compute smooth vertex normals for rendering
+                                                        // Normal is radial from center in the sketch plane
+                                                        let n1_2d = [seg.p1[0] - center[0], seg.p1[1] - center[1]];
+                                                        let len1 = (n1_2d[0]*n1_2d[0] + n1_2d[1]*n1_2d[1]).sqrt();
+                                                        let n1_local = if len1 > 1e-6 { [n1_2d[0]/len1, n1_2d[1]/len1] } else { [1.0, 0.0] };
+                                                        
+                                                        let n2_2d = [seg.p2[0] - center[0], seg.p2[1] - center[1]];
+                                                        let len2 = (n2_2d[0]*n2_2d[0] + n2_2d[1]*n2_2d[1]).sqrt();
+                                                        let n2_local = if len2 > 1e-6 { [n2_2d[0]/len2, n2_2d[1]/len2] } else { [1.0, 0.0] };
+                                                        
+                                                        // Transform local 2D normal to global 3D normal
+                                                        // Normal is purely in the sketch plane (perpendicular to extrusion axis)
+                                                        let n1_3d = Vector3::new(
+                                                            x_axis[0]*n1_local[0] + y_axis[0]*n1_local[1],
+                                                            x_axis[1]*n1_local[0] + y_axis[1]*n1_local[1],
+                                                            x_axis[2]*n1_local[0] + y_axis[2]*n1_local[1]
+                                                        ).normalize();
+                                                        
+                                                        let n2_3d = Vector3::new(
+                                                            x_axis[0]*n2_local[0] + y_axis[0]*n2_local[1],
+                                                            x_axis[1]*n2_local[0] + y_axis[1]*n2_local[1],
+                                                            x_axis[2]*n2_local[0] + y_axis[2]*n2_local[1]
+                                                        ).normalize();
+                                                        
+                                                        smooth_normal_1 = Some(n1_3d);
+                                                        smooth_normal_2 = Some(n2_3d);
+                                                    },
+                                                    _ => {}
+                                                }
                                             }
-                                        };
-                                        topology_manifest.insert(side_face_id, side_entity);
+                                        }
+
+                                        // Register side entity only once per face (when is_new_face)
+                                        if is_new_face {
+                                            // Side normal approximation (flat) - used for fallback geometry
+                                            let dx = p2[0] - p1[0];
+                                            let dy = p2[1] - p1[1];
+                                            let dz = p2[2] - p1[2];
+                                            let tx = dx; let ty = dy; let tz = dz;
+                                            let nx = ty * normal[2] - tz * normal[1];
+                                            let ny = tz * normal[0] - tx * normal[2];
+                                            let nz = tx * normal[1] - ty * normal[0];
+                                            let len = (nx*nx + ny*ny + nz*nz).sqrt();
+                                            let side_normal = if len > 1e-6 { [nx/len, ny/len, nz/len] } else { [0.0, 0.0, 1.0] };
+
+                                            // Generate analytical geometry based on source type
+                                            let geometry = if let Some(segments) = segments_opt {
+                                                if let Some(seg) = segments.get(i) {
+                                                    match &seg.source {
+                                                        ProfileSegmentSource::Circle { center, radius, .. } |
+                                                        ProfileSegmentSource::Arc { center, radius, .. } => {
+                                                            // Cylinder analytical geometry
+                                                            let center_3d = to_3d(center[0], center[1]);
+                                                            AnalyticGeometry::Cylinder {
+                                                                axis_start: center_3d,
+                                                                axis_dir: normal,
+                                                                radius: *radius,
+                                                            }
+                                                        },
+                                                        _ => {
+                                                            // Default to plane
+                                                            AnalyticGeometry::Plane {
+                                                                origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
+                                                                normal: side_normal,
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
+                                                    AnalyticGeometry::Plane {
+                                                        origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
+                                                        normal: side_normal,
+                                                    }
+                                                }
+                                            } else {
+                                                AnalyticGeometry::Plane {
+                                                    origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
+                                                    normal: side_normal,
+                                                }
+                                            };
+
+                                            let side_entity = KernelEntity {
+                                                id: side_face_id,
+                                                geometry,
+                                            };
+                                            topology_manifest.insert(side_face_id, side_entity);
+                                        }
                                         
                                         // For holes (sub_idx > 0), reverse winding so faces point inward
-                                        if sub_idx == 0 {
-                                            // Outer loop: faces point outward
-                                            tessellation.add_triangle(v1_bottom, v2_bottom, v1_top, side_face_id);
-                                            tessellation.add_triangle(v2_bottom, v2_top, v1_top, side_face_id);
+                                        // Use smooth normals if available
+                                        if let (Some(n1), Some(n2)) = (smooth_normal_1, smooth_normal_2) {
+                                            // Ensure normals point into valid material (out of the hole / away from solid for outer?)
+                                            // Calculated radial normals point OUT from center.
+                                            let n1_final = if sub_idx > 0 { -n1 } else { n1 };
+                                            let n2_final = if sub_idx > 0 { -n2 } else { n2 };
+
+                                            if sub_idx == 0 {
+                                                // Outer loop: faces point outward
+                                                tessellation.add_triangle_with_normals(v1_bottom, v2_bottom, v1_top, n1_final, n2_final, n1_final, side_face_id);
+                                                tessellation.add_triangle_with_normals(v2_bottom, v2_top, v1_top, n2_final, n2_final, n1_final, side_face_id);
+                                            } else {
+                                                // Hole loop: faces point inward (reversed winding)
+                                                tessellation.add_triangle_with_normals(v1_bottom, v1_top, v2_bottom, n1_final, n1_final, n2_final, side_face_id);
+                                                tessellation.add_triangle_with_normals(v2_bottom, v1_top, v2_top, n2_final, n1_final, n2_final, side_face_id);
+                                            }
                                         } else {
-                                            // Hole loop: faces point inward (reversed winding)
-                                            tessellation.add_triangle(v1_bottom, v1_top, v2_bottom, side_face_id);
-                                            tessellation.add_triangle(v2_bottom, v1_top, v2_top, side_face_id);
+                                            // Fallback to flat shading
+                                            if sub_idx == 0 {
+                                                // Outer loop: faces point outward
+                                                tessellation.add_triangle(v1_bottom, v2_bottom, v1_top, side_face_id);
+                                                tessellation.add_triangle(v2_bottom, v2_top, v1_top, side_face_id);
+                                            } else {
+                                                // Hole loop: faces point inward (reversed winding)
+                                                tessellation.add_triangle(v1_bottom, v1_top, v2_bottom, side_face_id);
+                                                tessellation.add_triangle(v2_bottom, v1_top, v2_top, side_face_id);
+                                            }
                                         }
                                         
                                         // === ADD EDGES FOR SELECTION ===
+                                        // === ADD EDGES FOR SELECTION ===
                                         // Bottom edge
-                                        let bottom_edge_id = ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                        let bottom_edge_id = if let Some(segments) = segments_opt {
+                                             if let Some(seg) = segments.get(i) {
+                                                 match &seg.source {
+                                                     ProfileSegmentSource::Circle { entity_id, .. } => 
+                                                         ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
+                                                      ProfileSegmentSource::Arc { entity_id, .. } => 
+                                                         ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
+                                                     _ => ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                                 }
+                                             } else {
+                                                 ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                             }
+                                        } else {
+                                            ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                        };
                                         tessellation.add_line(v1_bottom, v2_bottom, bottom_edge_id);
                                         
                                         // Top edge
-                                        let top_edge_id = ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                        let top_edge_id = if let Some(segments) = segments_opt {
+                                             if let Some(seg) = segments.get(i) {
+                                                 match &seg.source {
+                                                     ProfileSegmentSource::Circle { entity_id, .. } => 
+                                                         ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
+                                                      ProfileSegmentSource::Arc { entity_id, .. } => 
+                                                         ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
+                                                     _ => ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                                 }
+                                             } else {
+                                                 ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                             }
+                                        } else {
+                                            ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
+                                        };
                                         tessellation.add_line(v1_top, v2_top, top_edge_id);
                                         
-                                        // Vertical edge (only once per corner, at v1)
-                                        let vert_edge_id = ctx.derive(&format!("VertEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
-                                        tessellation.add_line(v1_bottom, v1_top, vert_edge_id);
-                                        
-                                        // === ADD VERTICES FOR SELECTION ===
-                                        // Bottom corner vertex
-                                        let bottom_vertex_id = ctx.derive(&format!("BottomVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
-                                        tessellation.add_point(v1_bottom, bottom_vertex_id);
-                                        
-                                        // Top corner vertex
-                                        let top_vertex_id = ctx.derive(&format!("TopVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
-                                        tessellation.add_point(v1_top, top_vertex_id);
+                                        // Conditional Vertical Edge & Vertex Generation
+                                        let mut generate_vertical = true;
+                                        if let Some(segments) = segments_opt {
+                                            if let Some(curr_seg) = segments.get(i) {
+                                                let prev_idx = (i + profile_points.len() - 1) % profile_points.len();
+                                                if let Some(prev_seg) = segments.get(prev_idx) {
+                                                    // Check if sources are the same entity
+                                                    match (&curr_seg.source, &prev_seg.source) {
+                                                        (ProfileSegmentSource::Circle { entity_id: id1, .. }, 
+                                                         ProfileSegmentSource::Circle { entity_id: id2, .. }) if id1 == id2 => {
+                                                            generate_vertical = false;
+                                                        },
+                                                        (ProfileSegmentSource::Arc { entity_id: id1, .. }, 
+                                                         ProfileSegmentSource::Arc { entity_id: id2, .. }) if id1 == id2 => {
+                                                            // For arcs, internal junctions are smooth, but start/end are not
+                                                            // BUT: i and prev_idx might be wrap-around for a non-closed arc?
+                                                            // For now, treat same-ID arc segments as smooth
+                                                            generate_vertical = false;
+                                                            
+                                                            // Special case: if this is a closed loop made of one arc (e.g. 360 arc?), 
+                                                            // check if vertices coincide. But loop_pts_2d is already processed.
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if generate_vertical {
+                                            // Vertical edge
+                                            let vert_edge_id = ctx.derive(&format!("VertEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
+                                            tessellation.add_line(v1_bottom, v1_top, vert_edge_id);
+                                            
+                                            // === ADD VERTICES FOR SELECTION ===
+                                            // Bottom corner vertex
+                                            let bottom_vertex_id = ctx.derive(&format!("BottomVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
+                                            tessellation.add_point(v1_bottom, bottom_vertex_id);
+                                            
+                                            // Top corner vertex
+                                            let top_vertex_id = ctx.derive(&format!("TopVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
+                                            tessellation.add_point(v1_top, top_vertex_id);
+                                        }
                                     }
                                 }
                             }

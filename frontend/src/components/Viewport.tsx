@@ -351,7 +351,15 @@ const Viewport: Component<ViewportProps> = (props) => {
         const intersects = raycaster.intersectObjects(targets, false);
 
         // Sort by priority: Hitbox > Defining Points > Lines > Faces, then by distance
+        // Sort by distance first to respect occlusion, then by priority for coplanar items
         intersects.sort((a, b) => {
+            const distDiff = a.distance - b.distance;
+            // If distances are significantly different, closest object wins
+            // This prevents selecting sketch entities "through" a solid face
+            if (Math.abs(distDiff) > 0.0001) {
+                return distDiff;
+            }
+
             const typeScore = (obj: THREE.Object3D) => {
                 // Highest priority: Hitbox for reliable picking
                 if (obj.name === "client_sketch_hitbox") return -2;
@@ -367,8 +375,7 @@ const Viewport: Component<ViewportProps> = (props) => {
             const scoreA = typeScore(a.object);
             const scoreB = typeScore(b.object);
 
-            if (scoreA !== scoreB) return scoreA - scoreB;
-            return a.distance - b.distance;
+            return scoreA - scoreB;
         });
 
         return intersects;
@@ -591,44 +598,37 @@ const Viewport: Component<ViewportProps> = (props) => {
                     let idx = hit.index ?? hit.faceIndex;
                     if (idx !== undefined && idx !== null && hit.object.userData.idMap[idx]) {
                         topoId = hit.object.userData.idMap[idx];
-                        console.log("[Click] Sketch entity:", topoId);
                         break;
                     }
                     continue;
                 }
 
                 // 2. FACE SELECTION (mainMesh with faceIndex) - most common 3D selection
-                if (hit.object === mainMesh && hit.faceIndex !== undefined &&
-                    props.tessellation?.triangle_ids?.length > 0) {
+                if (hit.object === mainMesh && hit.faceIndex != null && props.tessellation?.triangle_ids) {
                     const idx = hit.faceIndex;
-                    if (idx >= 0 && idx < props.tessellation.triangle_ids.length) {
+                    if (idx != null && idx >= 0 && idx < props.tessellation.triangle_ids.length) {
                         topoId = props.tessellation.triangle_ids[idx];
-                        console.log("[Click] Face:", topoId);
                         break;
                     }
                     continue;
                 }
 
                 // 3. EDGE SELECTION (LineSegments2 named "sketch_lines")
-                if (hit.object.name === 'sketch_lines' && hit.faceIndex !== undefined &&
-                    props.tessellation?.line_ids?.length > 0) {
+                if (hit.object.name === 'sketch_lines' && hit.faceIndex != null && props.tessellation?.line_ids) {
                     // LineSegments2 uses faceIndex as segment index
                     const idx = hit.faceIndex;
-                    if (idx >= 0 && idx < props.tessellation.line_ids.length) {
+                    if (idx != null && idx >= 0 && idx < props.tessellation.line_ids.length) {
                         topoId = props.tessellation.line_ids[idx];
-                        console.log("[Click] Edge:", topoId);
                         break;
                     }
                     continue;
                 }
 
                 // 4. VERTEX SELECTION (Points geometry named "vertices") - last priority
-                if (hit.object.name === 'vertices' && hit.index !== undefined &&
-                    props.tessellation?.point_ids?.length > 0) {
+                if (hit.object.name === 'vertices' && hit.index != null && props.tessellation?.point_ids) {
                     const idx = hit.index;
-                    if (idx >= 0 && idx < props.tessellation.point_ids.length) {
+                    if (idx != null && idx >= 0 && idx < props.tessellation.point_ids.length) {
                         topoId = props.tessellation.point_ids[idx];
-                        console.log("[Click] Vertex:", topoId);
                         break;
                     }
                     continue;
