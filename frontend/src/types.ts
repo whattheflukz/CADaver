@@ -238,3 +238,20 @@ export interface EntityConstraintStatus {
     /** True if entity is involved in a constraint conflict */
     involved_in_conflict: boolean;
 }
+
+// ===== Keyboard Shortcut System Types =====
+
+/** A single shortcut binding */
+export interface ShortcutBinding {
+    commandId: string;
+    shortcut: string; // e.g., "Ctrl+Shift+L" or "L"
+    isCustom: boolean;
+}
+
+/** Stored shortcut configuration (localStorage) */
+export interface ShortcutConfig {
+    /** Version for future migrations */
+    version: number;
+    /** Custom bindings: commandId -> shortcut */
+    bindings: Record<string, string>;
+}

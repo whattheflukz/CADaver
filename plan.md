@@ -150,10 +150,10 @@ Mode changes must:
 - [x] Unit system (mm, inch, deg, etc.)
 
 ### **UI Infrastructure (Added)**
-- [ ] Mode-aware toolbar system
-- [ ] Persistent layout (toolbar always visible)
+- [x] Mode-aware toolbar system *(Added - SketchToolbar/ModelingToolbar)*
+- [x] Persistent layout (toolbar always visible) *(Added)*
 - [x] Hover tooltips with descriptions *(Added - ToolButton component)*
-- [ ] Keyboard shortcut system
+- [x] Keyboard shortcut system *(Added - useKeyboardShortcuts hook with customization)*
 - [x] Command palette infrastructure
 
 ### **Reusable UI Components (Added — Best Practice)**
@@ -174,7 +174,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 
 **Future Candidates:**
 - [ ] `SelectionField` — Reusable "click to select entity" input field
-- [ ] `NumericInput` — Styled number input with unit support
+- [x] `NumericInput` — Styled number input with unit support and variable expressions *(Added)*
 - [x] `ToolButton` — Toolbar button with rich tooltip, shortcut, and description display *(Added)*
 
 

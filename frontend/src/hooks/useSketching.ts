@@ -112,6 +112,7 @@ export function useSketching(props: UseSketchingProps) {
     constraintIndex: number;
     type: 'Distance' | 'Angle' | 'Radius';
     currentValue: number;
+    expression?: string;
   } | null>(null);
 
   // Dimension Tool State
@@ -1137,6 +1138,12 @@ export function useSketching(props: UseSketchingProps) {
                   type: 'Distance',
                   currentValue: constraint.Distance.value
                 });
+                setEditingDimension({
+                  constraintIndex: i,
+                  type: 'Distance',
+                  currentValue: constraint.Distance.value,
+                  expression: constraint.Distance.style?.expression
+                });
                 return;
               }
             }
@@ -1200,6 +1207,12 @@ export function useSketching(props: UseSketchingProps) {
                   type: 'Angle',
                   currentValue: constraint.Angle!.value
                 });
+                setEditingDimension({
+                  constraintIndex: i,
+                  type: 'Angle',
+                  currentValue: constraint.Angle!.value,
+                  expression: constraint.Angle!.style?.expression
+                });
                 return;
               }
             }
@@ -1252,6 +1265,12 @@ export function useSketching(props: UseSketchingProps) {
                 constraintIndex: i,
                 type: 'Radius',
                 currentValue: constraint.Radius.value
+              });
+              setEditingDimension({
+                constraintIndex: i,
+                type: 'Radius',
+                currentValue: constraint.Radius.value,
+                expression: constraint.Radius.style?.expression
               });
               return;
             }

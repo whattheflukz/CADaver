@@ -263,3 +263,52 @@
     background-color: #4a4a4a;
     border-color: #666;
 }
+
+/* Variables list within tree */
+.variables-list-tree {
+    margin-top: 4px;
+    margin-left: 12px;
+    padding: 4px;
+    background-color: rgba(35, 35, 35, 0.95);
+    border-radius: 0 0 8px 8px;
+    border: 1px solid #3a5a7a;
+    border-top: none;
+    font-size: 0.9em;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.variable-tree-item {
+    padding: 6px 8px;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: rgba(0, 0, 0, 0.2);
+}
+
+.variable-tree-item:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.var-name {
+    color: #4da6ff;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.var-value {
+    color: #ccc;
+    font-size: 11px;
+    margin-left: 8px;
+}
+
+.empty-vars {
+    padding: 8px;
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    font-size: 11px;
+}

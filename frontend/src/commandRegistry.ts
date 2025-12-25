@@ -237,8 +237,27 @@ export const COMMAND_DEFINITIONS: Command[] = [
         id: "action:new_sketch",
         name: "New Sketch",
         description: "Create a new sketch on a plane or face",
+        shortcut: "S",
         modes: ["modeling"],
         category: "modeling",
+    },
+
+    // === GLOBAL COMMANDS (All Modes) ===
+    {
+        id: "action:command_palette",
+        name: "Command Palette",
+        description: "Open the command palette",
+        shortcut: "Ctrl+K",
+        modes: ["all"],
+        category: "action",
+    },
+    {
+        id: "action:keyboard_shortcuts",
+        name: "Keyboard Shortcuts",
+        description: "View and customize keyboard shortcuts",
+        shortcut: "Ctrl+,",
+        modes: ["all"],
+        category: "action",
     },
 ];
 

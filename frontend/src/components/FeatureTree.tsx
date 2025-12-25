@@ -1,5 +1,5 @@
 import { type Component, For, createSignal, Show } from 'solid-js';
-import { type Feature, type FeatureGraphState } from '../types';
+import { type Feature, type FeatureGraphState, type Variable, type VariableUnit } from '../types';
 import './FeatureTree.css';
 
 
@@ -26,6 +26,29 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
         return props.graph.variables ? Object.keys(props.graph.variables.variables).length : 0;
     };
 
+    const [variablesExpanded, setVariablesExpanded] = createSignal(false);
+
+    const formatUnit = (unit: VariableUnit): string => {
+        if (unit === 'Dimensionless') return '';
+        if (typeof unit === 'object' && 'Length' in unit) {
+            const lengthMap: Record<string, string> = {
+                Millimeter: 'mm', Centimeter: 'cm', Meter: 'm', Inch: 'in', Foot: 'ft'
+            };
+            return lengthMap[unit.Length] || unit.Length;
+        }
+        if (typeof unit === 'object' && 'Angle' in unit) {
+            return unit.Angle === 'Degrees' ? '°' : 'rad';
+        }
+        return '';
+    };
+
+    const formatVariableValue = (variable: Variable): string => {
+        if (variable.error) return `Error: ${variable.error}`;
+        if (variable.cached_value === undefined || variable.cached_value === null) return '...';
+        const unitStr = formatUnit(variable.unit);
+        return `${variable.cached_value.toFixed(4)}${unitStr ? ' ' + unitStr : ''}`;
+    };
+
     return (
         <div class="feature-tree">
             <div class="feature-tree-header">
@@ -44,8 +67,32 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                         <Show when={variableCount() > 0}>
                             <span class="variable-count">{variableCount()}</span>
                         </Show>
-                        <span class="feature-expander">▶</span>
+                        <span
+                            class="feature-expander"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setVariablesExpanded(!variablesExpanded());
+                            }}
+                            title={variablesExpanded() ? "Collapse" : "Expand"}
+                        >
+                            {variablesExpanded() ? '▼' : '▶'}
+                        </span>
                     </div>
+                    <Show when={variablesExpanded()}>
+                        <div class="feature-children variables-list-tree">
+                            <For each={Object.values(props.graph.variables?.variables || {})}>
+                                {(variable: any) => (
+                                    <div class="variable-tree-item">
+                                        <span class="var-name">@{variable.name}</span>
+                                        <span class="var-value">= {formatVariableValue(variable)}</span>
+                                    </div>
+                                )}
+                            </For>
+                            <Show when={variableCount() === 0}>
+                                <div class="empty-vars">No variables</div>
+                            </Show>
+                        </div>
+                    </Show>
                 </div>
 
                 <For each={props.graph.sort_order}>

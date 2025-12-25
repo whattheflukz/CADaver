@@ -1,4 +1,4 @@
-import { createSignal, type Component, type JSX, Show, onMount } from 'solid-js';
+import { createSignal, type Component, type JSX, Show, onMount, onCleanup, createEffect } from 'solid-js';
 
 interface BaseModalProps {
     isOpen: boolean;
@@ -10,6 +10,9 @@ interface BaseModalProps {
     cancelLabel?: string;
     width?: number;
     initialPosition?: { x: number; y: number };
+    showCancel?: boolean;
+    persistenceKey?: string;
+    spawnPosition?: 'center' | 'bottom-left';
     children: JSX.Element;
 }
 
@@ -33,18 +36,66 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
         };
     };
 
-    // After mount, measure modal and position it in lower-left
+    // Keydown listener for Escape
     onMount(() => {
-        if (modalRef) {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && props.isOpen && props.onCancel) {
+                props.onCancel();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        onCleanup(() => {
+            window.removeEventListener('keydown', handleKeyDown);
+        });
+    });
+
+    // Position modal when it opens
+    createEffect(() => {
+        // Only run if open and ref exists
+        if (props.isOpen && modalRef) {
             const rect = modalRef.getBoundingClientRect();
             const modalHeight = rect.height;
             const modalWidth = rect.width;
 
-            // Target position: lower-left corner
-            const targetX = props.initialPosition?.x ?? MARGIN;
-            const targetY = props.initialPosition?.y ?? (window.innerHeight - modalHeight - MARGIN);
+            let targetX = MARGIN;
+            let targetY = window.innerHeight - modalHeight - MARGIN;
 
-            // Clamp to ensure it stays on screen
+            // Determine target position based on props and persistence
+            let positionFound = false;
+
+            // 1. Try persistence
+            if (props.persistenceKey) {
+                try {
+                    const saved = localStorage.getItem(`modal_pos_${props.persistenceKey}`);
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        if (parsed && typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+                            targetX = parsed.x;
+                            targetY = parsed.y;
+                            positionFound = true;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to load modal position', e);
+                }
+            }
+
+            // 2. Try spawnPosition='center' (if not already found)
+            if (!positionFound && props.spawnPosition === 'center') {
+                targetX = (window.innerWidth - modalWidth) / 2;
+                targetY = (window.innerHeight - modalHeight) / 2;
+                positionFound = true;
+            }
+
+            // 3. Try initialPosition prop (if not already found)
+            if (!positionFound && props.initialPosition) {
+                targetX = props.initialPosition.x;
+                targetY = props.initialPosition.y;
+                positionFound = true;
+            }
+
+            // Clamp to ensure it stays on screen (e.g. if window resized)
             const clamped = clampPosition(targetX, targetY, modalWidth, modalHeight);
             setPosition(clamped);
         }
@@ -74,6 +125,11 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
             setIsDragging(false);
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
+
+            // Save position if persistenceKey is set
+            if (props.persistenceKey) {
+                localStorage.setItem(`modal_pos_${props.persistenceKey}`, JSON.stringify(position()));
+            }
         };
 
         window.addEventListener('mousemove', handleMouseMove);
@@ -131,24 +187,26 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
 
                 {/* Footer Buttons */}
                 <div style={{ display: 'flex', gap: '8px', "margin-top": '4px' }}>
-                    <button
-                        onClick={props.onCancel}
-                        style={{
-                            flex: 1,
-                            padding: '8px',
-                            background: 'transparent',
-                            border: '1px solid #555',
-                            color: 'white',
-                            "border-radius": '4px',
-                            cursor: 'pointer',
-                            "font-size": '13px',
-                            transition: 'background 0.15s'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = '#3a3a3a'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                    >
-                        {cancelLabel}
-                    </button>
+                    <Show when={props.showCancel !== false}>
+                        <button
+                            onClick={props.onCancel}
+                            style={{
+                                flex: 1,
+                                padding: '8px',
+                                background: 'transparent',
+                                border: '1px solid #555',
+                                color: 'white',
+                                "border-radius": '4px',
+                                cursor: 'pointer',
+                                "font-size": '13px',
+                                transition: 'background 0.15s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = '#3a3a3a'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                        >
+                            {cancelLabel}
+                        </button>
+                    </Show>
                     <button
                         onClick={props.onConfirm}
                         disabled={props.confirmDisabled}

@@ -1,5 +1,7 @@
 import { createSignal, type Component, onMount, createMemo, createEffect } from 'solid-js';
 import { BaseModal } from './BaseModal';
+import NumericInput from './NumericInput';
+import { parseValueOrExpression } from '../expressionEvaluator';
 import type { ParameterValue, FeatureGraphState, Sketch, SketchEntity, SketchRegion } from '../types';
 
 interface ExtrudeModalProps {
@@ -213,7 +215,8 @@ export function pointInRegion(point: [number, number], region: SketchRegion): bo
 }
 
 const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
-    const [distance, setDistance] = createSignal(10.0);
+    // Store distance as expression string to support variables
+    const [distanceExpr, setDistanceExpr] = createSignal("10");
     const [operation, setOperation] = createSignal("Add");
     const [flipExtrude, setFlipExtrude] = createSignal(false);
 
@@ -451,7 +454,7 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
     onMount(() => {
         const params = props.initialParams;
         if (params['distance'] && typeof params['distance'] === 'object' && 'Float' in params['distance']) {
-            setDistance((params['distance'] as any).Float);
+            setDistanceExpr(String((params['distance'] as any).Float));
         }
         if (params['operation'] && typeof params['operation'] === 'object' && 'String' in params['operation']) {
             setOperation((params['operation'] as any).String);
@@ -541,9 +544,13 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
         props.onUpdate(props.featureId, { [key]: value });
     };
 
-    const handleDistanceChange = (val: number) => {
-        setDistance(val);
-        updateParam('distance', { Float: val });
+    const handleDistanceChange = (expr: string) => {
+        setDistanceExpr(expr);
+        const variables = props.graph?.variables || { variables: {}, order: [] };
+        const val = parseValueOrExpression(expr, variables);
+        if (val !== null) {
+            updateParam('distance', { Float: val });
+        }
     };
 
     const handleOperationChange = (val: string) => {
@@ -713,14 +720,16 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
 
                     <div class="flex gap-2 items-center mt-1">
                         <span class="text-xs text-gray-400 w-12">Depth:</span>
-                        <input
-                            type="number"
-                            value={distance()}
-                            onInput={(e) => handleDistanceChange(parseFloat(e.currentTarget.value))}
-                            step={1.0}
-                            class="bg-gray-700 text-white p-1 rounded text-sm border border-gray-600 outline-none focus:border-blue-500 flex-1"
+                        <NumericInput
+                            value={distanceExpr()}
+                            onChange={handleDistanceChange}
+                            onEvaluate={(expr) => parseValueOrExpression(expr, props.graph?.variables || { variables: {}, order: [] })}
+                            variables={props.graph?.variables || { variables: {}, order: [] }}
+                            unit="mm"
+                            step={1}
+                            min={0.01}
+                            placeholder="10 or @depth"
                         />
-                        <span class="text-gray-400 text-xs">mm</span>
                     </div>
                 </div>
 

@@ -1,5 +1,8 @@
-import { type Component, For, createSignal, Show } from 'solid-js';
+import { type Component, For, createSignal, Show, createEffect } from 'solid-js';
 import type { Variable, VariableStore, VariableUnit } from '../types';
+import ExpressionInput from './ExpressionInput';
+import { parseValueOrExpression } from '../expressionEvaluator';
+import { BaseModal } from './BaseModal';
 import './VariablesPanel.css';
 
 interface VariablesPanelProps {
@@ -20,6 +23,17 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
     const [formExpression, setFormExpression] = createSignal('');
     const [formUnit, setFormUnit] = createSignal<VariableUnit>('Dimensionless');
     const [formDescription, setFormDescription] = createSignal('');
+
+    let nameInputRef: HTMLInputElement | undefined;
+
+    // Focus input when add form opens
+    createEffect(() => {
+        if (showAddForm() && nameInputRef) {
+            setTimeout(() => {
+                nameInputRef?.focus();
+            }, 50);
+        }
+    });
 
     // Get ordered list of variables
     const orderedVariables = () => {
@@ -111,13 +125,18 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
     };
 
     return (
-        <div class="variables-panel-overlay" onClick={() => props.onClose()}>
-            <div class="variables-panel" onClick={(e) => e.stopPropagation()}>
-                <div class="variables-header">
-                    <h2>Variables</h2>
-                    <button class="close-btn" onClick={() => props.onClose()}>×</button>
-                </div>
-
+        <BaseModal
+            isOpen={true} // Controlled by parent
+            title="Variables"
+            onConfirm={props.onClose}
+            onCancel={props.onClose} // Should be hidden
+            confirmLabel="Close"
+            showCancel={false}
+            width={400}
+            persistenceKey="variables-panel-v3"
+            spawnPosition="center"
+        >
+            <div class="variables-panel">
                 <div class="variables-content">
                     {/* Variable List */}
                     <div class="variables-list">
@@ -148,11 +167,11 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                                 onInput={(e) => setFormName(e.currentTarget.value)}
                                                 placeholder="Variable name"
                                             />
-                                            <input
-                                                type="text"
-                                                class="input-expr"
+                                            <ExpressionInput
                                                 value={formExpression()}
-                                                onInput={(e) => setFormExpression(e.currentTarget.value)}
+                                                onChange={setFormExpression}
+                                                onEvaluate={(expr) => parseValueOrExpression(expr, props.variables)}
+                                                variables={props.variables}
                                                 placeholder="Expression (e.g., 10 or @other * 2)"
                                             />
                                             <select
@@ -191,20 +210,20 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                         <div class="add-form">
                             <div class="form-row">
                                 <input
+                                    ref={nameInputRef}
                                     type="text"
                                     class="input-name"
                                     value={formName()}
                                     onInput={(e) => setFormName(e.currentTarget.value)}
                                     placeholder="Variable name"
-                                    autofocus
                                 />
                             </div>
                             <div class="form-row">
-                                <input
-                                    type="text"
-                                    class="input-expr"
+                                <ExpressionInput
                                     value={formExpression()}
-                                    onInput={(e) => setFormExpression(e.currentTarget.value)}
+                                    onChange={setFormExpression}
+                                    onEvaluate={(expr) => parseValueOrExpression(expr, props.variables)}
+                                    variables={props.variables}
                                     placeholder="Expression (e.g., 10, @other * 2, sqrt(16))"
                                 />
                             </div>
@@ -254,7 +273,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                     </div>
                 </div>
             </div>
-        </div>
+        </BaseModal>
     );
 };
 

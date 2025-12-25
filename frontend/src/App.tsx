@@ -17,13 +17,16 @@ import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
 import ModelingToolbar from './components/ModelingToolbar';
 import CommandPalette from './components/CommandPalette';
+import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import VariablesPanel from './components/VariablesPanel';
 import ExpressionInput from './components/ExpressionInput';
 import { parseValueOrExpression } from './expressionEvaluator';
+import { DimensionEditModal } from './components/DimensionEditModal';
 import { type AppMode, commandIdToSketchTool } from './commandRegistry';
 
 import { useMicrocadConnection } from './hooks/useMicrocadConnection';
 import { useSketching } from './hooks/useSketching';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { onMount, onCleanup, Show } from 'solid-js';
 
 const App: Component = () => {
@@ -39,6 +42,8 @@ const App: Component = () => {
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
   // Variables Panel state
   const [showVariablesPanel, setShowVariablesPanel] = createSignal(false);
+  // Keyboard Shortcuts Modal state
+  const [showKeyboardShortcutsModal, setShowKeyboardShortcutsModal] = createSignal(false);
 
   const toggleTreeExpand = (id: string) => {
     const current = treeExpanded();
@@ -199,30 +204,13 @@ const App: Component = () => {
     console.log("App.tsx: sketchSetupMode signal =", sketchSetupMode());
   });
 
-  // === COMMAND PALETTE ===
-  // Global keyboard shortcut for Command Palette (Cmd/Ctrl+K)
-  onMount(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      // Debug: log Cmd+K attempts
-      if (isCtrlOrCmd && e.key.toLowerCase() === 'k') {
-        console.log("App.tsx: Cmd+K detected! Opening command palette...");
-        e.preventDefault();
-        e.stopPropagation();
-        setShowCommandPalette(true);
-      }
-    };
-    window.addEventListener('keydown', handleGlobalKeyDown, true); // Use capture phase
-    onCleanup(() => window.removeEventListener('keydown', handleGlobalKeyDown, true));
-  });
-
   // Determine current app mode for command filtering
   const currentAppMode = (): AppMode => {
     if (sketchMode()) return 'sketch';
     return 'modeling';
   };
 
-  // Handle command execution from Command Palette
+  // Handle command execution from Command Palette and Keyboard Shortcuts
   const handleCommandSelect = (commandId: string) => {
     setShowCommandPalette(false);
 
@@ -259,13 +247,27 @@ const App: Component = () => {
           send(`CREATE_FEATURE:${JSON.stringify(payload)}`);
         }
         break;
+      case 'action:command_palette':
+        setShowCommandPalette(true);
+        break;
+      case 'action:keyboard_shortcuts':
+        setShowKeyboardShortcutsModal(true);
+        break;
     }
   };
+
+  // === KEYBOARD SHORTCUTS ===
+  // Centralized keyboard shortcut system (must be after currentAppMode and handleCommandSelect)
+  const keyboardShortcuts = useKeyboardShortcuts({
+    currentMode: currentAppMode,
+    onCommand: handleCommandSelect,
+    enabled: () => !showCommandPalette() && !showKeyboardShortcutsModal() // Disable when modals are open
+  });
 
   return (
     <div class="app">
       <header class="header">
-        <h1>MicroCAD Parametric System</h1>
+        <h1>CADaver</h1>
         <div class={`status ${status().toLowerCase()}`}>
           {status()}
         </div>
@@ -277,16 +279,7 @@ const App: Component = () => {
       )}
       <main>
         <div class="sidebar">
-          {/* Add a button to "Edit Sketch" if a sketch is selected */}
-          {selectedFeature() && graph().nodes[selectedFeature()!]?.feature_type === "Sketch" && (
-            <button
-              onClick={() => handleStartSketch(selectedFeature()!)}
-              disabled={sketchMode() || sketchSetupMode()}
-              style={{ width: "100%", padding: "5px", margin: "5px 0", background: "#007bff", color: "white", border: "none", cursor: "pointer" }}
-            >
-              Edit Sketch
-            </button>
-          )}
+
 
           {/* New Sketch Button */}
           {!sketchMode() && !sketchSetupMode() && (
@@ -461,125 +454,57 @@ const App: Component = () => {
 
 
         {/* Dimension Editing Modal */}
-        {editingDimension() && (() => {
-          const [dimInputValue, setDimInputValue] = createSignal(
-            editingDimension()!.type === 'Angle'
-              ? (editingDimension()!.currentValue * 180 / Math.PI).toFixed(2)
-              : editingDimension()!.currentValue.toFixed(2)
-          );
+        <DimensionEditModal
+          isOpen={!!editingDimension()}
+          title={`Edit ${editingDimension()?.type === 'Distance' ? 'Distance' : (editingDimension()?.type === 'Angle' ? 'Angle' : 'Radius')}`}
+          initialValue={
+            editingDimension()
+              ? (editingDimension()!.expression
+                ? editingDimension()!.expression!
+                : (editingDimension()!.type === 'Angle'
+                  ? (editingDimension()!.currentValue * 180 / Math.PI).toFixed(2)
+                  : editingDimension()!.currentValue.toFixed(2)))
+              : ""
+          }
+          variables={graph().variables || { variables: {}, order: [] }}
+          onCancel={() => setEditingDimension(null)}
+          onApply={(val, expr) => {
+            const editing = editingDimension()!;
+            const sketch = currentSketch();
+            const entry = sketch.constraints[editing.constraintIndex];
+            const constraint = entry.constraint;
 
-          const applyDimension = () => {
-            const variables = graph().variables || { variables: {}, order: [] };
-            const inputExpr = dimInputValue();
-            const newValue = parseValueOrExpression(inputExpr, variables);
-            if (newValue !== null) {
-              const editing = editingDimension()!;
-              const sketch = currentSketch();
-              const entry = sketch.constraints[editing.constraintIndex];
-              const constraint = entry.constraint;
-
-              let finalValue = newValue;
-              if (editing.type === 'Angle') {
-                finalValue = newValue * Math.PI / 180;
-              }
-
-              // Check if input contains an expression (@ reference)
-              const isExpression = inputExpr.includes('@');
-
-              if (editing.type === 'Distance' && constraint.Distance) {
-                constraint.Distance.value = finalValue;
-                if (constraint.Distance.style) {
-                  constraint.Distance.style.expression = isExpression ? inputExpr : undefined;
-                }
-              } else if (editing.type === 'Angle' && constraint.Angle) {
-                constraint.Angle.value = finalValue;
-                if (constraint.Angle.style) {
-                  constraint.Angle.style.expression = isExpression ? inputExpr : undefined;
-                }
-              } else if (editing.type === 'Radius' && constraint.Radius) {
-                constraint.Radius.value = finalValue;
-                if (constraint.Radius.style) {
-                  constraint.Radius.style.expression = isExpression ? inputExpr : undefined;
-                }
-              }
-
-              const updatedSketch = { ...sketch };
-              setCurrentSketch(updatedSketch);
-              sendSketchUpdate(updatedSketch);
-              console.log("Updated dimension to:", finalValue, isExpression ? "(expression: " + inputExpr + ")" : "(literal)");
-            } else {
-              console.warn("Failed to parse expression:", dimInputValue());
+            let finalValue = val;
+            if (editing.type === 'Angle') {
+              finalValue = val * Math.PI / 180;
             }
-            setEditingDimension(null);
-          };
 
-          return (
-            <div style={{
-              position: "fixed",
-              top: 0, left: 0, right: 0, bottom: 0,
-              background: "rgba(0,0,0,0.5)",
-              display: "flex",
-              "align-items": "center",
-              "justify-content": "center",
-              "z-index": 2000
-            }}>
-              <div style={{
-                background: "#333",
-                padding: "20px",
-                "border-radius": "8px",
-                "min-width": "280px",
-                color: "white"
-              }}>
-                <h3 style={{ margin: "0 0 15px 0" }}>
-                  Edit {editingDimension()!.type === 'Distance' ? 'Distance' : (editingDimension()!.type === 'Angle' ? 'Angle' : 'Radius')}
-                </h3>
-                <ExpressionInput
-                  value={dimInputValue()}
-                  onChange={setDimInputValue}
-                  onEvaluate={(expr) => {
-                    const variables = graph().variables || { variables: {}, order: [] };
-                    return parseValueOrExpression(expr, variables);
-                  }}
-                  variables={graph().variables || { variables: {}, order: [] }}
-                  placeholder="Enter value or @variable"
-                  autofocus={true}
-                  onEnter={applyDimension}
-                  onEscape={() => setEditingDimension(null)}
-                />
-                <div style={{ display: "flex", gap: "10px", "margin-top": "15px" }}>
-                  <button
-                    onClick={applyDimension}
-                    style={{
-                      flex: 1,
-                      padding: "8px",
-                      background: "#28a745",
-                      color: "white",
-                      border: "none",
-                      "border-radius": "4px",
-                      cursor: "pointer"
-                    }}
-                  >
-                    Apply
-                  </button>
-                  <button
-                    onClick={() => setEditingDimension(null)}
-                    style={{
-                      flex: 1,
-                      padding: "8px",
-                      background: "#666",
-                      color: "white",
-                      border: "none",
-                      "border-radius": "4px",
-                      cursor: "pointer"
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+            if (editing.type === 'Distance' && constraint.Distance) {
+              constraint.Distance.value = finalValue;
+              if (constraint.Distance.style) {
+                // If the user typed an expression, save it. Otherwise keep it undefined (or clear it if it was there?)
+                // The previous logic was: if (isExpression) set it, else undefined.
+                // We receive expr from onApply if it was an expression.
+                constraint.Distance.style.expression = expr;
+              }
+            } else if (editing.type === 'Angle' && constraint.Angle) {
+              constraint.Angle.value = finalValue;
+              if (constraint.Angle.style) {
+                constraint.Angle.style.expression = expr;
+              }
+            } else if (editing.type === 'Radius' && constraint.Radius) {
+              constraint.Radius.value = finalValue;
+              if (constraint.Radius.style) {
+                constraint.Radius.style.expression = expr;
+              }
+            }
+
+            const updatedSketch = { ...sketch };
+            setCurrentSketch(updatedSketch);
+            sendSketchUpdate(updatedSketch);
+            setEditingDimension(null);
+          }}
+        />
 
         {sketchTool() === "mirror" && (
           <MirrorModal
@@ -722,6 +647,17 @@ const App: Component = () => {
           currentMode={currentAppMode()}
           onCommandSelect={handleCommandSelect}
           onClose={() => setShowCommandPalette(false)}
+        />
+
+        {/* Keyboard Shortcuts Modal */}
+        <KeyboardShortcutsModal
+          isOpen={showKeyboardShortcutsModal()}
+          onClose={() => setShowKeyboardShortcutsModal(false)}
+          getShortcut={keyboardShortcuts.getShortcut}
+          setShortcut={keyboardShortcuts.setShortcut}
+          resetShortcut={keyboardShortcuts.resetShortcut}
+          resetAllShortcuts={keyboardShortcuts.resetAllShortcuts}
+          hasConflict={keyboardShortcuts.hasConflict}
         />
       </main >
     </div >

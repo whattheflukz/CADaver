@@ -1,4 +1,4 @@
-import { type Component, createSignal, createMemo, For, Show } from 'solid-js';
+import { type Component, createSignal, createMemo, For, Show, onMount } from 'solid-js';
 import type { VariableStore } from '../types';
 import './ExpressionInput.css';
 
@@ -49,6 +49,32 @@ const ExpressionInput: Component<ExpressionInputProps> = (props) => {
         }
         // Try to evaluate expression
         return props.onEvaluate(val);
+    });
+
+    let inputRef: HTMLInputElement | undefined;
+
+    // Auto-focus when mounted if requested
+    createSignal(() => {
+        if (props.autofocus && inputRef) {
+            // Small timeout to ensure modal transition is done / element is painting
+            setTimeout(() => {
+                inputRef?.focus();
+                // move cursor to end
+                const len = inputRef?.value.length || 0;
+                inputRef?.setSelectionRange(len, len);
+            }, 50);
+        }
+    });
+
+    // Also try on mount
+    onMount(() => {
+        if (props.autofocus && inputRef) {
+            setTimeout(() => {
+                inputRef?.focus();
+                const len = inputRef?.value.length || 0;
+                inputRef?.setSelectionRange(len, len);
+            }, 10);
+        }
     });
 
     const handleInput = (e: Event) => {
@@ -105,11 +131,13 @@ const ExpressionInput: Component<ExpressionInputProps> = (props) => {
         setInputValue(newValue);
         props.onChange(newValue);
         setShowAutocomplete(false);
+        if (inputRef) inputRef.focus();
     };
 
     return (
         <div class="expression-input-container">
             <input
+                ref={inputRef}
                 type="text"
                 class="expression-input"
                 value={inputValue()}

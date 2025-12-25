@@ -1,0 +1,36 @@
+.numeric-input-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.numeric-input-container .expression-input-container {
+    flex: 1;
+}
+
+.numeric-input-unit {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    font-family: 'Fira Code', monospace;
+    color: #888;
+    background: #333;
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* Adjust input padding to make room for unit badge */
+.numeric-input-container .expression-input {
+    padding-right: 50px;
+}
+
+/* When expression preview is shown, shift unit badge left */
+.numeric-input-container .expression-input-container:has(.expression-preview)+.numeric-input-unit {
+    /* CSS :has() selector - may need fallback for older browsers */
+    opacity: 0.6;
+}

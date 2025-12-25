@@ -1,4 +1,28 @@
-import type { VariableStore } from './types';
+import type { VariableStore, VariableUnit } from './types';
+
+/**
+ * Convert a value to base units (mm for Length, radians for Angle).
+ * This mirrors the backend's Unit::to_base() logic.
+ */
+function toBaseUnits(value: number, unit: VariableUnit): number {
+    if (unit === 'Dimensionless') return value;
+    if (typeof unit === 'object' && 'Length' in unit) {
+        switch (unit.Length) {
+            case 'Millimeter': return value;
+            case 'Centimeter': return value * 10;
+            case 'Meter': return value * 1000;
+            case 'Inch': return value * 25.4;
+            case 'Foot': return value * 304.8;
+        }
+    }
+    if (typeof unit === 'object' && 'Angle' in unit) {
+        switch (unit.Angle) {
+            case 'Radians': return value;
+            case 'Degrees': return value * Math.PI / 180;
+        }
+    }
+    return value;
+}
 
 /**
  * Simple frontend expression evaluator for variable references.
@@ -42,7 +66,9 @@ export function evaluateExpression(
                 return { value: null, error: `Variable '${varName}' has no value` };
             }
 
-            return { value: variable.cached_value, error: null };
+            // Convert to base units (mm for length, radians for angle)
+            const baseValue = toBaseUnits(variable.cached_value, variable.unit);
+            return { value: baseValue, error: null };
         }
 
         // Simple expression with operators: resolve variables first, then evaluate
@@ -69,7 +95,9 @@ export function evaluateExpression(
                 return { value: null, error: `Variable '${varName}' has no value` };
             }
 
-            replacements.push({ from: fullMatch, to: String(variable.cached_value) });
+            // Convert to base units (mm for length, radians for angle)
+            const baseValue = toBaseUnits(variable.cached_value, variable.unit);
+            replacements.push({ from: fullMatch, to: String(baseValue) });
         }
 
         // Apply replacements (longest first to avoid partial replacements)
