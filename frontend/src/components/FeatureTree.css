@@ -39,6 +39,35 @@
     pointer-events: auto;
 }
 
+/* Variables node special styling */
+.variables-item {
+    background: linear-gradient(135deg, #2a3a4a 0%, #1e2a3a 100%);
+    border-color: #3a5a7a;
+}
+
+.variables-item:hover {
+    background: linear-gradient(135deg, #3a4a5a 0%, #2a3a4a 100%);
+    border-color: #4a6a8a;
+}
+
+.variables-item .feature-icon {
+    font-size: 12px;
+    margin-right: 6px;
+    opacity: 0.8;
+}
+
+.variable-count {
+    background-color: #4da6ff;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: auto;
+    font-weight: 500;
+}
+
+
+
 .feature-item {
     display: flex;
     align-items: center;

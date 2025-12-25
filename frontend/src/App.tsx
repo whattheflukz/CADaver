@@ -8,7 +8,7 @@ import SelectionToolbar from './components/SelectionToolbar';
 import SketchToolbar from './components/SketchToolbar';
 import DimensionHUD from './components/DimensionHUD';
 import { ConfirmationModal } from './components/ConfirmationModal';
-import { type Sketch } from './types';
+import { type Sketch, type VariableUnit, type VariableStore } from './types';
 import SketchStatusBar from './components/SketchStatusBar';
 import { MirrorModal } from './components/MirrorModal';
 import { OffsetModal } from './components/OffsetModal';
@@ -17,11 +17,14 @@ import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
 import ModelingToolbar from './components/ModelingToolbar';
 import CommandPalette from './components/CommandPalette';
+import VariablesPanel from './components/VariablesPanel';
+import ExpressionInput from './components/ExpressionInput';
+import { parseValueOrExpression } from './expressionEvaluator';
 import { type AppMode, commandIdToSketchTool } from './commandRegistry';
 
 import { useMicrocadConnection } from './hooks/useMicrocadConnection';
 import { useSketching } from './hooks/useSketching';
-import { onMount, onCleanup } from 'solid-js';
+import { onMount, onCleanup, Show } from 'solid-js';
 
 const App: Component = () => {
   // Feature Graph State managed by hook
@@ -34,6 +37,8 @@ const App: Component = () => {
   const [regionClickPoint, setRegionClickPoint] = createSignal<[number, number] | null>(null);
   // Command Palette state
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
+  // Variables Panel state
+  const [showVariablesPanel, setShowVariablesPanel] = createSignal(false);
 
   const toggleTreeExpand = (id: string) => {
     const current = treeExpanded();
@@ -319,6 +324,7 @@ const App: Component = () => {
                 handleStartSketch(id);
               }
             }}
+            onOpenVariables={() => setShowVariablesPanel(true)}
           />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>
@@ -455,126 +461,125 @@ const App: Component = () => {
 
 
         {/* Dimension Editing Modal */}
-        {editingDimension() && (
-          <div style={{
-            position: "fixed",
-            top: 0, left: 0, right: 0, bottom: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            "align-items": "center",
-            "justify-content": "center",
-            "z-index": 2000
-          }}>
+        {editingDimension() && (() => {
+          const [dimInputValue, setDimInputValue] = createSignal(
+            editingDimension()!.type === 'Angle'
+              ? (editingDimension()!.currentValue * 180 / Math.PI).toFixed(2)
+              : editingDimension()!.currentValue.toFixed(2)
+          );
+
+          const applyDimension = () => {
+            const variables = graph().variables || { variables: {}, order: [] };
+            const inputExpr = dimInputValue();
+            const newValue = parseValueOrExpression(inputExpr, variables);
+            if (newValue !== null) {
+              const editing = editingDimension()!;
+              const sketch = currentSketch();
+              const entry = sketch.constraints[editing.constraintIndex];
+              const constraint = entry.constraint;
+
+              let finalValue = newValue;
+              if (editing.type === 'Angle') {
+                finalValue = newValue * Math.PI / 180;
+              }
+
+              // Check if input contains an expression (@ reference)
+              const isExpression = inputExpr.includes('@');
+
+              if (editing.type === 'Distance' && constraint.Distance) {
+                constraint.Distance.value = finalValue;
+                if (constraint.Distance.style) {
+                  constraint.Distance.style.expression = isExpression ? inputExpr : undefined;
+                }
+              } else if (editing.type === 'Angle' && constraint.Angle) {
+                constraint.Angle.value = finalValue;
+                if (constraint.Angle.style) {
+                  constraint.Angle.style.expression = isExpression ? inputExpr : undefined;
+                }
+              } else if (editing.type === 'Radius' && constraint.Radius) {
+                constraint.Radius.value = finalValue;
+                if (constraint.Radius.style) {
+                  constraint.Radius.style.expression = isExpression ? inputExpr : undefined;
+                }
+              }
+
+              const updatedSketch = { ...sketch };
+              setCurrentSketch(updatedSketch);
+              sendSketchUpdate(updatedSketch);
+              console.log("Updated dimension to:", finalValue, isExpression ? "(expression: " + inputExpr + ")" : "(literal)");
+            } else {
+              console.warn("Failed to parse expression:", dimInputValue());
+            }
+            setEditingDimension(null);
+          };
+
+          return (
             <div style={{
-              background: "#333",
-              padding: "20px",
-              "border-radius": "8px",
-              "min-width": "250px",
-              color: "white"
+              position: "fixed",
+              top: 0, left: 0, right: 0, bottom: 0,
+              background: "rgba(0,0,0,0.5)",
+              display: "flex",
+              "align-items": "center",
+              "justify-content": "center",
+              "z-index": 2000
             }}>
-              <h3 style={{ margin: "0 0 15px 0" }}>
-                Edit {editingDimension()!.type === 'Distance' ? 'Distance' : (editingDimension()!.type === 'Angle' ? 'Angle' : 'Radius')}
-              </h3>
-              <input
-                type="number"
-                value={editingDimension()!.type === 'Angle'
-                  ? (editingDimension()!.currentValue * 180 / Math.PI).toFixed(2)
-                  : editingDimension()!.currentValue.toFixed(2)}
-                style={{
-                  width: "100%",
-                  padding: "8px",
-                  "font-size": "16px",
-                  "border-radius": "4px",
-                  border: "1px solid #666",
-                  background: "#222",
-                  color: "white",
-                  "margin-bottom": "15px"
-                }}
-                autofocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const input = e.currentTarget;
-                    const newValue = parseFloat(input.value);
-                    if (!isNaN(newValue)) {
-                      const editing = editingDimension()!;
-                      const sketch = currentSketch();
-                      const entry = sketch.constraints[editing.constraintIndex];
-                      const constraint = entry.constraint;
-
-                      if (editing.type === 'Distance' && constraint.Distance) {
-                        constraint.Distance.value = newValue;
-                      } else if (editing.type === 'Angle' && constraint.Angle) {
-                        constraint.Angle.value = newValue * Math.PI / 180; // Convert degrees to radians
-                      } else if (editing.type === 'Radius' && constraint.Radius) {
-                        constraint.Radius.value = newValue;
-                      }
-
-                      const updatedSketch = { ...sketch };
-                      setCurrentSketch(updatedSketch);
-                      sendSketchUpdate(updatedSketch); // Trigger live solver
-                      console.log("Updated dimension to:", newValue);
-                    }
-                    setEditingDimension(null);
-                  } else if (e.key === 'Escape') {
-                    setEditingDimension(null);
-                  }
-                }}
-              />
-              <div style={{ display: "flex", gap: "10px" }}>
-                <button
-                  onClick={() => {
-                    const input = document.querySelector('input[type="number"]') as HTMLInputElement;
-                    const newValue = parseFloat(input?.value || '0');
-                    if (!isNaN(newValue)) {
-                      const editing = editingDimension()!;
-                      const sketch = currentSketch();
-                      const entry = sketch.constraints[editing.constraintIndex];
-                      const constraint = entry.constraint;
-
-                      if (editing.type === 'Distance' && constraint.Distance) {
-                        constraint.Distance.value = newValue;
-                      } else if (editing.type === 'Angle' && constraint.Angle) {
-                        constraint.Angle.value = newValue * Math.PI / 180;
-                      } else if (editing.type === 'Radius' && constraint.Radius) {
-                        constraint.Radius.value = newValue;
-                      }
-
-                      const updatedSketch = { ...sketch };
-                      setCurrentSketch(updatedSketch);
-                      sendSketchUpdate(updatedSketch); // Trigger live solver
-                    }
-                    setEditingDimension(null);
+              <div style={{
+                background: "#333",
+                padding: "20px",
+                "border-radius": "8px",
+                "min-width": "280px",
+                color: "white"
+              }}>
+                <h3 style={{ margin: "0 0 15px 0" }}>
+                  Edit {editingDimension()!.type === 'Distance' ? 'Distance' : (editingDimension()!.type === 'Angle' ? 'Angle' : 'Radius')}
+                </h3>
+                <ExpressionInput
+                  value={dimInputValue()}
+                  onChange={setDimInputValue}
+                  onEvaluate={(expr) => {
+                    const variables = graph().variables || { variables: {}, order: [] };
+                    return parseValueOrExpression(expr, variables);
                   }}
-                  style={{
-                    flex: 1,
-                    padding: "8px",
-                    background: "#28a745",
-                    color: "white",
-                    border: "none",
-                    "border-radius": "4px",
-                    cursor: "pointer"
-                  }}
-                >
-                  Apply
-                </button>
-                <button
-                  onClick={() => setEditingDimension(null)}
-                  style={{
-                    flex: 1,
-                    padding: "8px",
-                    background: "#666",
-                    color: "white",
-                    border: "none",
-                    "border-radius": "4px",
-                    cursor: "pointer"
-                  }}
-                >
-                  Cancel
-                </button>
+                  variables={graph().variables || { variables: {}, order: [] }}
+                  placeholder="Enter value or @variable"
+                  autofocus={true}
+                  onEnter={applyDimension}
+                  onEscape={() => setEditingDimension(null)}
+                />
+                <div style={{ display: "flex", gap: "10px", "margin-top": "15px" }}>
+                  <button
+                    onClick={applyDimension}
+                    style={{
+                      flex: 1,
+                      padding: "8px",
+                      background: "#28a745",
+                      color: "white",
+                      border: "none",
+                      "border-radius": "4px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Apply
+                  </button>
+                  <button
+                    onClick={() => setEditingDimension(null)}
+                    style={{
+                      flex: 1,
+                      padding: "8px",
+                      background: "#666",
+                      color: "white",
+                      border: "none",
+                      "border-radius": "4px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {sketchTool() === "mirror" && (
           <MirrorModal
@@ -687,6 +692,29 @@ const App: Component = () => {
             }
           }}
         />
+
+        {/* Variables Panel */}
+        <Show when={showVariablesPanel()}>
+          <VariablesPanel
+            variables={graph().variables || { variables: {}, order: [] }}
+            onAddVariable={(name, expression, unit, description) => {
+              const cmd = { name, expression, unit, description };
+              send(`VARIABLE_ADD:${JSON.stringify(cmd)}`);
+            }}
+            onUpdateVariable={(id, updates) => {
+              const cmd = { id, ...updates };
+              send(`VARIABLE_UPDATE:${JSON.stringify(cmd)}`);
+            }}
+            onDeleteVariable={(id) => {
+              send(`VARIABLE_DELETE:${id}`);
+            }}
+            onReorderVariable={(id, newIndex) => {
+              const cmd = { id, new_index: newIndex };
+              send(`VARIABLE_REORDER:${JSON.stringify(cmd)}`);
+            }}
+            onClose={() => setShowVariablesPanel(false)}
+          />
+        </Show>
 
         {/* Command Palette */}
         <CommandPalette

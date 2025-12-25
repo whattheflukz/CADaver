@@ -5,6 +5,7 @@ pub mod units;
 pub mod microcad_kernel;
 pub mod features;
 pub mod sketch;
+pub mod variables;
 
 pub fn version() -> &'static str {
     "0.1.0"

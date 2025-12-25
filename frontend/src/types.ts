@@ -24,7 +24,32 @@ export interface Feature {
 export interface FeatureGraphState {
     nodes: Record<string, Feature>;
     sort_order: string[];
+    variables?: VariableStore;
 }
+
+// Variable unit types (matching backend)
+export type VariableUnit =
+    | 'Dimensionless'
+    | { Length: 'Millimeter' | 'Centimeter' | 'Meter' | 'Inch' | 'Foot' }
+    | { Angle: 'Degrees' | 'Radians' };
+
+// Global parametric variable
+export interface Variable {
+    id: string;
+    name: string;
+    description: string;
+    expression: string;
+    unit: VariableUnit;
+    cached_value?: number;
+    error?: string;
+}
+
+// Container for all variables
+export interface VariableStore {
+    variables: Record<string, Variable>;
+    order: string[];
+}
+
 
 export interface SketchPlane {
     origin: [number, number, number];
@@ -65,6 +90,7 @@ export interface SelectionCandidate {
 export interface DimensionStyle {
     driven: boolean;    // true = reference-only, false = driving constraint
     offset: [number, number];  // Position offset for annotation text
+    expression?: string;  // Optional expression (e.g., "@thickness") for re-evaluation when variables change
 }
 
 export interface SketchConstraint {
@@ -130,7 +156,9 @@ export type ParameterValue =
     | { Sketch: Sketch }
     | { Reference: any }
     | { List: string[] }
-    | { ProfileRegions: [number, number][][][] }; // Profile regions with 2D boundary points (Proiles -> Loops -> Points)
+    | { ProfileRegions: [number, number][][][] } // Profile regions with 2D boundary points
+    | { Expression: string }; // Variable reference expression, e.g. "@thickness * 2"
+
 
 // Snap types for sketch snapping
 export type SnapType =

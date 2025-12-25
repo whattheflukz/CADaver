@@ -1,4 +1,4 @@
-import { type Component, For, createSignal } from 'solid-js';
+import { type Component, For, createSignal, Show } from 'solid-js';
 import { type Feature, type FeatureGraphState } from '../types';
 import './FeatureTree.css';
 
@@ -14,19 +14,42 @@ interface FeatureTreeProps {
     onToggleExpand: (id: string) => void;
     onUpdateFeature?: (id: string, params: Record<string, any>) => void;
     onEditSketch?: (id: string) => void;
+    onOpenVariables?: () => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
     // Local state removed in favor of props for persistence
 
     console.log("FeatureTree Render. Nodes:", Object.keys(props.graph.nodes).length, "Sort:", props.graph.sort_order.length);
+
+    const variableCount = () => {
+        return props.graph.variables ? Object.keys(props.graph.variables.variables).length : 0;
+    };
+
     return (
         <div class="feature-tree">
             <div class="feature-tree-header">
                 <h3>Model Tree</h3>
             </div>
             <div class="feature-list">
+                {/* Variables Node - Always at top */}
+                <div class="feature-block">
+                    <div
+                        class="feature-item variables-item"
+                        onClick={() => props.onOpenVariables?.()}
+                        title="Manage global variables"
+                    >
+                        <span class="feature-icon">𝑓(x)</span>
+                        <span class="feature-name">Variables</span>
+                        <Show when={variableCount() > 0}>
+                            <span class="variable-count">{variableCount()}</span>
+                        </Show>
+                        <span class="feature-expander">▶</span>
+                    </div>
+                </div>
+
                 <For each={props.graph.sort_order}>
+
                     {(id) => {
                         // Access feature reactively by using a function derived from props.graph
                         // This ensures that even if 'id' stays the same, if the content in props.graph.nodes[id] changes,

@@ -885,6 +885,7 @@ export function useSketching(props: UseSketchingProps) {
       updated.constraints = [...updated.constraints, wrapConstraint(constraint)];
       updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
       setCurrentSketch(updated);
+      sendSketchUpdate(updated); // Send to backend to persist and solve
       console.log("Added Advanced Dimension:", action.type);
     }
 
@@ -2653,6 +2654,88 @@ export function useSketching(props: UseSketchingProps) {
         };
 
         const hit = findSelectionCandidate(effectivePoint[0], effectivePoint[1]);
+
+        // PRIORITY: If in placement mode, clicking ANYWHERE finishes placement
+        // (even if we're clicking near an entity - we want to place the dimension, not add more selections)
+        if (dimensionPlacementMode() && dimensionProposedAction()?.isValid) {
+          // Calculate offset based on click and finish
+          const action = dimensionProposedAction()!;
+          const sel = dimensionSelection();
+          const sketch = currentSketch();
+          let offset: [number, number] = [0, 1.0]; // Default
+
+          // Logic to compute offset from click point (px, py)
+          const px = effectivePoint[0];
+          const py = effectivePoint[1];
+
+          // Re-derive geometry to compute offset
+          if (action.type === "Distance" && sel.length === 2) {
+            const getPos = (c: SelectionCandidate) => {
+              if (c.type === "origin") return [0, 0];
+              if (c.type === "point") return c.position;
+              if (c.type === "entity") {
+                const e = sketch.entities.find(ent => ent.id === c.id);
+                if (e?.geometry.Line) return e.geometry.Line.start;
+                if (e?.geometry.Circle) return e.geometry.Circle.center;
+                if (e?.geometry.Arc) return e.geometry.Arc.center;
+              }
+              return [0, 0];
+            };
+            const p1 = getPos(sel[0]);
+            const p2 = getPos(sel[1]);
+
+            if (p1 && p2) {
+              let dx = p2[0] - p1[0];
+              let dy = p2[1] - p1[1];
+              let len = Math.sqrt(dx * dx + dy * dy);
+              if (len < 0.001) { dx = 1; dy = 0; len = 1; }
+              const nx = dx / len;
+              const ny = dy / len;
+              const perpx = -ny;
+              const perpy = nx;
+              const vx = px - p1[0];
+              const vy = py - p1[1];
+              const para = vx * nx + vy * ny;
+              const perp = vx * perpx + vy * perpy;
+              offset = [para - len / 2, perp - 1.0];
+            }
+          } else if (action.type === "Length" && sel.length === 1) {
+            // Line length dimension
+            const c = sel[0];
+            if (c.type === "entity") {
+              const e = sketch.entities.find(ent => ent.id === c.id);
+              if (e?.geometry.Line) {
+                const { start, end } = e.geometry.Line;
+                let dx = end[0] - start[0];
+                let dy = end[1] - start[1];
+                let len = Math.sqrt(dx * dx + dy * dy);
+                if (len < 0.001) { dx = 1; dy = 0; len = 1; }
+                const nx = dx / len;
+                const ny = dy / len;
+                const perpx = -ny;
+                const perpy = nx;
+                const vx = px - start[0];
+                const vy = py - start[1];
+                const para = vx * nx + vy * ny;
+                const perp = vx * perpx + vy * perpy;
+                offset = [para - len / 2, perp - 1.0];
+              }
+            }
+          } else if (action.type === "Radius") {
+            const c = sel[0];
+            let center = [0, 0];
+            if (c.type === "entity") {
+              const e = sketch.entities.find(ent => ent.id === c.id);
+              if (e?.geometry.Circle) center = e.geometry.Circle.center;
+              else if (e?.geometry.Arc) center = e.geometry.Arc.center;
+            }
+            const dist = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
+            offset = [0, dist - (action.value || 0)];
+          }
+
+          handleDimensionFinish(offset);
+          return; // Early return - placement done, don't try to select more
+        }
 
         if (hit) {
           // ... existing selection logic ...

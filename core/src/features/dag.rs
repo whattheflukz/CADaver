@@ -1,5 +1,6 @@
 use super::types::Feature;
 use crate::topo::EntityId;
+use crate::variables::VariableStore;
 use std::collections::{HashMap, HashSet};
 use crate::microcad_kernel::ast::Program;
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,11 @@ pub struct FeatureGraph {
     pub nodes: HashMap<EntityId, Feature>,
     // We can cache the topological sort order
     pub sort_order: Vec<EntityId>,
+    /// Global parametric variables
+    #[serde(default)]
+    pub variables: VariableStore,
 }
+
 
 impl FeatureGraph {
     pub fn new() -> Self {
@@ -148,7 +153,10 @@ impl FeatureGraph {
                          // Extract sketch data if available
                          let mut args = vec![];
                          if let Some(crate::features::types::ParameterValue::Sketch(s)) = feature.parameters.get("sketch_data") {
-                             if let Ok(json) = serde_json::to_string(s) {
+                             // Clone and resolve expressions before serializing
+                             let mut resolved_sketch = s.clone();
+                             let _resolved_count = resolved_sketch.resolve_expressions(&self.variables);
+                             if let Ok(json) = serde_json::to_string(&resolved_sketch) {
                                  args.push(Expression::Value(Value::String(json)));
                              }
                          }

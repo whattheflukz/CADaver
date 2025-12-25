@@ -21,6 +21,7 @@ const KEY_BINDINGS: Record<string, SketchAction> = {
     "S": { type: "SET_TOOL", tool: "slot" }, // 'S' is Spline in Onshape, but Slot here for now if Spline not exists? Plan said "Spline if present". Slot starts with S. I'll use S for Slot for now as a reasonable deviation or filler. Actually plan says "S for Spline (if present)". MicroCAD has "Slot". I will map S to Slot for utility, but document it.
     "O": { type: "SET_TOOL", tool: "offset" },
     "P": { type: "SET_TOOL", tool: "point" },
+    "D": { type: "SET_TOOL", tool: "dimension" },
 
     // Constraints
     "H": { type: "SET_TOOL", tool: "constraint_horizontal" },

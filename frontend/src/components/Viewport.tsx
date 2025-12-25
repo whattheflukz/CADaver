@@ -1298,7 +1298,9 @@ const Viewport: Component<ViewportProps> = (props) => {
 
             // Process constraints
             if (props.clientSketch.constraints) {
-                props.clientSketch.constraints.forEach((constraint: any, index: number) => {
+                props.clientSketch.constraints.forEach((entry: any, index: number) => {
+                    // Unwrap SketchConstraintEntry to get the actual constraint
+                    const constraint = entry.constraint || entry;
                     if (constraint.Horizontal) {
                         const mid = getLineMidpoint(constraint.Horizontal.entity);
                         if (mid) {

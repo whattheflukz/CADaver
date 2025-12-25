@@ -474,6 +474,244 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 } else {
                     warn!("Invalid UUID for GET_REGIONS: {}", id_str);
                 }
+            } else if text.starts_with("VARIABLE_ADD:") {
+                // Format: VARIABLE_ADD:{"name":"x","expression":"10","unit":{"type":"Length","value":"Millimeter"},"description":"..."}
+                let json_str = text.trim_start_matches("VARIABLE_ADD:");
+                
+                #[derive(Deserialize)]
+                struct VariableAddCmd {
+                    name: String,
+                    expression: String,
+                    #[serde(default)]
+                    unit: Option<cad_core::variables::Unit>,
+                    description: Option<String>,
+                }
+                
+                if let Ok(cmd) = serde_json::from_str::<VariableAddCmd>(json_str) {
+                    let (json_update, program) = {
+                        let mut graph = state.graph.write().unwrap();
+                        
+                        let unit = cmd.unit.unwrap_or(cad_core::variables::Unit::Dimensionless);
+                        let mut var = cad_core::variables::Variable::with_expression(&cmd.name, &cmd.expression, unit);
+                        if let Some(desc) = cmd.description {
+                            var.description = desc;
+                        }
+                        
+                        match graph.variables.add(var) {
+                            Ok(id) => {
+                                info!("Added variable '{}' with id {}", cmd.name, id);
+                                
+                                // Evaluate all variables
+                                cad_core::variables::evaluator::evaluate_all(&mut graph.variables);
+                                
+                                let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                                let program = graph.regenerate();
+                                (Some(json), Some(program))
+                            }
+                            Err(e) => {
+                                warn!("Failed to add variable: {}", e);
+                                (None, None)
+                            }
+                        }
+                    };
+                    
+                    if let Some(json) = json_update {
+                        if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                    
+                    if let Some(program) = program {
+                        match runtime.evaluate(&program, &generator) {
+                            Ok(result) => {
+                                let json = serde_json::to_string(&result.tessellation).unwrap_or("{}".into());
+                                if socket.send(Message::Text(format!("RENDER_UPDATE:{}", json))).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(e) => warn!("Auto-regen failed: {}", e),
+                        }
+                    }
+                } else {
+                    warn!("Failed to parse VARIABLE_ADD command: {}", json_str);
+                }
+                
+            } else if text.starts_with("VARIABLE_UPDATE:") {
+                // Format: VARIABLE_UPDATE:{"id":"uuid","name":"...","expression":"...","unit":...,"description":"..."}
+                let json_str = text.trim_start_matches("VARIABLE_UPDATE:");
+                
+                #[derive(Deserialize)]
+                struct VariableUpdateCmd {
+                    id: uuid::Uuid,
+                    name: Option<String>,
+                    expression: Option<String>,
+                    unit: Option<cad_core::variables::Unit>,
+                    description: Option<String>,
+                }
+                
+                if let Ok(cmd) = serde_json::from_str::<VariableUpdateCmd>(json_str) {
+                    let entity_id = cad_core::topo::EntityId::from_uuid(cmd.id);
+                    
+                    let (json_update, program) = {
+                        let mut graph = state.graph.write().unwrap();
+                        let mut success = true;
+                        
+                        // Update name if provided
+                        if let Some(ref name) = cmd.name {
+                            if let Err(e) = graph.variables.update_name(entity_id, name) {
+                                warn!("Failed to update variable name: {}", e);
+                                success = false;
+                            }
+                        }
+                        
+                        // Update expression if provided
+                        if success {
+                            if let Some(ref expr) = cmd.expression {
+                                if let Err(e) = graph.variables.update_expression(entity_id, expr) {
+                                    warn!("Failed to update variable expression: {}", e);
+                                    success = false;
+                                }
+                            }
+                        }
+                        
+                        // Update unit if provided
+                        if success {
+                            if let Some(ref unit) = cmd.unit {
+                                if let Err(e) = graph.variables.update_unit(entity_id, unit.clone()) {
+                                    warn!("Failed to update variable unit: {}", e);
+                                    success = false;
+                                }
+                            }
+                        }
+                        
+                        // Update description if provided
+                        if success {
+                            if let Some(ref desc) = cmd.description {
+                                if let Err(e) = graph.variables.update_description(entity_id, desc) {
+                                    warn!("Failed to update variable description: {}", e);
+                                    success = false;
+                                }
+                            }
+                        }
+                        
+                        if success {
+                            info!("Updated variable {}", cmd.id);
+                            
+                            // Re-evaluate all variables
+                            cad_core::variables::evaluator::evaluate_all(&mut graph.variables);
+                            
+                            let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                            let program = graph.regenerate();
+                            (Some(json), Some(program))
+                        } else {
+                            (None, None)
+                        }
+                    };
+                    
+                    if let Some(json) = json_update {
+                        if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                    
+                    if let Some(program) = program {
+                        match runtime.evaluate(&program, &generator) {
+                            Ok(result) => {
+                                let json = serde_json::to_string(&result.tessellation).unwrap_or("{}".into());
+                                if socket.send(Message::Text(format!("RENDER_UPDATE:{}", json))).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(e) => warn!("Auto-regen failed: {}", e),
+                        }
+                    }
+                } else {
+                    warn!("Failed to parse VARIABLE_UPDATE command: {}", json_str);
+                }
+                
+            } else if text.starts_with("VARIABLE_DELETE:") {
+                // Format: VARIABLE_DELETE:uuid
+                let id_str = text.trim_start_matches("VARIABLE_DELETE:");
+                
+                if let Ok(id) = uuid::Uuid::parse_str(id_str) {
+                    let entity_id = cad_core::topo::EntityId::from_uuid(id);
+                    
+                    let (json_update, program) = {
+                        let mut graph = state.graph.write().unwrap();
+                        
+                        if graph.variables.remove(entity_id).is_some() {
+                            info!("Deleted variable {}", id);
+                            
+                            // Re-evaluate remaining variables
+                            cad_core::variables::evaluator::evaluate_all(&mut graph.variables);
+                            
+                            let program = graph.regenerate();
+                            let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                            (Some(json), Some(program))
+                        } else {
+                            warn!("Variable {} not found for deletion", id);
+                            (None, None)
+                        }
+                    };
+                    
+                    if let Some(json) = json_update {
+                        if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                    
+                    if let Some(program) = program {
+                        match runtime.evaluate(&program, &generator) {
+                            Ok(result) => {
+                                let json = serde_json::to_string(&result.tessellation).unwrap_or("{}".into());
+                                if socket.send(Message::Text(format!("RENDER_UPDATE:{}", json))).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(e) => warn!("Auto-regen failed: {}", e),
+                        }
+                    }
+                } else {
+                    warn!("Invalid UUID for VARIABLE_DELETE: {}", id_str);
+                }
+                
+            } else if text.starts_with("VARIABLE_REORDER:") {
+                // Format: VARIABLE_REORDER:{"id":"uuid","new_index":0}
+                let json_str = text.trim_start_matches("VARIABLE_REORDER:");
+                
+                #[derive(Deserialize)]
+                struct VariableReorderCmd {
+                    id: uuid::Uuid,
+                    new_index: usize,
+                }
+                
+                if let Ok(cmd) = serde_json::from_str::<VariableReorderCmd>(json_str) {
+                    let entity_id = cad_core::topo::EntityId::from_uuid(cmd.id);
+                    
+                    let json_update = {
+                        let mut graph = state.graph.write().unwrap();
+                        
+                        match graph.variables.reorder(entity_id, cmd.new_index) {
+                            Ok(_) => {
+                                info!("Reordered variable {} to index {}", cmd.id, cmd.new_index);
+                                Some(serde_json::to_string(&*graph).unwrap_or("{}".to_string()))
+                            }
+                            Err(e) => {
+                                warn!("Failed to reorder variable: {}", e);
+                                None
+                            }
+                        }
+                    };
+                    
+                    if let Some(json) = json_update {
+                        if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                } else {
+                    warn!("Failed to parse VARIABLE_REORDER command: {}", json_str);
+                }
+                
             } else {
                  if socket.send(Message::Text(format!("Echo: {}", text))).await.is_err() {
                      return;
@@ -482,3 +720,4 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         }
     }
 }
+

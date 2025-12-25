@@ -53,6 +53,10 @@ pub struct DimensionStyle {
     pub driven: bool,
     /// Offset position for the dimension annotation text from the midpoint
     pub offset: [f64; 2],
+    /// Optional expression string (e.g., "@thickness" or "@base * 2")
+    /// When present, the constraint value is re-evaluated from this expression during regeneration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
 }
 
 impl Default for DimensionStyle {
@@ -60,6 +64,7 @@ impl Default for DimensionStyle {
         Self {
             driven: false,
             offset: [0.0, 0.5], // Default offset above the dimension line
+            expression: None,
         }
     }
 }
@@ -226,5 +231,63 @@ impl Sketch {
                 constraint: entry.constraint.clone() 
             });
         }
+    }
+
+    /// Resolve all constraint expressions using the given variable store.
+    /// Updates constraint numeric values based on their stored expressions.
+    /// Returns the number of expressions that were successfully resolved.
+    pub fn resolve_expressions(&mut self, variables: &crate::variables::VariableStore) -> usize {
+        use crate::variables::evaluator::evaluate;
+        
+        let mut resolved_count = 0;
+        
+        for entry in &mut self.constraints {
+            if entry.suppressed {
+                continue;
+            }
+            
+            // Helper to resolve an expression if present
+            fn resolve_expr_value(
+                style: &Option<DimensionStyle>,
+                current_value: &mut f64,
+                variables: &crate::variables::VariableStore,
+            ) -> bool {
+                if let Some(ref s) = style {
+                    if let Some(ref expr) = s.expression {
+                        if let Ok(value) = evaluate(expr, variables) {
+                            *current_value = value;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            
+            match &mut entry.constraint {
+                SketchConstraint::Distance { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                SketchConstraint::Angle { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                SketchConstraint::Radius { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                SketchConstraint::DistancePointLine { value, style, .. } => {
+                    if resolve_expr_value(style, value, variables) {
+                        resolved_count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        resolved_count
     }
 }

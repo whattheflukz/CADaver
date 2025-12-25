@@ -1,0 +1,78 @@
+.expression-input-container {
+    position: relative;
+    width: 100%;
+}
+
+.expression-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: 'Fira Code', monospace;
+    background-color: #222;
+    border: 1px solid #555;
+    border-radius: 6px;
+    color: #fff;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.expression-input:focus {
+    border-color: #4da6ff;
+}
+
+.expression-input::placeholder {
+    color: #666;
+}
+
+.expression-preview {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 12px;
+    color: #7fff7f;
+    font-family: 'Fira Code', monospace;
+    pointer-events: none;
+}
+
+.autocomplete-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #2a2a2a;
+    border: 1px solid #4da6ff;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.autocomplete-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+    background-color: #3a4a5a;
+}
+
+.autocomplete-item .var-name {
+    color: #6bc1ff;
+    font-family: 'Fira Code', monospace;
+    font-size: 13px;
+}
+
+.autocomplete-item .var-value {
+    color: #7fff7f;
+    font-family: 'Fira Code', monospace;
+    font-size: 12px;
+}

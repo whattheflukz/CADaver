@@ -14,8 +14,10 @@ pub enum ParameterValue {
     /// Each item is a list of loops (first is outer, rest are holes).
     /// Each loop is a list of 2D points [[x,y], ...].
     ProfileRegions(Vec<Vec<Vec<[f64; 2]>>>),
-    // Expression(String), // TODO: Add expression parsing
+    /// Expression that may reference variables, e.g. "@thickness * 2"
+    Expression(String),
 }
+
 
 /// Operation type for extrude features
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
