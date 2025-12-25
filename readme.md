@@ -6,6 +6,14 @@ This project is an experiment in using agentic AI editors to design and build a 
 
 The intent is not necessarily to create a production-ready CAD application, but to test agentic systems on a difficult problem to evaluate their abilities.
 
+## Method
+
+The project follows a strict **end-user–only evaluation model**:
+
+- The human operator does not read, write, or modify source code
+- All evaluation is based on observable behavior and user experience
+- The agent receives detailed product and behavior specifications, not implementation instructions
+
 ## How it Works
 
 The application is a **self-hosted, browser-based parametric CAD system** built with a modern stack:
@@ -22,6 +30,32 @@ The project is structured into several phases to achieve professional-grade pari
 - **Phase 3-4:** Advanced surface modeling and assembly management (Mates/Joints).
 - **Phase 5-6:** Manufacturing prep (STEP/IGES export) and 2D drawing generation.
 - **Phase 7+:** Version control (Git-like branching for models) and multi-user collaboration.
+
+### Status & Implemented Features
+
+- [x] **Core Infrastructure**
+    - [x] Rust/SolidJS Workspace
+    - [x] WebSocket-based model synchronization
+    - [x] Mode-aware toolbar system
+    - [x] Customizable Keyboard Shortcut system
+    - [x] Command Palette with fuzzy search
+    - [x] Unit system (mm, inch, deg, etc.)
+- [x] **Parametric Sketching Engine**
+    - [x] Explicit plane selection (Face, Default planes, Construction planes)
+    - [x] Robust Snapping (Endpoint, Center, Intersection, Grid, etc.)
+    - [x] Full Geometry Suite (Lines, Arcs, Polygons, Splines, etc.)
+    - [x] Advanced Editing (Offset, Mirror, Trim, Construction lines)
+    - [x] Driving Dimensions (Linear, Angular, Radial)
+    - [x] Constraint Solver (Coincident, Parallel, Tangent, Horizontal/Vertical, etc.)
+    - [x] Over/Under-constraint visual indicators
+- [x] **Feature History & Modeling**
+    - [x] Feature DAG & History Tree
+    - [x] Persistent entity IDs (Topological Naming)
+    - [x] Feature suppression & reordering groundwork
+    - [x] Selection Filters (Face, Edge, Vertex)
+- [x] **Rendering**
+    - [x] High-performance WebGL/WebGPU Viewport
+    - [x] Advanced Camera Controls (Orbit/Pan/Zoom)
 
 For a detailed roadmap, see [plan.md](./plan.md).
 
@@ -48,12 +82,3 @@ For a detailed roadmap, see [plan.md](./plan.md).
     ```bash
     npm run build
     ```
-
-## Method
-
-The project follows a strict **end-user–only evaluation model**:
-
-- The human operator does not read, write, or modify source code
-- All evaluation is based on observable behavior and user experience
-- The agent receives detailed product and behavior specifications, not implementation instructions
-
