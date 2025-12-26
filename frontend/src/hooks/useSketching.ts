@@ -4039,6 +4039,22 @@ export function useSketching(props: UseSketchingProps) {
     }
   });
 
+  // Expose state for E2E testing
+  createEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).sketchState = {
+        sketchMode: sketchMode(),
+        sketchTool: sketchTool(),
+        currentSketch: currentSketch(),
+        sketchSelection: sketchSelection(),
+        constraintSelection: constraintSelection(),
+        activeSnap: activeSnap(),
+        dimensionSelection: dimensionSelection(),
+        setSketchTool: setSketchTool
+      };
+    }
+  });
+
   return {
     sketchMode, setSketchMode,
     activeSketchId, setActiveSketchId,

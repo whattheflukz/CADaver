@@ -26,11 +26,15 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
             onCancel={props.onCancel}
             confirmDisabled={!((props.centerType === 'origin' || (props.centerType === 'point' && props.selectedCenterId)) && props.selectedEntityCount > 0 && props.count >= 2)}
             width={300}
+            testId="circular-pattern-modal"
+            confirmTestId="pattern-confirm"
+            cancelTestId="pattern-cancel"
         >
             {/* Center Selection */}
             <div
                 onClick={() => props.onFieldFocus('center')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="pattern-center-select"
             >
                 <div style={{
                     "font-size": '12px',
@@ -44,6 +48,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
                 <div style={{ display: 'flex', gap: '8px', "margin-bottom": '4px' }}>
                     <button
                         onClick={(e) => { e.stopPropagation(); props.onCenterTypeChange('origin'); }}
+                        data-testid="pattern-center-origin-btn"
                         style={{
                             flex: 1,
                             padding: '6px',
@@ -59,6 +64,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
                     </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); props.onCenterTypeChange('point'); }}
+                        data-testid="pattern-center-point-btn"
                         style={{
                             flex: 1,
                             padding: '6px',
@@ -95,6 +101,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
             <div
                 onClick={() => props.onFieldFocus('entities')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="pattern-entities-select"
             >
                 <div style={{
                     "font-size": '12px',
@@ -127,6 +134,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
                     max="100"
                     value={props.count}
                     onChange={(e) => props.onCountChange(parseInt(e.currentTarget.value) || 2)}
+                    data-testid="pattern-count-input"
                     style={{
                         padding: '8px',
                         background: '#3a3a3a',
@@ -150,6 +158,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
                     max="360"
                     value={props.totalAngle}
                     onChange={(e) => props.onAngleChange(parseFloat(e.currentTarget.value) || 360)}
+                    data-testid="pattern-angle-input"
                     style={{
                         padding: '8px',
                         background: '#3a3a3a',
@@ -163,6 +172,7 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
 
             <button
                 onClick={props.onFlip}
+                data-testid="pattern-flip-btn"
                 style={{
                     background: "#3a3a3a",
                     color: "white",

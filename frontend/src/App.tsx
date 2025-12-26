@@ -225,10 +225,10 @@ const App: Component = () => {
     setShowCommandPalette(false);
 
     // Tool commands (sketch tools)
-    const sketchTool = commandIdToSketchTool(commandId);
-    if (sketchTool && sketchMode()) {
+    const toolFromCmd = commandIdToSketchTool(commandId);
+    if (toolFromCmd && sketchMode()) {
       setConstraintSelection([]);
-      setSketchTool(sketchTool);
+      setSketchTool(toolFromCmd);
       return;
     }
 
@@ -269,6 +269,24 @@ const App: Component = () => {
         break;
       case 'action:manage_selection_groups':
         setShowNamedSelectionsPanel(true);
+        break;
+      case 'action:deselect_sketch':
+        // Progressive deselection in sketch mode:
+        // 1. If tool is not 'select', switch to select
+        // 2. If dimension/constraint selection exists, clear it
+        // 3. If sketch entities are selected, clear them
+        if (sketchMode()) {
+          if (sketchTool() !== 'select') {
+            setSketchTool('select');
+            setConstraintSelection([]);
+            setDimensionSelection([]);
+          } else if (dimensionSelection().length > 0 || constraintSelection().length > 0) {
+            setDimensionSelection([]);
+            setConstraintSelection([]);
+          } else if (sketchSelection().length > 0) {
+            setSketchSelection([]);
+          }
+        }
         break;
       case 'action:deselect_all':
         // Clear all selections when Escape is pressed in modeling mode
@@ -448,7 +466,7 @@ const App: Component = () => {
             activeSnap={activeSnap()}
             onDimensionDrag={sketchMode() ? handleDimensionDrag : undefined}
             sketchSetupMode={sketchSetupMode()}
-            onSelectPlane={sketchSetupMode() ? handlePlaneSelected : undefined}
+            onSelectPlane={handlePlaneSelected}
             previewDimension={sketchMode() && sketchTool() === "dimension" && dimensionPlacementMode() && dimensionProposedAction()?.isValid ? {
               type: dimensionProposedAction()!.type,
               value: dimensionProposedAction()!.value!,
@@ -702,6 +720,7 @@ const App: Component = () => {
           onCommandSelect={handleCommandSelect}
           onClose={() => setShowCommandPalette(false)}
         />
+
 
         {/* Keyboard Shortcuts Modal */}
         <KeyboardShortcutsModal

@@ -203,7 +203,7 @@ export type SketchToolType =
     | "trim" | "mirror" | "offset" | "linear_pattern" | "circular_pattern"
     | "constraint_horizontal" | "constraint_vertical" | "constraint_coincident"
     | "constraint_parallel" | "constraint_perpendicular" | "constraint_equal" | "constraint_fix"
-    | "dimension";
+    | "dimension" | "measure";
 
 /** Result of constraint solving with detailed status (matches backend SolveResult) */
 export interface SolveResult {
@@ -282,4 +282,41 @@ export interface KernelError {
     context?: Record<string, string>;
     /** Timestamp when error occurred */
     timestamp: number;
+}
+
+// ===== Measurement Types =====
+
+/** Result of a measurement operation (matches backend) */
+export type MeasurementResult =
+    | { Distance: { value: number } }
+    | { Angle: { value: number } }
+    | { Radius: { value: number } }
+    | { ArcLength: { value: number } }
+    | { Circumference: { value: number } }
+    | { Error: { message: string } };
+
+/** Active measurement state for session-only, live-updating measurements */
+export interface ActiveMeasurement {
+    /** First entity being measured */
+    entity1Id: string;
+    /** Point index on first entity (0=start/center, 1=end) */
+    point1Index: number;
+    /** Second entity being measured */
+    entity2Id: string;
+    /** Point index on second entity */
+    point2Index: number;
+    /** The measurement result from backend */
+    result: MeasurementResult | null;
+    /** Display position in 2D sketch coords (midpoint) */
+    displayPosition?: [number, number];
+}
+
+/** Helper to extract measurement value */
+export function getMeasurementValue(result: MeasurementResult): { type: string; value: number } | null {
+    if ('Distance' in result) return { type: 'distance', value: result.Distance.value };
+    if ('Angle' in result) return { type: 'angle', value: result.Angle.value };
+    if ('Radius' in result) return { type: 'radius', value: result.Radius.value };
+    if ('ArcLength' in result) return { type: 'arcLength', value: result.ArcLength.value };
+    if ('Circumference' in result) return { type: 'circumference', value: result.Circumference.value };
+    return null;
 }

@@ -797,6 +797,85 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     warn!("Failed to parse VARIABLE_REORDER command: {}", json_str);
                 }
                 
+            } else if text.starts_with("MEASURE:") {
+                // Format: MEASURE:{"sketch_id":"uuid","entity1_id":"uuid","point1_index":0,"entity2_id":"uuid","point2_index":0}
+                // Returns: MEASUREMENT_RESULT:{...}
+                let json_str = text.trim_start_matches("MEASURE:");
+                
+                #[derive(Deserialize)]
+                struct MeasureCmd {
+                    sketch_id: uuid::Uuid,
+                    entity1_id: uuid::Uuid,
+                    #[serde(default)]
+                    point1_index: u8,
+                    entity2_id: uuid::Uuid,
+                    #[serde(default)]
+                    point2_index: u8,
+                }
+                
+                if let Ok(cmd) = serde_json::from_str::<MeasureCmd>(json_str) {
+                    let sketch_entity_id = cad_core::topo::EntityId::from_uuid(cmd.sketch_id);
+                    let e1_id = cad_core::topo::EntityId::from_uuid(cmd.entity1_id);
+                    let e2_id = cad_core::topo::EntityId::from_uuid(cmd.entity2_id);
+                    
+                    let result_json = {
+                        let graph = state.graph.read().unwrap();
+                        if let Some(node) = graph.nodes.get(&sketch_entity_id) {
+                            if let Some(cad_core::features::types::ParameterValue::Sketch(ref sketch)) = node.parameters.get("sketch_data") {
+                                // Find the entities
+                                let entity1 = sketch.entities.iter().find(|e| e.id == e1_id);
+                                let entity2 = sketch.entities.iter().find(|e| e.id == e2_id);
+                                
+                                match (entity1, entity2) {
+                                    (Some(e1), Some(e2)) => {
+                                        use cad_core::sketch::measurement::{measure_entities, get_entity_point, measure_point_point_distance, MeasurementResult};
+                                        
+                                        // Check if measuring specific points or entities
+                                        if cmd.entity1_id == cmd.entity2_id {
+                                            // Measuring same entity (radius, arc length, etc.)
+                                            let result = measure_entities(e1, e2);
+                                            Some(serde_json::to_string(&result).unwrap_or("{}".into()))
+                                        } else if let (Some(p1), Some(p2)) = (get_entity_point(e1, cmd.point1_index), get_entity_point(e2, cmd.point2_index)) {
+                                            // Measuring specific points on entities
+                                            let distance = measure_point_point_distance(p1, p2);
+                                            let result = MeasurementResult::Distance { value: distance };
+                                            Some(serde_json::to_string(&json!({
+                                                "result": result,
+                                                "point1": p1,
+                                                "point2": p2
+                                            })).unwrap_or("{}".into()))
+                                        } else {
+                                            // Generic entity measurement
+                                            let result = measure_entities(e1, e2);
+                                            Some(serde_json::to_string(&result).unwrap_or("{}".into()))
+                                        }
+                                    }
+                                    _ => {
+                                        Some(serde_json::to_string(&cad_core::sketch::measurement::MeasurementResult::Error {
+                                            message: "Entity not found".to_string()
+                                        }).unwrap_or("{}".into()))
+                                    }
+                                }
+                            } else {
+                                warn!("Sketch data not found for feature {}", cmd.sketch_id);
+                                None
+                            }
+                        } else {
+                            warn!("Feature {} not found", cmd.sketch_id);
+                            None
+                        }
+                    };
+                    
+                    if let Some(json) = result_json {
+                        info!("Sending MEASUREMENT_RESULT");
+                        if socket.send(Message::Text(format!("MEASUREMENT_RESULT:{}", json))).await.is_err() {
+                            return;
+                        }
+                    }
+                } else {
+                    warn!("Failed to parse MEASURE command: {}", json_str);
+                }
+                
             } else {
                  if socket.send(Message::Text(format!("Echo: {}", text))).await.is_err() {
                      return;

@@ -58,6 +58,7 @@ export const DimensionEditModal: Component<DimensionEditModalProps> = (props) =>
             width={300}
             persistenceKey="dimension-edit-modal-v3"
             spawnPosition="center"
+            testId="dimension-edit-modal"
         >
             <div style={{ padding: '5px 0' }}>
                 <ExpressionInput
@@ -69,7 +70,11 @@ export const DimensionEditModal: Component<DimensionEditModalProps> = (props) =>
                     autofocus={true}
                     onEnter={handleApply}
                     onEscape={props.onCancel}
+                    testId="dimension-input"
                 />
+            </div>
+            <div style={{ display: 'none' }}>
+                <button data-testid="dimension-confirm" onClick={handleApply}></button>
             </div>
         </BaseModal>
     );

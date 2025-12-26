@@ -135,6 +135,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
             width={400}
             persistenceKey="variables-panel-v3"
             spawnPosition="center"
+            testId="variables-panel"
         >
             <div class="variables-panel">
                 <div class="variables-content">
@@ -142,19 +143,19 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                     <div class="variables-list">
                         <For each={orderedVariables()}>
                             {(variable) => (
-                                <div class={`variable-row ${editingId() === variable.id ? 'editing' : ''} ${variable.error ? 'has-error' : ''}`}>
+                                <div class={`variable-row ${editingId() === variable.id ? 'editing' : ''} ${variable.error ? 'has-error' : ''}`} data-testid="variable-row">
                                     <Show when={editingId() === variable.id} fallback={
                                         <>
                                             <div class="variable-info">
-                                                <span class="variable-name">@{variable.name}</span>
-                                                <span class="variable-expr">{variable.expression}</span>
-                                                <span class={`variable-value ${variable.error ? 'error' : ''}`}>
+                                                <span class="variable-name" data-testid="variable-name">@{variable.name}</span>
+                                                <span class="variable-expr" data-testid="variable-expression">{variable.expression}</span>
+                                                <span class={`variable-value ${variable.error ? 'error' : ''}`} data-testid="variable-value">
                                                     = {formatValue(variable)}
                                                 </span>
                                             </div>
                                             <div class="variable-actions">
-                                                <button class="icon-btn edit" onClick={() => startEdit(variable)} title="Edit">✏️</button>
-                                                <button class="icon-btn delete" onClick={() => props.onDeleteVariable(variable.id)} title="Delete">🗑️</button>
+                                                <button class="icon-btn edit" onClick={() => startEdit(variable)} title="Edit" data-testid="edit-variable-btn">✏️</button>
+                                                <button class="icon-btn delete" onClick={() => props.onDeleteVariable(variable.id)} title="Delete" data-testid="delete-variable-btn">🗑️</button>
                                             </div>
                                         </>
                                     }>
@@ -166,6 +167,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                                 value={formName()}
                                                 onInput={(e) => setFormName(e.currentTarget.value)}
                                                 placeholder="Variable name"
+                                                data-testid="variable-name-input"
                                             />
                                             <ExpressionInput
                                                 value={formExpression()}
@@ -173,11 +175,13 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                                 onEvaluate={(expr) => parseValueOrExpression(expr, props.variables)}
                                                 variables={props.variables}
                                                 placeholder="Expression (e.g., 10 or @other * 2)"
+                                                testId="variable-expression-input"
                                             />
                                             <select
                                                 class="input-unit"
                                                 value={JSON.stringify(formUnit())}
                                                 onChange={(e) => setFormUnit(JSON.parse(e.currentTarget.value))}
+                                                data-testid="variable-unit-select"
                                             >
                                                 <option value='"Dimensionless"'>No unit</option>
                                                 <option value='{"Length":"Millimeter"}'>mm</option>
@@ -189,7 +193,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                                 <option value='{"Angle":"Radians"}'>rad</option>
                                             </select>
                                             <div class="form-buttons">
-                                                <button class="btn-save" onClick={submitEdit}>Save</button>
+                                                <button class="btn-save" onClick={submitEdit} data-testid="save-variable-btn">Save</button>
                                                 <button class="btn-cancel" onClick={cancelEdit}>Cancel</button>
                                             </div>
                                         </div>
@@ -216,6 +220,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                     value={formName()}
                                     onInput={(e) => setFormName(e.currentTarget.value)}
                                     placeholder="Variable name"
+                                    data-testid="variable-name-input"
                                 />
                             </div>
                             <div class="form-row">
@@ -225,6 +230,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                     onEvaluate={(expr) => parseValueOrExpression(expr, props.variables)}
                                     variables={props.variables}
                                     placeholder="Expression (e.g., 10, @other * 2, sqrt(16))"
+                                    testId="variable-expression-input"
                                 />
                             </div>
                             <div class="form-row">
@@ -232,6 +238,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                     class="input-unit"
                                     value={JSON.stringify(formUnit())}
                                     onChange={(e) => setFormUnit(JSON.parse(e.currentTarget.value))}
+                                    data-testid="variable-unit-select"
                                 >
                                     <option value='"Dimensionless"'>No unit</option>
                                     <option value='{"Length":"Millimeter"}'>Millimeters (mm)</option>
@@ -253,7 +260,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
                                 />
                             </div>
                             <div class="form-buttons">
-                                <button class="btn-add" onClick={submitAdd} disabled={!formName().trim() || !formExpression().trim()}>
+                                <button class="btn-add" onClick={submitAdd} disabled={!formName().trim() || !formExpression().trim()} data-testid="save-variable-btn">
                                     Add Variable
                                 </button>
                                 <button class="btn-cancel" onClick={cancelEdit}>Cancel</button>
@@ -264,7 +271,7 @@ const VariablesPanel: Component<VariablesPanelProps> = (props) => {
 
                 <div class="variables-footer">
                     <Show when={!showAddForm() && editingId() === null}>
-                        <button class="btn-add-new" onClick={startAdd}>
+                        <button class="btn-add-new" onClick={startAdd} data-testid="add-variable-btn">
                             + Add Variable
                         </button>
                     </Show>

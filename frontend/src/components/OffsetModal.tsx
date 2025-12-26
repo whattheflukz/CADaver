@@ -20,6 +20,9 @@ export const OffsetModal: Component<OffsetModalProps> = (props) => {
             onCancel={props.onCancel}
             confirmDisabled={props.entityCount === 0}
             width={260}
+            testId="offset-modal"
+            confirmTestId="offset-confirm"
+            cancelTestId="offset-cancel"
         >
             <div style={{ display: "flex", "flex-direction": "column", gap: "5px" }}>
                 <label style={{ "font-size": "12px", color: "#aaa" }}>Distance</label>
@@ -28,6 +31,7 @@ export const OffsetModal: Component<OffsetModalProps> = (props) => {
                     step="0.1"
                     value={props.distance}
                     onInput={(e) => props.setDistance(parseFloat(e.currentTarget.value))}
+                    data-testid="offset-distance-input"
                     style={{
                         background: "#222",
                         border: "1px solid #555",
@@ -46,6 +50,7 @@ export const OffsetModal: Component<OffsetModalProps> = (props) => {
 
             <button
                 onClick={props.onFlip}
+                data-testid="offset-flip-btn"
                 style={{
                     background: "#3a3a3a",
                     color: "white",

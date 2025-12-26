@@ -24,11 +24,15 @@ export const LinearPatternModal: Component<LinearPatternModalProps> = (props) =>
             onCancel={props.onCancel}
             confirmDisabled={!props.selectedDirection || props.selectedEntityCount === 0 || props.count < 2}
             width={300}
+            testId="linear-pattern-modal"
+            confirmTestId="pattern-confirm"
+            cancelTestId="pattern-cancel"
         >
             {/* Direction Line Selection */}
             <div
                 onClick={() => props.onFieldFocus('direction')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="pattern-direction-select"
             >
                 <div style={{
                     "font-size": '12px',
@@ -56,6 +60,7 @@ export const LinearPatternModal: Component<LinearPatternModalProps> = (props) =>
             <div
                 onClick={() => props.onFieldFocus('entities')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="pattern-entities-select"
             >
                 <div style={{
                     "font-size": '12px',
@@ -88,6 +93,7 @@ export const LinearPatternModal: Component<LinearPatternModalProps> = (props) =>
                     max="100"
                     value={props.count}
                     onChange={(e) => props.onCountChange(parseInt(e.currentTarget.value) || 2)}
+                    data-testid="pattern-count-input"
                     style={{
                         padding: '8px',
                         background: '#3a3a3a',
@@ -110,6 +116,7 @@ export const LinearPatternModal: Component<LinearPatternModalProps> = (props) =>
                     min="0.1"
                     value={props.spacing}
                     onChange={(e) => props.onSpacingChange(parseFloat(e.currentTarget.value) || 1)}
+                    data-testid="pattern-spacing-input"
                     style={{
                         padding: '8px',
                         background: '#3a3a3a',
@@ -123,6 +130,7 @@ export const LinearPatternModal: Component<LinearPatternModalProps> = (props) =>
 
             <button
                 onClick={props.onFlip}
+                data-testid="pattern-flip-btn"
                 style={{
                     background: "#3a3a3a",
                     color: "white",

@@ -11,6 +11,7 @@ interface ExpressionInputProps {
     autofocus?: boolean;
     onEnter?: () => void;
     onEscape?: () => void;
+    testId?: string;
 }
 
 const ExpressionInput: Component<ExpressionInputProps> = (props) => {
@@ -147,6 +148,7 @@ const ExpressionInput: Component<ExpressionInputProps> = (props) => {
             <input
                 ref={inputRef}
                 type="text"
+                data-testid={props.testId}
                 class="expression-input"
                 value={inputValue()}
                 onInput={handleInput}

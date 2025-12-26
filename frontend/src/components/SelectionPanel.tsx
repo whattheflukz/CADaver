@@ -31,9 +31,9 @@ const SelectionPanel: Component<SelectionPanelProps> = (props) => {
 
     return (
         <Show when={props.selection.length > 0}>
-            <div class="selection-panel">
+            <div class="selection-panel" data-testid="selection-panel">
                 <div class="selection-panel-header">
-                    <span class="selection-panel-title">
+                    <span class="selection-panel-title" data-testid="selection-count">
                         Selection ({props.selection.length})
                     </span>
                     <button
@@ -47,20 +47,21 @@ const SelectionPanel: Component<SelectionPanelProps> = (props) => {
                 <div class="selection-panel-list">
                     <For each={props.selection}>
                         {(item) => (
-                            <div class="selection-panel-item">
+                            <div class="selection-panel-item" data-testid="selection-item">
                                 <span
                                     class="selection-item-icon"
                                     style={{ color: rankColors[item.rank] || '#fff' }}
                                 >
                                     {rankIcons[item.rank] || '?'}
                                 </span>
-                                <span class="selection-item-label">
+                                <span class="selection-item-label" data-testid="selection-type">
                                     {item.rank} {formatId(item.feature_id)}:{item.local_id}
                                 </span>
                                 <button
                                     class="selection-item-remove"
                                     onClick={() => props.onDeselect(item)}
                                     title="Deselect"
+                                    data-testid="selection-delete-btn"
                                 >
                                     ×
                                 </button>

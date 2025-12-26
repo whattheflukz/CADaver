@@ -22,11 +22,15 @@ export const MirrorModal: Component<MirrorModalProps> = (props) => {
             onCancel={props.onCancel}
             confirmDisabled={isConfirmDisabled()}
             width={300}
+            testId="mirror-modal"
+            confirmTestId="mirror-confirm"
+            cancelTestId="mirror-cancel"
         >
             {/* Mirror Axis Selection */}
             <div
                 onClick={() => props.onFieldFocus('axis')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="mirror-axis-select"
             >
                 <div style={{
                     "font-size": '12px',
@@ -54,6 +58,7 @@ export const MirrorModal: Component<MirrorModalProps> = (props) => {
             <div
                 onClick={() => props.onFieldFocus('entities')}
                 style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
+                data-testid="mirror-entities-select"
             >
                 <div style={{
                     "font-size": '12px',

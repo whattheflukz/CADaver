@@ -14,6 +14,9 @@ interface BaseModalProps {
     persistenceKey?: string;
     spawnPosition?: 'center' | 'bottom-left';
     children: JSX.Element;
+    testId?: string;
+    confirmTestId?: string;
+    cancelTestId?: string;
 }
 
 export const BaseModal: Component<BaseModalProps> = (props) => {
@@ -142,25 +145,28 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
 
     return (
         <Show when={props.isOpen}>
-            <div ref={modalRef} style={{
-                position: 'fixed',
-                top: `${position().y}px`,
-                left: `${position().x}px`,
-                "background-color": '#2c2c2c',
-                "border-radius": '8px',
-                padding: '16px',
-                "box-shadow": '0 4px 6px rgba(0,0,0,0.3)',
-                border: '1px solid #444',
-                color: 'white',
-                "z-index": 1000,
-                width: `${width}px`,
-                display: 'flex',
-                "flex-direction": 'column',
-                gap: '12px',
-                "font-family": 'system-ui, sans-serif',
-                cursor: isDragging() ? 'grabbing' : 'auto',
-                "user-select": 'none'
-            }}>
+            <div
+                ref={modalRef}
+                data-testid={props.testId}
+                style={{
+                    position: 'fixed',
+                    top: `${position().y}px`,
+                    left: `${position().x}px`,
+                    "background-color": '#2c2c2c',
+                    "border-radius": '8px',
+                    padding: '16px',
+                    "box-shadow": '0 4px 6px rgba(0,0,0,0.3)',
+                    border: '1px solid #444',
+                    color: 'white',
+                    "z-index": 1000,
+                    width: `${width}px`,
+                    display: 'flex',
+                    "flex-direction": 'column',
+                    gap: '12px',
+                    "font-family": 'system-ui, sans-serif',
+                    cursor: isDragging() ? 'grabbing' : 'auto',
+                    "user-select": 'none'
+                }}>
                 {/* Draggable Header */}
                 <div
                     onMouseDown={startDrag}
@@ -190,6 +196,7 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
                     <Show when={props.showCancel !== false}>
                         <button
                             onClick={props.onCancel}
+                            data-testid={props.cancelTestId}
                             style={{
                                 flex: 1,
                                 padding: '8px',
@@ -210,6 +217,7 @@ export const BaseModal: Component<BaseModalProps> = (props) => {
                     <button
                         onClick={props.onConfirm}
                         disabled={props.confirmDisabled}
+                        data-testid={props.confirmTestId}
                         style={{
                             flex: 1,
                             padding: '8px',

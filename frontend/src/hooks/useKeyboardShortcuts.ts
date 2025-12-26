@@ -159,16 +159,19 @@ export function useKeyboardShortcuts(params: UseKeyboardShortcutsParams): UseKey
 
     const [customShortcuts, setCustomShortcuts] = createSignal<ShortcutConfig>(loadCustomShortcuts());
 
-    // Build shortcut -> commandId map for O(1) lookup
+    // Build shortcut -> commandId[] map for O(1) lookup
+    // Multiple commands can share the same shortcut if they're in different modes
     const shortcutMap = createMemo(() => {
-        const map = new Map<string, string>();
+        const map = new Map<string, string[]>();
         const custom = customShortcuts().bindings;
 
         for (const cmd of COMMAND_DEFINITIONS) {
             const shortcut = custom[cmd.id] ?? cmd.shortcut;
             if (shortcut) {
                 const normalized = normalizeShortcut(shortcut);
-                map.set(normalized, cmd.id);
+                const existing = map.get(normalized) || [];
+                existing.push(cmd.id);
+                map.set(normalized, existing);
             }
         }
 
@@ -245,15 +248,17 @@ export function useKeyboardShortcuts(params: UseKeyboardShortcutsParams): UseKey
             const map = shortcutMap();
 
             // Try to match a shortcut
-            for (const [shortcut, commandId] of map.entries()) {
+            for (const [shortcut, commandIds] of map.entries()) {
                 if (matchesKeyEvent(shortcut, e)) {
-                    // Check if command is valid for current mode
-                    const cmd = COMMAND_DEFINITIONS.find(c => c.id === commandId);
-                    if (cmd && (cmd.modes.includes(mode) || cmd.modes.includes('all'))) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onCommand(commandId);
-                        return;
+                    // Find a command that's valid for current mode
+                    for (const commandId of commandIds) {
+                        const cmd = COMMAND_DEFINITIONS.find(c => c.id === commandId);
+                        if (cmd && (cmd.modes.includes(mode) || cmd.modes.includes('all'))) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onCommand(commandId);
+                            return;
+                        }
                     }
                 }
             }

@@ -193,6 +193,14 @@ export const COMMAND_DEFINITIONS: Command[] = [
         modes: ["sketch"],
         category: "dimension",
     },
+    {
+        id: "tool:measure",
+        name: "Measure",
+        description: "Measure distances and angles (temporary, non-constraining)",
+        shortcut: "M",
+        modes: ["sketch"],
+        category: "dimension",
+    },
 
     // === SKETCH ACTIONS ===
     {
@@ -206,6 +214,14 @@ export const COMMAND_DEFINITIONS: Command[] = [
         id: "action:cancel_sketch",
         name: "Cancel Sketch",
         description: "Exit sketch mode and discard changes",
+        // No shortcut - too destructive for single key
+        modes: ["sketch"],
+        category: "action",
+    },
+    {
+        id: "action:deselect_sketch",
+        name: "Deselect / Reset Tool",
+        description: "Reset current tool or clear selection",
         shortcut: "Escape",
         modes: ["sketch"],
         category: "action",

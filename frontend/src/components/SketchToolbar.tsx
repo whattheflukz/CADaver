@@ -31,23 +31,25 @@ const getCommandInfo = (toolId: string) => {
 
 const SketchToolbar: Component<SketchToolbarProps> = (props) => {
     return (
-        <div style={{
-            position: "absolute",
-            top: "50px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#444",
-            padding: "5px 10px",
-            "border-radius": "8px",
-            display: "flex",
-            gap: "6px",
-            "z-index": 1000,
-            color: "white",
-            border: "2px solid #007bff",
-            "flex-wrap": "wrap",
-            "max-width": "90vw",
-            "align-items": "center"
-        }}>
+        <div
+            data-testid="sketch-toolbar"
+            style={{
+                position: "absolute",
+                top: "50px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "#444",
+                padding: "5px 10px",
+                "border-radius": "8px",
+                display: "flex",
+                gap: "6px",
+                "z-index": 1000,
+                color: "white",
+                border: "2px solid #007bff",
+                "flex-wrap": "wrap",
+                "max-width": "90vw",
+                "align-items": "center"
+            }}>
             <span style={{ "font-weight": "bold", "align-self": "center" }}>SKETCH MODE</span>
 
             {/* Construction Mode Toggle */}
@@ -231,6 +233,14 @@ const SketchToolbar: Component<SketchToolbarProps> = (props) => {
                 isConstraint={true}
                 onClick={() => props.onToolSelect("dimension")}
                 {...getCommandInfo("dimension")}
+            />
+            <ToolButton
+                icon="📐"
+                label="Measure"
+                isActive={props.activeTool === "measure"}
+                onClick={() => props.onToolSelect("measure")}
+                description="Measure distances and angles (temporary, non-constraining)"
+                shortcut="M"
             />
 
             {/* Separator */}

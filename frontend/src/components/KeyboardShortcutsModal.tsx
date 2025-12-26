@@ -141,6 +141,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                 }}
                 onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
                 onKeyDown={handleKeyDown}
+                data-testid="shortcuts-modal"
             >
                 <div style={{
                     background: '#2a2a2a',
@@ -157,6 +158,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button
                                 onClick={handleResetAll}
+                                data-testid="shortcuts-reset-all"
                                 style={{
                                     background: '#555',
                                     color: 'white',
@@ -171,6 +173,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                             </button>
                             <button
                                 onClick={props.onClose}
+                                data-testid="shortcuts-close"
                                 style={{
                                     background: '#444',
                                     color: 'white',
@@ -195,7 +198,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                             padding: '20px',
                             'margin-bottom': '20px',
                             'text-align': 'center',
-                        }}>
+                        }} data-testid="shortcut-recording-overlay">
                             <div style={{ 'font-size': '14px', 'margin-bottom': '10px' }}>
                                 Recording shortcut for: <strong>{COMMAND_DEFINITIONS.find(c => c.id === recordingFor())?.name}</strong>
                             </div>
@@ -218,6 +221,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                                 <button
                                     onClick={applyShortcut}
                                     disabled={!pendingShortcut()}
+                                    data-testid="shortcut-apply-btn"
                                     style={{
                                         background: pendingShortcut() ? '#28a745' : '#555',
                                         color: 'white',
@@ -231,6 +235,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                                 </button>
                                 <button
                                     onClick={cancelRecording}
+                                    data-testid="shortcut-cancel-btn"
                                     style={{
                                         background: '#666',
                                         color: 'white',
@@ -268,14 +273,15 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                                             padding: '8px 10px',
                                             'border-radius': '4px',
                                             background: recordingFor() === cmd.id ? '#3a3a5a' : 'transparent',
-                                        }}>
+                                        }} data-testid="shortcut-row">
                                             <div>
-                                                <div style={{ 'font-weight': 500 }}>{cmd.name}</div>
+                                                <div style={{ 'font-weight': 500 }} data-testid="shortcut-name">{cmd.name}</div>
                                                 <div style={{ 'font-size': '12px', color: '#888' }}>{cmd.description}</div>
                                             </div>
                                             <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
                                                 <span
                                                     onClick={() => startRecording(cmd.id)}
+                                                    data-testid="shortcut-key"
                                                     style={{
                                                         background: '#444',
                                                         padding: '4px 10px',
@@ -292,6 +298,7 @@ const KeyboardShortcutsModal: Component<KeyboardShortcutsModalProps> = (props) =
                                                     <button
                                                         onClick={() => handleReset(cmd.id)}
                                                         title="Reset to default"
+                                                        data-testid="shortcut-reset-btn"
                                                         style={{
                                                             background: 'transparent',
                                                             border: 'none',

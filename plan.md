@@ -372,7 +372,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Program generation layer
 - [x] MicroCAD AST/source mapping
 - [ ] Deterministic evaluation guarantees
-- [ ] Kernel error propagation to UI
+- [x] Kernel error propagation to UI
 
 ### **Topological Naming & References (Critical)**
 - [x] Persistent face/edge/vertex IDs

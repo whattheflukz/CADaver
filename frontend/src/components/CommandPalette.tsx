@@ -368,9 +368,11 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                 }}
                 onClick={handleOverlayClick}
                 onKeyDown={handleKeyDown}
+                data-testid="command-palette-overlay"
             >
                 <div
                     ref={modalRef}
+                    data-testid="command-palette"
                     style={{
                         position: "absolute",
                         top: `${position().y}px`,
@@ -415,6 +417,7 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                             placeholder="Type a command..."
                             value={searchQuery()}
                             onInput={(e) => handleSearchChange(e.currentTarget.value)}
+                            data-testid="command-palette-input"
                             style={{
                                 width: "100%",
                                 padding: "8px 10px",
@@ -502,6 +505,7 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                             {(command, index) => (
                                 <div
                                     onClick={() => props.onCommandSelect(command.id)}
+                                    data-testid="command-item"
                                     style={{
                                         padding: "8px 12px",
                                         cursor: "pointer",
@@ -526,13 +530,14 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                                             "min-width": "60px",
                                             "text-align": "center",
                                         }}
+                                        data-testid="command-category"
                                     >
                                         {command.category}
                                     </span>
 
                                     {/* Command Info */}
                                     <div style={{ flex: 1 }}>
-                                        <div style={{ color: "#fff", "font-size": "13px" }}>
+                                        <div style={{ color: "#fff", "font-size": "13px" }} data-testid="command-name">
                                             {command.name}
                                         </div>
                                         <div style={{ color: "#777", "font-size": "11px" }}>
@@ -551,6 +556,7 @@ const CommandPalette: Component<CommandPaletteProps> = (props) => {
                                                 "font-size": "10px",
                                                 "font-family": "monospace",
                                             }}
+                                            data-testid="command-shortcut"
                                         >
                                             {command.shortcut}
                                         </span>
