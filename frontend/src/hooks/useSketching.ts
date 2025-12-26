@@ -1296,10 +1296,10 @@ export function useSketching(props: UseSketchingProps) {
       console.log("[DEBUG handleSketchInput] Click detected, activeTool:", sketchTool());
     }
 
-    // Delegate to Tool Registry (Except Dimension/Measure which have legacy complex logic for now)
+    // Delegate to Tool Registry (Except Dimension/Measure/Offset which have legacy complex logic for now)
     const activeTool = sketchTool();
     console.log("[DEBUG handleSketchInput] Active tool before delegation:", activeTool, "type:", type);
-    if (activeTool !== 'dimension' && activeTool !== 'measure') {
+    if (activeTool !== 'dimension' && activeTool !== 'measure' && activeTool !== 'offset') {
       console.log("[DEBUG handleSketchInput] Delegating to ToolRegistry for tool:", activeTool);
       const toolInstance = toolRegistry.getTool(activeTool);
       if (toolInstance) {
@@ -2210,12 +2210,13 @@ export function useSketching(props: UseSketchingProps) {
           const angle = Math.atan2(dy, dx);
 
           // Arc 1 (at C1): Semicircle away from C2. Center C1.
-          // Angles: angle + PI/2 to angle + 3PI/2 (or -PI/2)
+          // Goes counterclockwise from +90° to -90° (180° through left side)
           const a1_start = angle + Math.PI / 2;
           const a1_end = angle - Math.PI / 2;
 
           // Arc 2 (at C2): Semicircle away from C1. Center C2.
-          // Angles: angle - PI/2 to angle + PI/2
+          // Must sweep through OPPOSITE semicircle (right side)
+          // Goes counterclockwise from -90° to +90° (180° through right side)
           const a2_start = angle - Math.PI / 2;
           const a2_end = angle + Math.PI / 2;
 

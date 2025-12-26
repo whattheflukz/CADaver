@@ -6,6 +6,7 @@ import { ArcTool } from "./ArcTool";
 import { SelectTool } from "./SelectTool";
 import { DimensionTool } from "./DimensionTool";
 import { MeasureTool } from "./MeasureTool";
+import { OffsetTool } from "./OffsetTool";
 
 export class ToolRegistry {
     private tools: Map<string, SketchTool> = new Map();
@@ -20,6 +21,7 @@ export class ToolRegistry {
         this.register(new SelectTool(context));
         this.register(new DimensionTool(context));
         this.register(new MeasureTool(context));
+        this.register(new OffsetTool(context));
     }
 
     private register(tool: SketchTool) {
