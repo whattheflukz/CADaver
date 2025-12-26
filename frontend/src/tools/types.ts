@@ -1,0 +1,46 @@
+import type { Sketch, SketchEntity, SelectionCandidate, SnapPoint, SolveResult } from "../types";
+
+export interface SketchToolContext {
+    // State Accessors
+    sketch: Sketch;
+    selection: SelectionCandidate[];
+    snapPoint: SnapPoint | null;
+    constructionMode: boolean;
+
+    // State Modifiers
+    setSketch: (sketch: Sketch) => void;
+    setSelection: (selection: SelectionCandidate[]) => void;
+    setEditingDimension: (dim: any) => void;
+
+    // Dimension specific
+    dimensionSelection?: SelectionCandidate[];
+    setDimensionSelection?: (selection: SelectionCandidate[]) => void;
+    commitDimension?: () => boolean;
+    setDimensionMousePosition?: (pos: [number, number]) => void;
+
+    // Actions
+    sendUpdate: (sketch: Sketch) => void; // Trigger solver
+    spawnEntity: (entity: SketchEntity) => void; // Add new entity helper
+
+    // Command / Input
+    getSketchAction?: (e: KeyboardEvent) => any;
+}
+
+export interface SketchTool {
+    id: string;
+
+    // Lifecycle
+    onActivate?(): void;
+    onDeactivate?(): void;
+
+    // Mouse Events (coordinates in sketch plane local space)
+    onMouseDown?(u: number, v: number, e?: MouseEvent): void;
+    onMouseMove?(u: number, v: number, e?: MouseEvent): void;
+    onMouseUp?(u: number, v: number, e?: MouseEvent): void;
+
+    // Keyboard Events
+    onKeyDown?(e: KeyboardEvent): void;
+
+    // Actions
+    onCancel?(): void; // Esc key
+}

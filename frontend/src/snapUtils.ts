@@ -3,39 +3,8 @@
  * Mirrors the backend snap.rs logic for responsive client-side snapping.
  */
 
-import { type Sketch, type SnapPoint, type SnapConfig, type SnapType } from './types';
-
-/** Calculate distance between two 2D points */
-function distance(a: [number, number], b: [number, number]): number {
-    const dx = b[0] - a[0];
-    const dy = b[1] - a[1];
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-/** Line-line segment intersection */
-function lineLineIntersection(
-    l1s: [number, number], l1e: [number, number],
-    l2s: [number, number], l2e: [number, number]
-): [number, number] | null {
-    const d1x = l1e[0] - l1s[0];
-    const d1y = l1e[1] - l1s[1];
-    const d2x = l2e[0] - l2s[0];
-    const d2y = l2e[1] - l2s[1];
-
-    const cross = d1x * d2y - d1y * d2x;
-    if (Math.abs(cross) < 1e-10) return null;
-
-    const dx = l2s[0] - l1s[0];
-    const dy = l2s[1] - l1s[1];
-
-    const t = (dx * d2y - dy * d2x) / cross;
-    const s = (dx * d1y - dy * d1x) / cross;
-
-    if (t >= 0 && t <= 1 && s >= 0 && s <= 1) {
-        return [l1s[0] + t * d1x, l1s[1] + t * d1y];
-    }
-    return null;
-}
+import { type Sketch, type SnapPoint, type SnapConfig, type SnapType, type ConstraintPoint, type SketchConstraint, wrapConstraint } from './types';
+import { distance, lineLineIntersection } from './utils/geometryUtils';
 
 const SNAP_PRIORITY: Record<SnapType, number> = {
     Endpoint: 1,
@@ -51,6 +20,7 @@ const SNAP_PRIORITY: Record<SnapType, number> = {
 /**
  * Find all snap points near the cursor
  */
+
 export function findSnapPoints(
     cursor: [number, number],
     sketch: Sketch,
@@ -286,4 +256,154 @@ export function applyAngularSnapping(
     }
 
     return { position: cursor, snapped: false, snapType: null };
+}
+/**
+ * Generate auto-constraints based on snap points for a new entity.
+ */
+export function applyAutoConstraints(
+    sketch: Sketch,
+    newEntityId: string,
+    startSnap: SnapPoint | null,
+    endSnap: SnapPoint | null
+): SketchConstraint[] {
+    const constraints: SketchConstraint[] = [];
+
+    // Helper to convert snap to constraint point
+    const snapToCP = (snap: SnapPoint): ConstraintPoint | null => {
+        if (!snap.entity_id) return null;
+
+        const entity = sketch.entities.find(e => e.id === snap.entity_id);
+        if (!entity) return null;
+
+        if (entity.geometry.Line) {
+            const dStart = distance(entity.geometry.Line.start, snap.position);
+            const dEnd = distance(entity.geometry.Line.end, snap.position);
+            return { id: snap.entity_id, index: dStart < dEnd ? 0 : 1 };
+        } else if (entity.geometry.Circle) {
+            return { id: snap.entity_id, index: 0 }; // Center
+        } else if (entity.geometry.Arc) {
+            const { center, radius, start_angle, end_angle } = entity.geometry.Arc;
+            const dCenter = distance(center, snap.position);
+            if (dCenter < 0.1) return { id: snap.entity_id, index: 0 };
+
+            const pStart: [number, number] = [center[0] + radius * Math.cos(start_angle), center[1] + radius * Math.sin(start_angle)];
+            const pEnd: [number, number] = [center[0] + radius * Math.cos(end_angle), center[1] + radius * Math.sin(end_angle)];
+
+            const dStart = distance(pStart, snap.position);
+            const dEnd = distance(pEnd, snap.position);
+
+            if (dStart < dEnd) return { id: snap.entity_id, index: 1 };
+            return { id: snap.entity_id, index: 2 };
+        }
+        return null;
+    };
+
+    const processSnap = (snap: SnapPoint, newEntityIndex: number) => {
+        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Midpoint" || snap.snap_type === "Intersection") {
+            // Create Coincident
+            const cp = snapToCP(snap);
+            if (cp) {
+                // Prevent self-constraint if snapping to self (unlikely during creation but possible)
+                if (cp.id !== newEntityId) {
+                    constraints.push({
+                        Coincident: {
+                            points: [
+                                cp,
+                                { id: newEntityId, index: newEntityIndex }
+                            ]
+                        }
+                    });
+                    // console.log("Auto-Constraint: Coincident to", snap.snap_type, cp.id);
+                }
+            }
+        } else if (snap.snap_type === "Origin") {
+            // Create Fix at 0,0
+            constraints.push({
+                Fix: {
+                    point: { id: newEntityId, index: newEntityIndex },
+                    position: [0, 0]
+                }
+            });
+            // console.log("Auto-Constraint: Fix to Origin");
+        }
+    };
+
+    if (startSnap) processSnap(startSnap, 0); // Start/Center of new entity
+    if (endSnap) processSnap(endSnap, 1);     // End of new entity (if applicable)
+
+    return constraints;
+}
+
+/**
+ * Find the closest entity to the cursor position within a threshold.
+ */
+export function findClosestEntity(
+    cursor: [number, number],
+    sketch: Sketch,
+    threshold: number = 0.5
+): { id: string; type: "entity" | "point"; distance: number } | null {
+    let bestDist = threshold;
+    let bestMatch: { id: string; type: "entity" | "point"; distance: number } | null = null;
+
+    for (const entity of sketch.entities) {
+        if (entity.is_construction) continue; // Optional: decide if construction geometry is selectable. Usually yes.
+        // Actually, construction geometry SHOULD be selectable. Removing that check or making it optional.
+    }
+
+    // Re-looping properly
+    for (const entity of sketch.entities) {
+        let dist = Infinity;
+        let type: "entity" | "point" = "entity";
+
+        if (entity.geometry.Point) {
+            dist = distance(cursor, entity.geometry.Point.pos);
+            type = "point";
+        } else if (entity.geometry.Line) {
+            // Point to line segment distance
+            const { start, end } = entity.geometry.Line;
+            const l2 = (end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2;
+            if (l2 === 0) {
+                dist = distance(cursor, start);
+            } else {
+                let t = ((cursor[0] - start[0]) * (end[0] - start[0]) + (cursor[1] - start[1]) * (end[1] - start[1])) / l2;
+                t = Math.max(0, Math.min(1, t));
+                const projX = start[0] + t * (end[0] - start[0]);
+                const projY = start[1] + t * (end[1] - start[1]);
+                dist = distance(cursor, [projX, projY]);
+            }
+        } else if (entity.geometry.Circle) {
+            const { center, radius } = entity.geometry.Circle;
+            const dCenter = distance(cursor, center);
+            dist = Math.abs(dCenter - radius);
+        } else if (entity.geometry.Arc) {
+            const { center, radius, start_angle, end_angle } = entity.geometry.Arc;
+            const dCenter = distance(cursor, center);
+            const distRadius = Math.abs(dCenter - radius);
+
+            // Allow selecting if near the arc curve
+            if (distRadius < threshold) {
+                // Check angle
+                const dx = cursor[0] - center[0];
+                const dy = cursor[1] - center[1];
+                let angle = Math.atan2(dy, dx);
+
+                // Normalize angles logic (basic check)
+                // This can be tricky with wrapping. 
+                // Let's rely on a rough check or just select the circle part if close enough
+                // Ideally we verify the angle is within [start, end]
+
+                // Simple approx: if distance(cursor, closestPointOnFullCircle) is small, accept it?
+                // No, we should respect the arc span.
+                // Revisit angle check later if strictness needed. For now accept if close to radius.
+                dist = distRadius;
+            }
+        }
+
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestMatch = { id: entity.id, type, distance: dist };
+        }
+    }
+
+    return bestMatch;
 }

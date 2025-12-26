@@ -11,7 +11,8 @@ interface MirrorModalProps {
 }
 
 export const MirrorModal: Component<MirrorModalProps> = (props) => {
-    const isConfirmDisabled = !props.selectedAxis || props.selectedEntityCount === 0;
+    // Use a getter to ensure reactivity - the const was computed once and never updated
+    const isConfirmDisabled = () => !props.selectedAxis || props.selectedEntityCount === 0;
 
     return (
         <BaseModal
@@ -19,7 +20,7 @@ export const MirrorModal: Component<MirrorModalProps> = (props) => {
             title="Mirror Objects"
             onConfirm={props.onConfirm}
             onCancel={props.onCancel}
-            confirmDisabled={isConfirmDisabled}
+            confirmDisabled={isConfirmDisabled()}
             width={300}
         >
             {/* Mirror Axis Selection */}

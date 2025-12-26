@@ -2,6 +2,7 @@ import { createSignal, createEffect, createMemo, onCleanup, onMount, untrack, ty
 import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState } from '../types';
 import { getSketchAction } from '../sketchInputManager';
 import { applySnapping, applyAngularSnapping } from '../snapUtils';
+import { ToolRegistry } from '../tools/ToolRegistry';
 
 interface UseSketchingProps {
   send: (msg: string) => void;
@@ -262,6 +263,208 @@ export function useSketching(props: UseSketchingProps) {
 
   // Props destructuring
   const { send, graph, selection } = props;
+
+  const handleDimensionFinish = (offsetOverride?: [number, number]) => {
+    const action = dimensionProposedAction();
+    const selections = dimensionSelection();
+    if (!action || !action.isValid) return;
+
+    const sketch = currentSketch();
+    let constraint: SketchConstraint | null = null;
+
+    if (action.type === "Length") {
+      // Single Line
+      const c = selections[0];
+      if (c && c.type === "entity") {
+        constraint = {
+          Distance: {
+            points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+          }
+        };
+      }
+    } else if (action.type === "Radius") {
+      const c = selections[0];
+      if (c && c.type === "entity") {
+        constraint = {
+          Radius: {
+            entity: c.id,
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0.7, 0.7] }
+          }
+        };
+      }
+    } else if (action.type === "Angle") {
+      const [c1, c2] = selections;
+      constraint = {
+        Angle: {
+          lines: [c1.id, c2.id],
+          value: action.value!,
+          style: { driven: false, offset: [0, 1.0] }
+        }
+      };
+    } else if (action.type === "DistancePointLine") {
+      const c1 = selections[0];
+      const c2 = selections[1];
+      const lineCand = c1.type === "entity" ? c1 : c2;
+      const pointCand = c1.type === "entity" ? c2 : c1;
+
+      const getConstraintPoint = (c: SelectionCandidate): { id: string, index: number } => {
+        if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+        return { id: c.id, index: c.index || 0 };
+      };
+
+      constraint = {
+        DistancePointLine: {
+          point: getConstraintPoint(pointCand),
+          line: lineCand.id,
+          value: action.value!,
+        }
+      };
+    } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
+      // Point-Point or Inferred Line endpoints
+      let p1: { id: string, index: number } | null = null;
+      let p2: { id: string, index: number } | null = null;
+
+      if (selections.length === 2) {
+        const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
+          if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+          if (c.type === "point") return { id: c.id, index: c.index || 0 };
+          if (c.type === "entity") return { id: c.id, index: c.index || 0 };
+          return null;
+        };
+        p1 = getPoint(selections[0]);
+        p2 = getPoint(selections[1]);
+      } else if (selections.length === 1 && selections[0].type === 'entity') {
+        // Single line selection -> using endpoints 0 and 1
+        p1 = { id: selections[0].id, index: 0 };
+        p2 = { id: selections[0].id, index: 1 };
+      }
+
+      if (p1 && p2) {
+        if (action.type === "HorizontalDistance") {
+          constraint = {
+            HorizontalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else if (action.type === "VerticalDistance") {
+          constraint = {
+            VerticalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else {
+          constraint = {
+            Distance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        }
+      }
+    } else if (action.type === "DistanceParallelLines") {
+      // Two parallel lines - constrain distance between them
+      const [c1, c2] = selections;
+      if (c1.type === "entity" && c2.type === "entity") {
+        constraint = {
+          DistanceParallelLines: {
+            lines: [c1.id, c2.id],
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+          }
+        };
+      }
+    } else if (action.type === "DistancePointLine") {
+      const [c1, c2] = selections;
+      // Identify which is point and which is line
+      // We assume one is point-like and one is line entity because analyzeDimensionSelection verified it
+      const isC1Line = c1.type === "entity" && sketch.entities.find(e => e.id === c1.id)?.geometry.Line;
+      const lineC = isC1Line ? c1 : c2;
+      const pointC = isC1Line ? c2 : c1;
+
+      // Construct ConstraintPoint for the point
+      let pointDef: ConstraintPoint;
+      if (pointC.id === "origin") {
+        // Origin is special, but constraint expects EntityId? 
+        // Most backends allow "origin" or specific UUID. 
+        // If "origin" string is not a valid UUID, this might fail if backend expects UUID.
+        // But SelectionCandidate uses "origin". 
+        // Let's assume ID is passed as is.
+        pointDef = { id: "origin", index: 0 };
+      } else {
+        pointDef = { id: pointC.id, index: pointC.index || 0 };
+      }
+
+      constraint = {
+        DistancePointLine: {
+          point: pointDef,
+          line: lineC.id,
+          value: action.value!,
+          style: { driven: false, offset: offsetOverride || [0, 1.0] }
+        }
+      };
+    }
+
+    if (constraint) {
+      const updated = { ...sketch };
+      updated.constraints = [...updated.constraints, wrapConstraint(constraint)];
+      updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
+      setCurrentSketch(updated);
+      sendSketchUpdate(updated); // Send to backend to persist and solve
+
+      // Trigger edit mode for the newly created constraint
+      const newIndex = updated.constraints.length - 1;
+      setEditingDimension({
+        constraintIndex: newIndex,
+        type: action.type === 'Radius' ? 'Radius' : (action.type === 'Angle' ? 'Angle' : 'Distance'),
+        currentValue: action.value!,
+        isNew: true
+      });
+      // console.log("Added Advanced Dimension and triggered edit:", action.type);
+    }
+
+    // Cleanup
+    setDimensionSelection([]);
+    setDimensionProposedAction(null);
+    setDimensionPlacementMode(false);
+    setSketchTool("select");
+  };
+
+  // Tool Registry
+  const toolRegistry = new ToolRegistry({
+    get sketch() { return currentSketch(); },
+    setSketch: (s) => setCurrentSketch(s),
+    get selection() { return sketchSelection(); },
+    setSelection: (s) => setSketchSelection(s),
+    setEditingDimension: (dim) => setEditingDimension(dim),
+    get dimensionSelection() { return dimensionSelection(); },
+    setDimensionSelection: (s) => setDimensionSelection(s),
+    commitDimension: () => {
+      if (dimensionPlacementMode() && dimensionProposedAction()?.isValid) {
+        handleDimensionFinish();
+        return true;
+      }
+      return false;
+    },
+    setDimensionMousePosition: (pos) => setDimensionMousePosition(pos),
+    get snapPoint() { return activeSnap(); },
+    get constructionMode() { return constructionMode(); },
+    sendUpdate: (s) => sendSketchUpdate(s),
+    spawnEntity: (e) => {
+      // Simple spawn implementation
+      const sketch = currentSketch();
+      const updated = { ...sketch, entities: [...sketch.entities, e] };
+      setCurrentSketch(updated);
+      sendSketchUpdate(updated);
+    }
+  });
 
   // Effect to sync solved sketch
   createEffect(() => {
@@ -635,6 +838,12 @@ export function useSketching(props: UseSketchingProps) {
       entry.constraint.HorizontalDistance.style.offset = newOffset;
     } else if (entry.constraint.VerticalDistance && entry.constraint.VerticalDistance.style) {
       entry.constraint.VerticalDistance.style.offset = newOffset;
+    } else if (entry.constraint.DistancePointLine) {
+      // Initialize style if it doesn't exist (backend doesn't send it)
+      if (!entry.constraint.DistancePointLine.style) {
+        entry.constraint.DistancePointLine.style = { driven: false, offset: [0, 0] };
+      }
+      entry.constraint.DistancePointLine.style.offset = newOffset;
     }
 
     setCurrentSketch({ ...sketch });
@@ -834,6 +1043,46 @@ export function useSketching(props: UseSketchingProps) {
         }
       }
 
+      // Point + Line => Perpendicular Distance
+      if ((isPointLike(c1) && c2.type === "entity") || (isPointLike(c2) && c1.type === "entity")) {
+        const pointC = isPointLike(c1) ? c1 : c2;
+        const lineC = isPointLike(c1) ? c2 : c1;
+
+        const lineEnt = sketch.entities.find(e => e.id === lineC.id);
+        if (lineEnt && lineEnt.geometry.Line) {
+          const p = getCandidatePosition(pointC, sketch);
+          const line = lineEnt.geometry.Line;
+
+          if (p) {
+            // Calculate perpendicular distance
+            const dx = line.end[0] - line.start[0];
+            const dy = line.end[1] - line.start[1];
+            const len = Math.sqrt(dx * dx + dy * dy);
+
+            if (len > 0.0001) {
+              const nx = -dy / len; // Perpendicular normal
+              const ny = dx / len;
+
+              const vx = p[0] - line.start[0];
+              const vy = p[1] - line.start[1];
+
+              const dist = Math.abs(vx * nx + vy * ny);
+
+              setDimensionProposedAction({
+                label: `Distance (${dist.toFixed(2)})`,
+                type: "DistancePointLine",
+                value: dist,
+                isValid: true,
+                // Store specific data for commit (using extra props, though type definition might complain if strict)
+                // Ideally we add these to the DimensionAction type or pass them via current selection state
+              });
+              setDimensionPlacementMode(true);
+              return;
+            }
+          }
+        }
+      }
+
       // Line + Line => Check if parallel first, then decide Angle vs Distance
       if (c1.type === "entity" && c2.type === "entity") {
         const e1 = sketch.entities.find(e => e.id === c1.id);
@@ -977,149 +1226,6 @@ export function useSketching(props: UseSketchingProps) {
     setDimensionPlacementMode(false);
   };
 
-  const handleDimensionFinish = (offsetOverride?: [number, number]) => {
-    const action = dimensionProposedAction();
-    const selections = dimensionSelection();
-    if (!action || !action.isValid) return;
-
-    const sketch = currentSketch();
-    let constraint: SketchConstraint | null = null;
-
-    if (action.type === "Length") {
-      // Single Line
-      const c = selections[0];
-      if (c && c.type === "entity") {
-        constraint = {
-          Distance: {
-            points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0, 1.0] }
-          }
-        };
-      }
-    } else if (action.type === "Radius") {
-      const c = selections[0];
-      if (c && c.type === "entity") {
-        constraint = {
-          Radius: {
-            entity: c.id,
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0.7, 0.7] }
-          }
-        };
-      }
-    } else if (action.type === "Angle") {
-      const [c1, c2] = selections;
-      constraint = {
-        Angle: {
-          lines: [c1.id, c2.id],
-          value: action.value!,
-          style: { driven: false, offset: [0, 1.0] }
-        }
-      };
-    } else if (action.type === "DistancePointLine") {
-      const c1 = selections[0];
-      const c2 = selections[1];
-      const lineCand = c1.type === "entity" ? c1 : c2;
-      const pointCand = c1.type === "entity" ? c2 : c1;
-
-      const getConstraintPoint = (c: SelectionCandidate): { id: string, index: number } => {
-        if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
-        return { id: c.id, index: c.index || 0 };
-      };
-
-      constraint = {
-        DistancePointLine: {
-          point: getConstraintPoint(pointCand),
-          line: lineCand.id,
-          value: action.value!,
-        }
-      };
-    } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
-      // Point-Point or Inferred Line endpoints
-      let p1: { id: string, index: number } | null = null;
-      let p2: { id: string, index: number } | null = null;
-
-      if (selections.length === 2) {
-        const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
-          if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
-          if (c.type === "point") return { id: c.id, index: c.index || 0 };
-          if (c.type === "entity") return { id: c.id, index: c.index || 0 };
-          return null;
-        };
-        p1 = getPoint(selections[0]);
-        p2 = getPoint(selections[1]);
-      } else if (selections.length === 1 && selections[0].type === 'entity') {
-        // Single line selection -> using endpoints 0 and 1
-        p1 = { id: selections[0].id, index: 0 };
-        p2 = { id: selections[0].id, index: 1 };
-      }
-
-      if (p1 && p2) {
-        if (action.type === "HorizontalDistance") {
-          constraint = {
-            HorizontalDistance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        } else if (action.type === "VerticalDistance") {
-          constraint = {
-            VerticalDistance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        } else {
-          constraint = {
-            Distance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        }
-      }
-    } else if (action.type === "DistanceParallelLines") {
-      // Two parallel lines - constrain distance between them
-      const [c1, c2] = selections;
-      if (c1.type === "entity" && c2.type === "entity") {
-        constraint = {
-          DistanceParallelLines: {
-            lines: [c1.id, c2.id],
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0, 1.0] }
-          }
-        };
-      }
-    }
-
-    if (constraint) {
-      const updated = { ...sketch };
-      updated.constraints = [...updated.constraints, wrapConstraint(constraint)];
-      updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
-      setCurrentSketch(updated);
-      sendSketchUpdate(updated); // Send to backend to persist and solve
-
-      // Trigger edit mode for the newly created constraint
-      const newIndex = updated.constraints.length - 1;
-      setEditingDimension({
-        constraintIndex: newIndex,
-        type: action.type === 'Radius' ? 'Radius' : (action.type === 'Angle' ? 'Angle' : 'Distance'),
-        currentValue: action.value!,
-        isNew: true
-      });
-      // console.log("Added Advanced Dimension and triggered edit:", action.type);
-    }
-
-    // Cleanup
-    setDimensionSelection([]);
-    setDimensionProposedAction(null);
-    setDimensionPlacementMode(false);
-    setSketchTool("select");
-  };
 
 
 
@@ -1134,7 +1240,7 @@ export function useSketching(props: UseSketchingProps) {
   const [tempPoint, setTempPoint] = createSignal<[number, number] | null>(null);
   const [tempStartPoint, setTempStartPoint] = createSignal<[number, number] | null>(null);
 
-  const handleSketchInput = (type: "click" | "move" | "dblclick", point: [number, number, number]) => {
+  const handleSketchInput = (type: "click" | "move" | "dblclick" | "up", point: [number, number, number], event?: MouseEvent) => {
     if (!sketchMode()) return;
 
     // Apply snapping to get the effective point
@@ -1147,6 +1253,21 @@ export function useSketching(props: UseSketchingProps) {
         console.log("Active Snap Changed:", snap?.snap_type, snap?.position);
       }
       setActiveSnap(snap);
+    }
+
+    // Delegate to Tool Registry
+    const activeTool = sketchTool();
+    const toolInstance = toolRegistry.getTool(activeTool);
+    if (toolInstance) {
+      // Pass input to tool
+      if (type === "click") {
+        toolInstance.onMouseDown && toolInstance.onMouseDown(rawPoint[0], rawPoint[1], event);
+      } else if (type === "move") {
+        toolInstance.onMouseMove && toolInstance.onMouseMove(rawPoint[0], rawPoint[1], event);
+      } else if (type === "up") { // Assuming "up" type is passed or mapped
+        toolInstance.onMouseUp && toolInstance.onMouseUp(rawPoint[0], rawPoint[1], event);
+      }
+      return;
     }
 
     // Use snapped position for all geometry operations

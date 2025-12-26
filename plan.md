@@ -38,6 +38,195 @@ This document is the **authoritative plan** (`plan.md`) and defines:
 
 ---
 
+## **Architectural Discipline & Anti-Entropy Rules (Critical)**
+
+This project has a high risk of **structural entropy** due to its complexity, long lifespan, and iterative development style.  
+To prevent the codebase from collapsing into a small number of unmaintainable files, the following rules are **non-negotiable**.
+
+These rules exist to **prevent feature accretion, god-objects, and implicit coupling**.
+
+---
+
+## **Core Principle: Separation of Concerns Is Mandatory**
+
+Every system must have:
+- A **single, clearly defined responsibility**
+- A **well-defined boundary**
+- **Minimal awareness** of other systems
+
+If a file or module starts to answer more than one of the following questions, it is doing too much:
+
+- *What is the data?*
+- *How is it displayed?*
+- *How does the user interact with it?*
+- *How is it transformed or solved?*
+- *How does it integrate with other systems?*
+
+These concerns **must not live together**.
+
+---
+
+## **Hard Rules (Non-Negotiable)**
+
+### 1. No Feature Piling
+If a file grows because a new feature was added:
+- Stop.
+- Identify whether the feature belongs to an existing system or a new one.
+- Create a new module if responsibility changes.
+
+**Features do not get added “just because it’s convenient.”**
+
+---
+
+### 2. No God Files
+Any file that:
+- Handles UI + logic + state  
+- Coordinates multiple unrelated systems  
+- Grows without a clear boundary  
+
+…must be split.
+
+**Large files are a smell, not a badge of progress.**
+
+---
+
+### 3. Systems Must Be Named and Bounded
+Every major system must:
+- Have a clear name
+- Live in a clearly scoped directory
+- Expose a narrow, intentional API
+
+Examples:
+
+/sketch
+/constraints
+/geometry
+/interaction
+/state
+
+
+Not:
+
+/sketch.ts
+
+
+---
+
+### 4. UI Must Never Contain Business Logic
+UI components may:
+- Display state
+- Forward user intent
+- Render visual feedback
+
+UI components may NOT:
+- Solve geometry
+- Mutate model state directly
+- Make architectural decisions
+
+UI talks to **controllers / coordinators**, not core logic.
+
+---
+
+### 5. Geometry, State, and Interaction Must Be Separate
+These three layers must never blur:
+
+- **Geometry** → math, constraints, topology
+- **State** → selection, mode, history, feature data
+- **Interaction** → mouse, keyboard, gestures, hover logic
+
+If a function needs all three, it must be split.
+
+---
+
+### 6. No Implicit Cross-System Knowledge
+A system should not need to “know” internal details of another system.
+
+Bad:
+- Sketch system assuming how selection is stored
+- UI code assuming geometry data layout
+- Features directly mutating global state
+
+Good:
+- Explicit interfaces
+- Events or commands
+- Clearly owned data flow
+
+---
+
+### 7. Favor Explicit Data Flow Over Convenience
+If data moves between systems:
+- Make the transfer explicit
+- Avoid implicit globals or shared mutable objects
+- Prefer structured inputs/outputs over shared state
+
+---
+
+### 8. Refactoring Is Part of Feature Work
+When adding a feature:
+- If structure degrades → refactor first
+- If a file grows unwieldy → split it immediately
+- If responsibilities blur → stop and realign
+
+**Shipping broken architecture is worse than shipping nothing.**
+
+---
+
+## **Required Behavior When Adding New Features**
+
+Before implementing any feature, the agent must:
+
+1. Identify which system owns the feature  
+2. Verify that the system already exists or create a new one  
+3. Confirm no unrelated systems are being modified  
+4. Ensure new logic does not live in:
+   - UI components
+   - Rendering code
+   - Generic utility files unless truly reusable  
+
+If any of these fail → restructure first.
+
+---
+
+## **Architecture Self-Check (Must Pass)**
+
+Before committing work, ask:
+
+- Can this file be explained in one sentence?
+- Does this file have exactly one reason to change?
+- Could this logic be reused elsewhere?
+- Would a new contributor understand where to add similar logic?
+- Is this system isolated enough to be testable on its own?
+
+If the answer is “no” to any of the above — refactor.
+
+---
+
+## **Enforcement Rule**
+
+If a feature causes:
+- A file to grow uncontrollably
+- Cross-system coupling
+- Hidden dependencies
+- Hard-to-trace side effects  
+
+**Stop implementation and restructure immediately.**
+
+Progress is defined by **clarity**, not speed.
+
+---
+
+## **Goal**
+
+By enforcing these rules, the codebase should:
+- Scale without architectural decay  
+- Support rapid iteration without fear  
+- Allow new systems to be added cleanly  
+- Remain understandable months later  
+
+This is not optional hygiene — it is core infrastructure.
+
+---
+
 ## High-Level Architecture
 ┌────────────────────────────┐
 │ Frontend (Web)             │
