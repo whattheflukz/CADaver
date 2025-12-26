@@ -1,6 +1,7 @@
 import { createSignal, createEffect, createMemo, onCleanup, untrack, type Accessor } from 'solid-js';
 import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState, type ActiveMeasurement, type MeasurementResult } from '../types';
 import { applySnapping, applyAngularSnapping } from '../snapUtils';
+import { detectInferredConstraints, type InferredConstraint, defaultInferenceConfig } from '../utils/ConstraintInference';
 import { ToolRegistry } from '../tools/ToolRegistry';
 
 interface UseSketchingProps {
@@ -105,7 +106,12 @@ export function useSketching(props: UseSketchingProps) {
   const [snapConfig, setSnapConfig] = createSignal<SnapConfig>(defaultSnapConfig);
   const [activeSnap, setActiveSnap] = createSignal<SnapPoint | null>(null);
   // Track what was snapped to for auto-constraint creation
+  // Track what was snapped to for auto-constraint creation
   const [startSnap, setStartSnap] = createSignal<SnapPoint | null>(null);
+
+  // Temp Point for multipoint tools (moved up for scope access in toolRegistry)
+  const [tempPoint, setTempPoint] = createSignal<[number, number] | null>(null);
+  const [tempStartPoint, setTempStartPoint] = createSignal<[number, number] | null>(null);
 
   // Dimension Editing State
   const [editingDimension, setEditingDimension] = createSignal<{
@@ -449,6 +455,7 @@ export function useSketching(props: UseSketchingProps) {
     get selection() { return sketchSelection(); },
     setSelection: (s) => setSketchSelection(s),
     setEditingDimension: (dim) => setEditingDimension(dim),
+    setTempPoint, // Expose temp point setter
     get dimensionSelection() { return dimensionSelection(); },
     setDimensionSelection: (s) => setDimensionSelection(s),
     commitDimension: () => {
@@ -459,6 +466,9 @@ export function useSketching(props: UseSketchingProps) {
       return false;
     },
     setDimensionMousePosition: (pos) => setDimensionMousePosition(pos),
+    setMeasurementSelection: (s) => setMeasurementSelection(s),
+    calculateMeasurement: (c1, c2) => calculateMeasurement(c1, c2),
+    addActiveMeasurement: (m) => setActiveMeasurements(prev => [...prev, m]),
     get snapPoint() { return activeSnap(); },
     get constructionMode() { return constructionMode(); },
     sendUpdate: (s) => sendSketchUpdate(s),
@@ -651,13 +661,13 @@ export function useSketching(props: UseSketchingProps) {
     // When dimension selection OR mouse position changes, update the proposed action (preview)
     const sel = dimensionSelection();
     const mousePos = dimensionMousePosition(); // Track mouse position for reactivity
-    console.log("[DimPreview Effect] Selection changed:", sel.length, "items, mouse:", mousePos);
+    // console.log("[DimPreview Effect] Selection changed:", sel.length, "items, mouse:", mousePos);
     if (sel.length > 0) {
       analyzeDimensionSelection(sel);
-      console.log("[DimPreview Effect] After analyze:", {
-        proposedAction: dimensionProposedAction(),
-        placementMode: dimensionPlacementMode()
-      });
+      // console.log("[DimPreview Effect] After analyze:", {
+      //   proposedAction: dimensionProposedAction(),
+      //   placementMode: dimensionPlacementMode()
+      // });
     } else {
       setDimensionProposedAction(null);
     }
@@ -959,21 +969,21 @@ export function useSketching(props: UseSketchingProps) {
       // Helper to check if a candidate represents a single point (endpoint, origin, or Point entity)
       const isPointLike = (c: SelectionCandidate): boolean => {
         if (c.type === "point" || c.type === "origin") {
-          console.log("[isPointLike] true for type:", c.type);
+          // console.log("[isPointLike] true for type:", c.type);
           return true;
         }
         if (c.type === "entity") {
           const e = sketch.entities.find(ent => ent.id === c.id);
           const isPoint = !!e?.geometry.Point;
-          console.log("[isPointLike] entity check:", c.id, "has Point geometry:", isPoint, "entity:", e?.geometry);
+          // console.log("[isPointLike] entity check:", c.id, "has Point geometry:", isPoint, "entity:", e?.geometry);
           return isPoint;
         }
-        console.log("[isPointLike] false for type:", c.type);
+        // console.log("[isPointLike] false for type:", c.type);
         return false;
       };
 
-      console.log("[analyzeDimensionSelection] 2 candidates:", c1, c2);
-      console.log("[analyzeDimensionSelection] isPointLike(c1):", isPointLike(c1), "isPointLike(c2):", isPointLike(c2));
+      // console.log("[analyzeDimensionSelection] 2 candidates:", c1, c2);
+      // console.log("[analyzeDimensionSelection] isPointLike(c1):", isPointLike(c1), "isPointLike(c2):", isPointLike(c2));
 
       // Distance: Point-Point, Point-Origin, or Point Entity - Point Entity
       if (isPointLike(c1) && isPointLike(c2)) {
@@ -1000,7 +1010,7 @@ export function useSketching(props: UseSketchingProps) {
             label = `Distance (${value.toFixed(2)})`;
           }
 
-          console.log("[analyzeDimensionSelection] Point-Point matched! p1:", p1, "p2:", p2, "mode:", mode, "value:", value);
+          // console.log("[analyzeDimensionSelection] Point-Point matched! p1:", p1, "p2:", p2, "mode:", mode, "value:", value);
 
           setDimensionProposedAction({
             label,
@@ -1103,7 +1113,7 @@ export function useSketching(props: UseSketchingProps) {
               isParallel = true;
             }
 
-            console.log("Line-Line dimension: isParallel=", isParallel, "hasParallelConstraint=", hasParallelConstraint, "cross=", cross);
+            // console.log("Line-Line dimension: isParallel=", isParallel, "hasParallelConstraint=", hasParallelConstraint, "cross=", cross);
 
             if (isParallel) {
               // Lines are parallel - offer distance between them
@@ -1362,11 +1372,49 @@ export function useSketching(props: UseSketchingProps) {
     setMeasurementPending(null);
   };
 
-  const [tempPoint, setTempPoint] = createSignal<[number, number] | null>(null);
-  const [tempStartPoint, setTempStartPoint] = createSignal<[number, number] | null>(null);
+  // const [tempPoint, setTempPoint] declared at top (moved)
+  // const [tempStartPoint, setTempStartPoint] declared at top (moved)
+
+  // ===== CONSTRAINT INFERENCE STATE =====
+  // Track cursor position for inference detection
+  const [cursorPosition, setCursorPosition] = createSignal<[number, number] | null>(null);
+  // Shift key suppresses inference display
+  const [inferenceSuppress, setInferenceSuppress] = createSignal(false);
+
+  // Computed inferred constraints based on current drawing state
+  const inferredConstraints = createMemo<InferredConstraint[]>(() => {
+    // Only show inferences when actively drawing in sketch mode
+    if (!sketchMode() || inferenceSuppress()) return [];
+
+    const cursor = cursorPosition();
+    if (!cursor) return [];
+
+    // Use tempPoint as the start point during line drawing
+    const startPoint = tempPoint();
+    const sketch = currentSketch();
+    const activeTool = sketchTool();
+    const snap = activeSnap();
+
+    const result = detectInferredConstraints(
+      cursor,
+      startPoint,
+      sketch,
+      activeTool,
+      snap,
+      defaultInferenceConfig
+    );
+
+    // Debug logging (remove after debugging)
+    // if (result.length > 0) {
+    //   console.log('[Inference] Detected:', result.map(r => `${r.type}@${r.displayPosition}`));
+    // }
+    return result;
+  });
 
 
-  const handleSketchInput = (type: "click" | "move" | "dblclick" | "up", point: [number, number, number], event?: MouseEvent) => {
+  const handleSketchInput = (type: string, point: [number, number, number], event?: MouseEvent) => {
+
+    if (type === "cancel") { return; }
     if (!sketchMode()) return;
 
     // Apply snapping to get the effective point
@@ -1379,6 +1427,10 @@ export function useSketching(props: UseSketchingProps) {
         console.log("Active Snap Changed:", snap?.snap_type, snap?.position);
       }
       setActiveSnap(snap);
+      // Update cursor position for constraint inference detection
+      setCursorPosition(snappedPos);
+      // Track shift key for inference suppression
+      setInferenceSuppress(event?.shiftKey ?? false);
     }
 
     // Delegate to Tool Registry
@@ -1433,12 +1485,13 @@ export function useSketching(props: UseSketchingProps) {
     }
 
     // Helper for auto-constraining new entities based on snaps
-    const applyAutoConstraints = (
+    const applyAutoConstraintsDebug = (
       sketch: Sketch,
       newEntityId: string,
       startSnap: SnapPoint | null,
       endSnap: SnapPoint | null
     ): SketchConstraint[] => {
+      console.error("[applyAutoConstraintsDebug] Called with startSnap:", startSnap?.snap_type, "endSnap:", endSnap?.snap_type);
       const constraints: SketchConstraint[] = [];
 
       // Helper to convert snap to constraint point
@@ -1476,7 +1529,15 @@ export function useSketching(props: UseSketchingProps) {
       };
 
       const processSnap = (snap: SnapPoint, newEntityIndex: number) => {
-        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Midpoint" || snap.snap_type === "Intersection") {
+        // console.error(`[processSnap DEBUG] Processing snap for index ${newEntityIndex}:`, snap.snap_type, snap.position, snap.entity_id);
+        // Force alert for user verification
+        window.alert(`Snap Processed: ${snap.snap_type} (Index: ${newEntityIndex})`);
+
+        console.error(`[processSnap DEBUG] Processing snap for index ${newEntityIndex}:`, snap.snap_type);
+
+        // Create Coincident constraint only for snaps that map to actual constraint points
+        // Midpoint is NOT supported as a coincident target - it snaps visually but no constraint is created
+        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Intersection") {
           // Create Coincident
           const cp = snapToCP(snap);
           if (cp) {
@@ -1493,6 +1554,10 @@ export function useSketching(props: UseSketchingProps) {
               console.log("Auto-Constraint: Coincident to", snap.snap_type, cp.id);
             }
           }
+        } else if (snap.snap_type === "Midpoint") {
+          // Midpoint snap: visual snap works but NO coincident constraint is created
+          // The constraint system doesn't support midpoint indices
+          console.log("Midpoint snap: visual snap only, no auto-constraint (not supported)");
         } else if (snap.snap_type === "Origin") {
           // Create Fix at 0,0
           // NOTE: We fix the NEW point, not the origin (which is implicit)
@@ -1974,15 +2039,15 @@ export function useSketching(props: UseSketchingProps) {
       }
     }
 
-    if (sketchTool() === "line") {
 
+    if (sketchTool() === "line") {
       if (type === "click") {
         if (!tempPoint()) {
-          // Start line - save snap target for auto-constraint
+          // Legacy dead code - handled by LineTool
           setTempPoint(effectivePoint);
-          setStartSnap(snap); // Track what we snapped to
+          setStartSnap(snap);
         } else {
-          // Finish line
+          console.error("[Line Tool] Finishing line");
           const start = tempPoint()!;
           const newEntityId = crypto.randomUUID();
           const newEntity: SketchEntity = {
@@ -1996,48 +2061,34 @@ export function useSketching(props: UseSketchingProps) {
             is_construction: constructionMode()
           };
 
-          // Add permanent entity
           const updated = { ...currentSketch() };
-          // Remove any preview line
           updated.entities = updated.entities.filter(e => e.id !== "preview_line");
           updated.entities = [...updated.entities, newEntity];
           updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
 
-          // Auto-add Coincident constraints for snapped endpoints
-          const autoConstraints = applyAutoConstraints(updated, newEntityId, startSnap(), snap);
+          console.error("[Line Tool] calling applyAutoConstraintsDebug with:", startSnap(), snap);
+          alert("About to apply constraints");
+          const autoConstraints = applyAutoConstraintsDebug(updated, newEntityId, startSnap(), snap);
+          console.error("[Line Tool] result constraints:", autoConstraints);
+
           updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
           updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
           setCurrentSketch(updated);
-          sendSketchUpdate(updated); // Sync to backend for live DOF updates
+          sendSketchUpdate(updated);
 
           setTempPoint(null);
           setStartSnap(null);
-          console.log("Added sketch line with constraints:", autoConstraints.length);
         }
       } else if (type === "move") {
         if (tempPoint()) {
-          // Update preview
-          // We can add a temporary entity to the currentSketch or use a separate preview state
-          // For simplicity, let's just make sure Viewport can render a "ghost" line if we passed it?
-          // Actually, modifying currentSketch with a "preview" entity ID might be easiest, 
-          // but we need to remove it on next move.
-
-          // Strategy: Filter out old preview entity, add new one.
           const PREVIEW_ID = "preview_line";
           const start = tempPoint()!;
-
           const previewEntity: SketchEntity = {
             id: PREVIEW_ID,
-            geometry: {
-              Line: {
-                start: start,
-                end: effectivePoint
-              }
-            },
+            geometry: { Line: { start, end: effectivePoint } },
             is_construction: constructionMode()
           };
-
           const entities = currentSketch().entities.filter(e => e.id !== PREVIEW_ID);
           setCurrentSketch({ ...currentSketch(), entities: [...entities, previewEntity] });
         }
@@ -2092,7 +2143,7 @@ export function useSketching(props: UseSketchingProps) {
           updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
 
           // Auto-constraints (Center snap)
-          const autoConstraints = applyAutoConstraints(updated, newEntity.id, startSnap(), null);
+          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
           updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
           updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -2192,7 +2243,7 @@ export function useSketching(props: UseSketchingProps) {
           // Current code for circle click 1: `setTempPoint(effectivePoint);`
           // I will modify it to `setStartSnap(snap);` as well.
 
-          const autoConstraints = applyAutoConstraints(updated, newEntity.id, startSnap(), null);
+          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
           updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
           updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -2287,7 +2338,7 @@ export function useSketching(props: UseSketchingProps) {
           // Arc has Center, Start, End.
           // I'll leave Arc strictly with Center constraint for now (using startSnap logic).
 
-          const autoConstraints = applyAutoConstraints(updated, newEntity.id, startSnap(), null);
+          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
           // If I want Start/End constraints, I'd need to track those snaps.
 
           updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
@@ -2359,7 +2410,7 @@ export function useSketching(props: UseSketchingProps) {
         updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
 
         // Apply auto-constraints if snapped to something
-        const autoConstraints = applyAutoConstraints(updated, newEntity.id, snap, null);
+        const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, snap, null);
         updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
         updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -2426,14 +2477,14 @@ export function useSketching(props: UseSketchingProps) {
             // Manually invoke logic or reuse helper?
             // Helper expects 1 entity ID.
             // We can check snap type manually.
-            const autoC = applyAutoConstraints(updated, l1_id, s, null);
+            const autoC = applyAutoConstraintsDebug(updated, l1_id, s, null);
             constraintsArr.push(...autoC);
           }
 
           // Constrain P2 (L3 start, which is v3) to current snap
           // Note: l3 starts at v3 (p2).
           if (snap && snap.entity_id) {
-            const autoC = applyAutoConstraints(updated, l3_id, snap, null); // Treating snap as "start" of l3 for constraint purpose
+            const autoC = applyAutoConstraintsDebug(updated, l3_id, snap, null); // Treating snap as "start" of l3 for constraint purpose
             constraintsArr.push(...autoC);
           }
 
@@ -4444,7 +4495,10 @@ export function useSketching(props: UseSketchingProps) {
     confirmCircularPattern,
     // Autostart
     autostartNextSketch, setAutostartNextSketch,
-    sendSketchUpdate
+    sendSketchUpdate,
+    // Constraint Inference Previews
+    inferredConstraints,
+    setInferenceSuppress
   };
   // Offset Logic New
   function calculateOffsetGeometry(
@@ -4536,5 +4590,4 @@ export function useSketching(props: UseSketchingProps) {
 
 
 };
-
 

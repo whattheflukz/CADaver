@@ -39,6 +39,8 @@ interface ViewportProps {
     onDimensionMouseMove?: (point2d: [number, number]) => void;
     // Active measurements (temporary, non-driving)
     activeMeasurements?: any[];
+    // Inferred constraints for live preview during drawing
+    inferredConstraints?: any[];
 }
 
 
@@ -562,6 +564,7 @@ const Viewport: Component<ViewportProps> = (props) => {
         // Correctly intersect the active sketch plane
         const target = getSketchPlaneIntersection(event.clientX, event.clientY);
         if (target) {
+            // alert("Viewport MouseDown"); // Uncomment to debug
             props.onCanvasClick("click", target, event);
         }
     };
@@ -615,6 +618,12 @@ const Viewport: Component<ViewportProps> = (props) => {
             if (props.activeMeasurements && props.activeMeasurements.length > 0) {
                 dimensionRenderer.renderMeasurements(props.clientSketch, props.activeMeasurements);
             }
+            // Render inferred constraint previews
+            console.log('[Viewport Render] inferredConstraints:', props.inferredConstraints?.length || 0);
+            if (props.inferredConstraints && props.inferredConstraints.length > 0) {
+                console.log('[Viewport Render] Calling renderInferredConstraints with', props.inferredConstraints);
+                dimensionRenderer.renderInferredConstraints(props.clientSketch, props.inferredConstraints);
+            }
             snapMarkers.update(props.activeSnap || null, props.clientSketch);
 
             // Hide main mesh when in sketch mode? 
@@ -630,6 +639,14 @@ const Viewport: Component<ViewportProps> = (props) => {
         // ... (rest of code)
 
     });
+
+    // Separate effect for inference rendering - runs on every inferredConstraints change
+    // TEMPORARILY DISABLED - causes sketch mode issues, need to debug
+    createEffect(() => {
+        // DISABLED: Early return to investigate sketch mode regression
+        return;
+    });
+    // Log every time the effect runs
 
 
 

@@ -150,6 +150,28 @@ export async function clickAtOffset(page: Page, offsetX: number, offsetY: number
 }
 
 /**
+ * Move mouse to specific viewport coordinates (without clicking)
+ */
+export async function moveToViewport(page: Page, x: number, y: number): Promise<void> {
+    const canvas = page.locator('canvas').first();
+    await canvas.hover({ position: { x, y } });
+}
+
+/**
+ * Move mouse to the center of the viewport (without clicking)
+ */
+export async function moveToViewportCenter(page: Page): Promise<void> {
+    await moveToViewport(page, VIEWPORT.centerX, VIEWPORT.centerY);
+}
+
+/**
+ * Move mouse to an offset from viewport center (without clicking)
+ */
+export async function moveToOffset(page: Page, offsetX: number, offsetY: number): Promise<void> {
+    await moveToViewport(page, VIEWPORT.centerX + offsetX, VIEWPORT.centerY + offsetY);
+}
+
+/**
  * Drag from one viewport position to another
  */
 export async function dragInViewport(

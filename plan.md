@@ -1,4 +1,111 @@
 # Self-Hosted Parametric CAD Platform  
+
+## 🚫 Anti-Patterns to Avoid (and What to Do Instead)
+
+This section exists to prevent common failure modes seen when agents over-optimize for speed or creativity at the expense of maintainability, clarity, and architectural integrity.
+
+Inventing new features **can be acceptable**, but **only when done with discipline, justification, and clean implementation**.
+
+---
+
+### ❌ Anti-Pattern: Feature Creep Without Structure  
+**Problem:**  
+Adding new features opportunistically without integrating them cleanly into the existing architecture.
+
+**Avoid:**
+- Dropping logic into whatever file is currently open  
+- Creating “temporary” helpers that quietly become permanent  
+- Adding features without clear ownership or boundaries  
+
+**Instead:**
+- Introduce new features only when they align with existing architecture or clearly extend it  
+- Place functionality in the correct domain/module, even if it takes more effort  
+- If a new abstraction is required, define it cleanly and document its purpose  
+
+---
+
+### ❌ Anti-Pattern: Monolithic Files  
+**Problem:**  
+Large files accumulating unrelated logic, state, and side effects.
+
+**Avoid:**
+- Files that grow indefinitely  
+- “Utility” files that become dumping grounds  
+- Components or modules with multiple unrelated responsibilities  
+
+**Instead:**
+- Enforce single-responsibility at the file level  
+- Prefer many small, composable modules over few large ones  
+- Refactor proactively when a file begins to feel cognitively heavy  
+
+---
+
+### ❌ Anti-Pattern: “We’ll Clean It Up Later” Code  
+**Problem:**  
+Temporary hacks become permanent technical debt.
+
+**Avoid:**
+- TODOs without context or ownership  
+- Placeholder logic without explicit tracking  
+- Comments implying future quality (“this should be improved later”)  
+
+**Instead:**
+- Either implement it properly or clearly mark it as **intentional technical debt**  
+- Leave contextual comments explaining *why* something exists, not just *what* it does  
+- Structure code so replacing or upgrading it later is straightforward  
+
+---
+
+### ❌ Anti-Pattern: Implicit Behavior  
+**Problem:**  
+Logic that only works because of hidden assumptions or execution order.
+
+**Avoid:**
+- Implicit global state  
+- Order-dependent side effects  
+- Magic values or silent fallbacks  
+
+**Instead:**
+- Make dependencies explicit  
+- Prefer explicit data flow over implicit coupling  
+- Fail loudly and clearly when assumptions are violated  
+
+---
+
+### ❌ Anti-Pattern: Over-Engineering Without Purpose  
+**Problem:**  
+Abstracting prematurely or adding complexity without real benefit.
+
+**Avoid:**
+- Generic abstractions with no current use  
+- Deep inheritance or indirection without necessity  
+- Architecture astronautics  
+
+**Instead:**
+- Build for current needs **while leaving clear extension points**  
+- Let real usage patterns drive abstraction  
+- Keep APIs simple and obvious  
+
+---
+
+### ✅ What *Good* Looks Like
+
+- Code reads like a clear explanation of intent  
+- Structure reflects domain concepts, not implementation accidents  
+- New contributors can reason about flow without deep context  
+- Behavior is predictable, testable, and debuggable  
+- Refactors feel safe, not terrifying  
+
+---
+
+### Final Guiding Principle
+
+> **Write code as if someone highly opinionated, detail-oriented, and slightly grumpy will review it tomorrow — because they will.**
+
+That reviewer is future-you.
+
+---
+
 ## Comprehensive Implementation Plan & Feature Roadmap
 
 **Goal:**  
@@ -433,7 +540,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Intersection snapping
 - [x] Origin snapping
 - [x] Grid snapping (toggleable)
-- [ ] Constraint inference previews before click
+- [x] Constraint inference previews before click
 
 ### Sketch Geometry
 - [x] Lines, arcs, circles, splines
@@ -460,7 +567,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Inline dimension editing
 - [x] Dimension to origin
 - [ ] Dimension to construction geometry
-- [ ] Measurement tool (temporary, non-driving)
+- [x] Measurement tool (temporary, non-driving)
 
 ### Constraints
 - [x] Coincident

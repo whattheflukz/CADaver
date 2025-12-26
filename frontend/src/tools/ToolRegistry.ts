@@ -5,6 +5,7 @@ import { RectangleTool } from "./RectangleTool";
 import { ArcTool } from "./ArcTool";
 import { SelectTool } from "./SelectTool";
 import { DimensionTool } from "./DimensionTool";
+import { MeasureTool } from "./MeasureTool";
 
 export class ToolRegistry {
     private tools: Map<string, SketchTool> = new Map();
@@ -18,6 +19,7 @@ export class ToolRegistry {
         this.register(new ArcTool(context));
         this.register(new SelectTool(context));
         this.register(new DimensionTool(context));
+        this.register(new MeasureTool(context));
     }
 
     private register(tool: SketchTool) {

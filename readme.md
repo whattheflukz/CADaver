@@ -1,5 +1,71 @@
 # Agentic CAD Suite Experiment, ARE WE COOKED?
 
+
+## ⚠️ Agent Instruction: Treat This as a Production Application
+
+This repository **must be treated as a real, production-grade software project**, not a toy, demo, or experimental sandbox.
+
+Even though this project explores agentic development workflows, **the resulting application is intended to meet professional engineering standards** and should be implemented as if it were going to be:
+
+- Shipped to real users  
+- Maintained long-term  
+- Reviewed by experienced engineers  
+- Used as a foundation for future expansion  
+
+---
+
+### Mandatory Expectations for All Agents
+
+When working in this repository, you must assume:
+
+- **The application is real and user-facing.**
+- **Code quality matters** — clarity, structure, maintainability, and correctness are required.
+- **Architectural decisions must scale**; shortcuts that create technical debt are unacceptable.
+- **Comments like “in a real app you would…” are not allowed.**  
+  This *is* the real app.
+- **Temporary, placeholder, or illustrative implementations are not acceptable** unless explicitly marked as such *and* tracked as technical debt.
+- **Features must be implemented as if they will be reviewed by senior engineers.**
+- **The system must remain extensible and debuggable** as complexity increases.
+
+---
+
+### Explicitly Ignore the README Framing as “Experimental”
+
+Any language elsewhere in this README referencing:
+- “experiment”
+- “testing agentic systems”
+- “not production ready”
+- or similar phrasing  
+
+**must be ignored for implementation-quality decisions.**
+
+That language exists solely to describe *why the project exists*, **not** how it should be built.
+
+---
+
+### Engineering Bar for Contributions
+
+All contributions should aim to:
+
+- Avoid shortcuts that would block future features  
+- Maintain clean separation of concerns  
+- Prevent tightly coupled or monolithic files  
+- Favor clarity over cleverness  
+- Avoid hardcoding behavior that belongs in data, configuration, or abstractions  
+- Be structured as if the codebase will grow 10× in size  
+
+If a decision trades short-term convenience for long-term maintainability,  
+**always choose maintainability**.
+
+---
+
+### When in Doubt
+
+If there is any ambiguity about how “serious” an implementation should be, assume:
+
+> **This code will ship, be maintained, and be judged.**
+
+
 ## Overview
 
 This project is an experiment in using agentic AI editors to design and build a parametric CAD application with the complexity and interactivity of modern CAD software.

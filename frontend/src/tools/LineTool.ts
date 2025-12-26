@@ -1,7 +1,7 @@
 import { BaseTool } from "./BaseTool";
 import type { SketchEntity, SnapPoint } from "../types";
 import { wrapConstraint } from "../types";
-import { applyAutoConstraints, applyAngularSnapping } from "../snapUtils";
+import { applyAutoConstraints, applyAngularSnapping, applyGeometricSnapping } from "../snapUtils";
 
 export class LineTool extends BaseTool {
     id = "line";
@@ -18,17 +18,25 @@ export class LineTool extends BaseTool {
         }
 
         // Apply angular snapping if start point exists
+        // Apply constraint snapping if start point exists
+        let constraintSnapType: "horizontal" | "vertical" | "parallel" | "perpendicular" | null = null;
+        let constraintEntityId: string | null = null;
+
         if (this.startPoint) {
-            effectivePoint = this.checkAngularSnap(this.startPoint, effectivePoint, snap);
+            const res = this.checkConstraintSnap(this.startPoint, effectivePoint, snap);
+            effectivePoint = res.position;
+            constraintSnapType = res.snapType;
+            constraintEntityId = res.entityId;
         }
 
         if (!this.startPoint) {
             // Click 1: Start
             this.startPoint = effectivePoint;
             this.startSnap = snap;
+            this.context.setTempPoint?.(this.startPoint); // Update global state for inference
         } else {
             // Click 2: End
-            this.createLine(this.startPoint, effectivePoint, this.startSnap, snap);
+            this.createLine(this.startPoint, effectivePoint, this.startSnap, snap, constraintSnapType, constraintEntityId);
             this.reset();
         }
     }
@@ -42,7 +50,8 @@ export class LineTool extends BaseTool {
             effectivePoint = snap.position;
         }
 
-        effectivePoint = this.checkAngularSnap(this.startPoint, effectivePoint, snap);
+        const res = this.checkConstraintSnap(this.startPoint, effectivePoint, snap);
+        effectivePoint = res.position;
 
         // Update preview
         this.updatePreview(this.startPoint, effectivePoint);
@@ -61,9 +70,17 @@ export class LineTool extends BaseTool {
     private reset() {
         this.startPoint = null;
         this.startSnap = null;
+        this.context.setTempPoint?.(null);
     }
 
-    private createLine(start: [number, number], end: [number, number], startSnap: SnapPoint | null, endSnap: SnapPoint | null) {
+    private createLine(
+        start: [number, number],
+        end: [number, number],
+        startSnap: SnapPoint | null,
+        endSnap: SnapPoint | null,
+        snapType: "horizontal" | "vertical" | "parallel" | "perpendicular" | null,
+        snapEntityId: string | null
+    ) {
         const newEntityId = crypto.randomUUID();
         const newEntity: SketchEntity = {
             id: newEntityId,
@@ -87,6 +104,18 @@ export class LineTool extends BaseTool {
 
         // Auto constraints
         const autoConstraints = applyAutoConstraints(sketch, newEntityId, startSnap, endSnap);
+
+        // Add Constraint Snap
+        if (snapType === "horizontal") {
+            autoConstraints.push({ Horizontal: { entity: newEntityId } });
+        } else if (snapType === "vertical") {
+            autoConstraints.push({ Vertical: { entity: newEntityId } });
+        } else if (snapType === "parallel" && snapEntityId) {
+            autoConstraints.push({ Parallel: { lines: [newEntityId, snapEntityId] } });
+        } else if (snapType === "perpendicular" && snapEntityId) {
+            autoConstraints.push({ Perpendicular: { lines: [newEntityId, snapEntityId] } });
+        }
+
         sketch.constraints = [...(sketch.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
         sketch.history = [...(sketch.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -113,15 +142,22 @@ export class LineTool extends BaseTool {
         this.context.setSketch({ ...sketch, entities: [...entities, previewEntity] });
     }
 
-    private checkAngularSnap(start: [number, number], current: [number, number], snap: SnapPoint | null): [number, number] {
+    private checkConstraintSnap(start: [number, number], current: [number, number], snap: SnapPoint | null): { position: [number, number]; snapType: "horizontal" | "vertical" | "parallel" | "perpendicular" | null; entityId: string | null } {
         // If hard snap exists, respect it (unless grid snap? usually element snap > angular snap)
-        if (snap && snap.snap_type !== "Grid") return current;
+        if (snap && snap.snap_type !== "Grid") return { position: current, snapType: null, entityId: null };
 
-        const result = applyAngularSnapping(start, current);
-        if (result.snapped) {
-            return result.position;
+        // 1. Check H/V
+        const angRes = applyAngularSnapping(start, current);
+        if (angRes.snapped) {
+            return { position: angRes.position, snapType: angRes.snapType, entityId: null };
         }
 
-        return current;
+        // 2. Check Parallel/Perp
+        const geomRes = applyGeometricSnapping(start, current, this.context.sketch);
+        if (geomRes.snapped) {
+            return { position: geomRes.position, snapType: geomRes.snapType, entityId: geomRes.entityId };
+        }
+
+        return { position: current, snapType: null, entityId: null };
     }
 }

@@ -136,7 +136,10 @@ const App: Component = () => {
     // Measurement tool exports
     activeMeasurements,
     measurementSelection,
-    measurementPending
+    measurementPending,
+    // Constraint inference exports
+    inferredConstraints,
+    setInferenceSuppress
   } = sketchHook;
 
   // Bridge handleSelect - hook handles both sketch and feature selection via its logic
@@ -455,7 +458,9 @@ const App: Component = () => {
             selection={sketchMode()
               ? (sketchTool() === "dimension" || constraintSelection().length > 0
                 ? [...dimensionSelection(), ...constraintSelection()]
-                : sketchSelection())
+                : sketchTool() === "measure"
+                  ? measurementSelection()
+                  : sketchSelection())
               : selection()
             }
             clientSketch={
@@ -466,7 +471,10 @@ const App: Component = () => {
                   graph().nodes[graph().nodes[selectedFeature()!].dependencies[0]]?.parameters?.sketch_data?.Sketch :
                   null)
             }
-            onCanvasClick={sketchMode() ? handleSketchInput : undefined}
+            onCanvasClick={sketchMode() ? (type, payload, event) => {
+              // alert(`App Click Handler: ${type}`); // Probe 2
+              handleSketchInput(type, payload, event);
+            } : undefined}
             activeSnap={activeSnap()}
             onDimensionDrag={sketchMode() ? handleDimensionDrag : undefined}
             sketchSetupMode={sketchSetupMode()}
@@ -486,6 +494,7 @@ const App: Component = () => {
                 : undefined
             }
             onDimensionMouseMove={
+
               // Track mouse position for dynamic dimension mode (horizontal/vertical/aligned)
               // Enable as soon as dimension tool is active, not just in placement mode
               sketchMode() && sketchTool() === "dimension"
@@ -493,6 +502,7 @@ const App: Component = () => {
                 : undefined
             }
             activeMeasurements={sketchMode() ? activeMeasurements() : undefined}
+            inferredConstraints={sketchMode() ? inferredConstraints() : undefined}
           />
 
 
@@ -767,10 +777,14 @@ const App: Component = () => {
 
         {/* Sketch Selection Panel */}
         <SketchSelectionPanel
-          selection={sketchTool() === "dimension" ? dimensionSelection() : sketchSelection()}
+          selection={
+            sketchTool() === "dimension" ? dimensionSelection() :
+              sketchTool() === "measure" ? measurementSelection() :
+                sketchSelection()
+          }
           entities={sketchMode() ? currentSketch().entities : []}
           onDeselect={(candidate) => {
-            // Remove specific candidate
+            // Remove specific candidate based on active tool
             if (sketchTool() === "dimension") {
               const current = dimensionSelection();
               const next = current.filter(c =>
@@ -780,6 +794,16 @@ const App: Component = () => {
                 )
               );
               setDimensionSelection(next);
+            } else if (sketchTool() === "measure") {
+              const current = measurementSelection();
+              const next = current.filter(c =>
+                !(c.id === candidate.id &&
+                  c.type === candidate.type &&
+                  (c.type === 'point' ? c.index === candidate.index : true)
+                )
+              );
+              // Need setMeasurementSelection
+              sketchHook.setMeasurementSelection(next);
             } else {
               const current = sketchSelection();
               const next = current.filter(c =>
@@ -794,6 +818,8 @@ const App: Component = () => {
           onClearAll={() => {
             if (sketchTool() === "dimension") {
               setDimensionSelection([]);
+            } else if (sketchTool() === "measure") {
+              sketchHook.setMeasurementSelection([]);
             } else {
               setSketchSelection([]);
             }
@@ -807,6 +833,9 @@ const App: Component = () => {
           autoDismissMs={5000}
         />
       </main >
+      <div class="absolute bottom-4 right-4 text-xs text-white/30 pointer-events-none">
+        v0.1.0-alpha (Debug: Fixes Active)
+      </div>
     </div >
   );
 

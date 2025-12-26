@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { LineMaterial, LineSegmentsGeometry, LineSegments2 } from 'three-stdlib';
 import type { Sketch, ActiveMeasurement } from '../types';
 import { getMeasurementValue } from '../types';
+import type { InferredConstraint } from '../utils/ConstraintInference';
 import {
     sketchToWorld,
     getConstraintPointPosition,
@@ -13,6 +14,7 @@ import { createTextSprite, createCircleMarker } from '../utils/threeHelpers';
 export class DimensionRenderer {
     private scene: THREE.Scene;
     private group: THREE.Group;
+    private inferenceGroup: THREE.Group; // Separate group for inference sprites
     private resolution: THREE.Vector2 = new THREE.Vector2(window.innerWidth, window.innerHeight);
 
     constructor(scene: THREE.Scene) {
@@ -20,6 +22,11 @@ export class DimensionRenderer {
         this.group = new THREE.Group();
         this.group.name = "dimension_renderer_group";
         this.scene.add(this.group);
+
+        // Separate group for inference previews - not cleared by update()
+        this.inferenceGroup = new THREE.Group();
+        this.inferenceGroup.name = "inference_preview_group";
+        this.scene.add(this.inferenceGroup);
     }
 
     public update(sketch: Sketch | null, resolution: THREE.Vector2 = new THREE.Vector2(window.innerWidth, window.innerHeight)) {
@@ -494,6 +501,86 @@ export class DimensionRenderer {
         const line = new LineSegments2(geo, mat);
         line.computeLineDistances();
         this.group.add(line);
+    }
+
+    /**
+     * Render inferred constraint previews during drawing
+     * Shows ghost constraint icons to indicate what constraints would be applied
+     */
+    public renderInferredConstraints(sketch: Sketch | null, constraints: InferredConstraint[]) {
+        // Clear previous inference sprites (separate from main group)
+        this.clearInferences();
+        console.log(`[DimensionRenderer] renderInferredConstraints called with ${constraints.length} items. Group children before add: ${this.inferenceGroup.children.length}`);
+
+        if (!sketch || constraints.length === 0) return;
+
+        // Inference colors (semi-transparent to indicate preview)
+        const INFERENCE_COLOR = 0xffaa00;
+        const INFERENCE_COLOR_STR = '#ffaa00';
+        const opacity = 0.8;
+
+        // Inference icons by type
+        const icons: Record<string, string> = {
+            'coincident': '●',
+            'horizontal': 'H',
+            'vertical': 'V',
+            'parallel': '∥',
+            'perpendicular': '⊥',
+            'tangent': '⊙'
+        };
+
+        // 2. Render Inference Constraints (Coincident, Horizontal, Vertical, etc.)
+        // We only render simplified icons for now
+        console.log('[DimensionRenderer] Rendering', constraints.length, 'inference sprites');
+
+        for (const inference of constraints) {
+            try {
+                const icon = icons[inference.type] || '?';
+                const pos = sketchToWorld(
+                    inference.displayPosition[0],
+                    inference.displayPosition[1],
+                    sketch.plane
+                );
+
+                // Adjust opacity based on confidence
+                const opacity = 0.6 + (inference.confidence * 0.4);
+
+                // Create sprite with inference icon - use larger size for visibility
+                const sprite = createTextSprite(
+                    icon,
+                    INFERENCE_COLOR_STR,
+                    0.08 // Larger for visibility
+                );
+                sprite.position.copy(pos);
+                // Small Z offset to ensure visibility
+                sprite.position.z += 0.05;
+
+                // Adjust material opacity and disable depth test for visibility
+                if (sprite.material instanceof THREE.SpriteMaterial) {
+                    sprite.material.opacity = opacity;
+                    sprite.material.depthTest = false; // Always render on top
+                    sprite.material.depthWrite = false;
+                }
+
+                // Add to INFERENCE group (not main group!)
+                this.inferenceGroup.add(sprite);
+
+            } catch (e) {
+                console.error('[DimensionRenderer] Error rendering inference:', inference, e);
+            }
+        }
+    }
+
+    /**
+     * Clear inference preview sprites only (not affecting main dimension rendering)
+     */
+    private clearInferences() {
+        while (this.inferenceGroup.children.length > 0) {
+            const child = this.inferenceGroup.children[0];
+            this.inferenceGroup.remove(child);
+            if ((child as any).geometry) (child as any).geometry.dispose();
+            if ((child as any).material) (child as any).material.dispose();
+        }
     }
 }
 

@@ -3,7 +3,7 @@
  * Mirrors the backend snap.rs logic for responsive client-side snapping.
  */
 
-import { type Sketch, type SnapPoint, type SnapConfig, type SnapType, type ConstraintPoint, type SketchConstraint, wrapConstraint } from './types';
+import { type Sketch, type SnapPoint, type SnapConfig, type SnapType, type ConstraintPoint, type SketchConstraint } from './types';
 import { distance, lineLineIntersection } from './utils/geometryUtils';
 
 const SNAP_PRIORITY: Record<SnapType, number> = {
@@ -299,7 +299,7 @@ export function applyAutoConstraints(
     };
 
     const processSnap = (snap: SnapPoint, newEntityIndex: number) => {
-        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Midpoint" || snap.snap_type === "Intersection") {
+        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Intersection") {
             // Create Coincident
             const cp = snapToCP(snap);
             if (cp) {
@@ -315,6 +315,19 @@ export function applyAutoConstraints(
                     });
                     // console.log("Auto-Constraint: Coincident to", snap.snap_type, cp.id);
                 }
+            }
+        } else if (snap.snap_type === "Midpoint") {
+            // "Midpoint" snap implies the point is on the line. 
+            // Ideally it implies "Midpoint", but for now we constrain it "On Line" (Distance 0).
+            const entity = sketch.entities.find(e => e.id === snap.entity_id);
+            if (entity && entity.geometry.Line) {
+                constraints.push({
+                    DistancePointLine: {
+                        point: { id: newEntityId, index: newEntityIndex },
+                        line: snap.entity_id!,
+                        value: 0
+                    }
+                });
             }
         } else if (snap.snap_type === "Origin") {
             // Create Fix at 0,0
@@ -376,25 +389,13 @@ export function findClosestEntity(
             const dCenter = distance(cursor, center);
             dist = Math.abs(dCenter - radius);
         } else if (entity.geometry.Arc) {
-            const { center, radius, start_angle, end_angle } = entity.geometry.Arc;
+            const { center, radius } = entity.geometry.Arc;
             const dCenter = distance(cursor, center);
             const distRadius = Math.abs(dCenter - radius);
 
             // Allow selecting if near the arc curve
             if (distRadius < threshold) {
-                // Check angle
-                const dx = cursor[0] - center[0];
-                const dy = cursor[1] - center[1];
-                let angle = Math.atan2(dy, dx);
-
-                // Normalize angles logic (basic check)
-                // This can be tricky with wrapping. 
-                // Let's rely on a rough check or just select the circle part if close enough
-                // Ideally we verify the angle is within [start, end]
-
-                // Simple approx: if distance(cursor, closestPointOnFullCircle) is small, accept it?
-                // No, we should respect the arc span.
-                // Revisit angle check later if strictness needed. For now accept if close to radius.
+                // Check angle (TODO: Verify angle within start/end)
                 dist = distRadius;
             }
         }
@@ -406,4 +407,98 @@ export function findClosestEntity(
     }
 
     return bestMatch;
+}
+
+/**
+ * Geometric snapping for line creation - snaps to Parallel/Perpendicular of existing lines.
+ * Returns the snapped cursor position and snap info.
+ */
+export function applyGeometricSnapping(
+    startPoint: [number, number],
+    cursor: [number, number],
+    sketch: Sketch,
+    tolerance: number = 0.087 // ~5 degrees
+): { position: [number, number]; snapped: boolean; snapType: "parallel" | "perpendicular" | null; entityId: string | null } {
+    const dx = cursor[0] - startPoint[0];
+    const dy = cursor[1] - startPoint[1];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 0.001) {
+        return { position: cursor, snapped: false, snapType: null, entityId: null };
+    }
+
+    const currentAngle = Math.atan2(dy, dx);
+    let bestMatch: { type: "parallel" | "perpendicular"; entityId: string; diff: number } | null = null;
+    let minDiff = tolerance;
+
+    for (const entity of sketch.entities) {
+        if (entity.id.startsWith("preview_")) continue;
+        if (entity.geometry.Line) {
+            const { start, end } = entity.geometry.Line;
+            const lDx = end[0] - start[0];
+            const lDy = end[1] - start[1];
+            const lineAngle = Math.atan2(lDy, lDx);
+
+            // Parallel Check
+            let angleDiff = Math.abs(currentAngle - lineAngle);
+            // Normalize to [0, π]
+            while (angleDiff > Math.PI) angleDiff -= Math.PI;
+            if (angleDiff > Math.PI / 2) angleDiff = Math.PI - angleDiff;
+
+            if (angleDiff < minDiff) {
+                minDiff = angleDiff;
+                bestMatch = { type: "parallel", entityId: entity.id, diff: angleDiff };
+            }
+
+            // Perpendicular Check
+            // Angle between lines is alpha. We want alpha ~ 90.
+            let relAngle = Math.abs(currentAngle - lineAngle);
+            while (relAngle > Math.PI) relAngle -= 2 * Math.PI;
+            relAngle = Math.abs(relAngle);
+
+            const pDiff = Math.abs(relAngle - Math.PI / 2);
+            if (pDiff < minDiff) {
+                minDiff = pDiff;
+                bestMatch = { type: "perpendicular", entityId: entity.id, diff: pDiff };
+            }
+        }
+    }
+
+    if (bestMatch) {
+        // Calculate snapped position
+        let targetAngle = currentAngle; // Placeholder
+
+        const entity = sketch.entities.find(e => e.id === bestMatch!.entityId);
+        if (entity && entity.geometry.Line) {
+            const { start, end } = entity.geometry.Line;
+            const lineAngle = Math.atan2(end[1] - start[1], end[0] - start[0]);
+
+            if (bestMatch.type === "parallel") {
+                // Snap to lineAngle (or lineAngle + PI)
+                // Check dot product to see direction
+                // cos(theta) > 0 -> same dir.
+                const dot = Math.cos(currentAngle - lineAngle);
+                targetAngle = dot >= 0 ? lineAngle : lineAngle + Math.PI;
+
+            } else {
+                // Perpendicular: lineAngle + 90 or -90
+                const normAngle = lineAngle + Math.PI / 2;
+                // Check dot product with Normal
+                const dot = Math.cos(currentAngle - normAngle);
+                targetAngle = dot >= 0 ? normAngle : normAngle + Math.PI;
+            }
+
+            return {
+                position: [
+                    startPoint[0] + dist * Math.cos(targetAngle),
+                    startPoint[1] + dist * Math.sin(targetAngle)
+                ],
+                snapped: true,
+                snapType: bestMatch.type,
+                entityId: bestMatch.entityId
+            };
+        }
+    }
+
+    return { position: cursor, snapped: false, snapType: null, entityId: null };
 }

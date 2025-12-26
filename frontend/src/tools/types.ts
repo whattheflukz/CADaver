@@ -11,12 +11,19 @@ export interface SketchToolContext {
     setSketch: (sketch: Sketch) => void;
     setSelection: (selection: SelectionCandidate[]) => void;
     setEditingDimension: (dim: any) => void;
+    setTempPoint?: (pt: [number, number] | null) => void;
 
     // Dimension specific
     dimensionSelection?: SelectionCandidate[];
     setDimensionSelection?: (selection: SelectionCandidate[]) => void;
     commitDimension?: () => boolean;
     setDimensionMousePosition?: (pos: [number, number]) => void;
+
+    // Measurement specific (temporary, non-driving)
+    measurementSelection?: SelectionCandidate[];
+    setMeasurementSelection?: (selection: SelectionCandidate[]) => void;
+    calculateMeasurement?: (c1: SelectionCandidate, c2: SelectionCandidate) => any;
+    addActiveMeasurement?: (measurement: any) => void;
 
     // Actions
     sendUpdate: (sketch: Sketch) => void; // Trigger solver
