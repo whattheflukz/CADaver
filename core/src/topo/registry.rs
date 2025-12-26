@@ -87,7 +87,6 @@ impl TopoRegistry {
     }
 
     /// Clears the registry for a new regeneration cycle.
-    /// In a real app, you might keep some cache.
     pub fn clear(&mut self) {
         self.active_topology.clear();
         self.zombies.clear();

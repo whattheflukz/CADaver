@@ -1,5 +1,5 @@
 import { createSignal, onMount, onCleanup, type Accessor } from 'solid-js';
-import { type FeatureGraphState, type Tessellation, type SolveResult, type Sketch, type KernelError } from '../types';
+import { type FeatureGraphState, type Tessellation, type SolveResult, type Sketch, type KernelError, type WebSocketCommand } from '../types';
 
 export interface SelectionGroup {
     name: string;
@@ -193,9 +193,9 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         socket?.close();
     });
 
-    const send = (msg: string) => {
+    const send = (msg: WebSocketCommand) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(msg);
+            socket.send(JSON.stringify(msg));
         }
     };
 

@@ -150,7 +150,7 @@ const App: Component = () => {
 
 
   const handleToggleFeature = (id: string) => {
-    send(`TOGGLE_SUPPRESSION:${id}`);
+    send({ command: 'ToggleSuppression', payload: { id } });
   };
 
 
@@ -180,7 +180,7 @@ const App: Component = () => {
     };
 
     setPendingExtrude(true);
-    send(`CREATE_FEATURE:${JSON.stringify(cmd)}`);
+    send({ command: 'CreateFeature', payload: cmd });
   };
 
   // Auto-select newly created extrude feature
@@ -261,7 +261,7 @@ const App: Component = () => {
           const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
           const payload = { type: "Sketch", name: name };
           setAutostartNextSketch(true);
-          send(`CREATE_FEATURE:${JSON.stringify(payload)}`);
+          send({ command: 'CreateFeature', payload });
         }
         break;
       case 'action:command_palette':
@@ -297,7 +297,7 @@ const App: Component = () => {
         break;
       case 'action:deselect_all':
         // Clear all selections when Escape is pressed in modeling mode
-        send('CLEAR_SELECTION');
+        send({ command: 'ClearSelection' });
         break;
     }
   };
@@ -334,7 +334,7 @@ const App: Component = () => {
                 const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
                 const payload = { type: "Sketch", name: name };
                 setAutostartNextSketch(true); // Flag to auto-enter edit mode
-                send(`CREATE_FEATURE:${JSON.stringify(payload)}`);
+                send({ command: 'CreateFeature', payload });
               }}
               style={{ width: "100%", padding: "5px", margin: "5px 0", background: "#28a745", color: "white", border: "none", cursor: "pointer" }}
             >
@@ -356,7 +356,7 @@ const App: Component = () => {
               }
             }}
             onUpdateFeature={(id, params) => {
-              send(`UPDATE_FEATURE:${JSON.stringify({ id, params })}`);
+              send({ command: 'UpdateFeature', payload: { id, params } });
             }}
             onEditSketch={(id) => {
               if (!sketchMode() && !sketchSetupMode()) {
@@ -370,7 +370,7 @@ const App: Component = () => {
           {!sketchMode() && (
             <SelectionToolbar
               onSetFilter={(f) => {
-                send(`SET_FILTER:${f}`);
+                send({ command: 'SetFilter', payload: { filter: f } });
               }}
             />
           )}
@@ -645,7 +645,7 @@ const App: Component = () => {
             featureId={selectedFeature()!}
             initialParams={graph().nodes[selectedFeature()!].parameters}
             onUpdate={(id, params) => {
-              send(`UPDATE_FEATURE:${JSON.stringify({ id, params: params })}`);
+              send({ command: 'UpdateFeature', payload: { id, params } });
             }}
             onClose={() => setSelectedFeature(null)}
             selection={selection()}
@@ -654,7 +654,7 @@ const App: Component = () => {
             regionClickPoint={regionClickPoint()}
             onConsumeRegionClick={() => setRegionClickPoint(null)}
             backendRegions={backendRegions()}
-            onRequestRegions={(sketchId) => send(`GET_REGIONS:${sketchId}`)}
+            onRequestRegions={(sketchId) => send({ command: 'GetRegions', payload: { id: sketchId } })}
           />
         )}
 
@@ -688,7 +688,7 @@ const App: Component = () => {
           onConfirm={() => {
             const item = deleteConfirmation();
             if (item) {
-              send(`DELETE_FEATURE:${item.id}`);
+              send({ command: 'DeleteFeature', payload: { id: item.id } });
               // If deleting active sketch, exit sketch mode
               if (activeSketchId() === item.id) {
                 setSketchMode(false);
@@ -711,18 +711,18 @@ const App: Component = () => {
             variables={graph().variables || { variables: {}, order: [] }}
             onAddVariable={(name, expression, unit, description) => {
               const cmd = { name, expression, unit, description };
-              send(`VARIABLE_ADD:${JSON.stringify(cmd)}`);
+              send({ command: 'VariableAdd', payload: cmd });
             }}
             onUpdateVariable={(id, updates) => {
               const cmd = { id, ...updates };
-              send(`VARIABLE_UPDATE:${JSON.stringify(cmd)}`);
+              send({ command: 'VariableUpdate', payload: cmd });
             }}
             onDeleteVariable={(id) => {
-              send(`VARIABLE_DELETE:${id}`);
+              send({ command: 'VariableDelete', payload: { id } });
             }}
             onReorderVariable={(id, newIndex) => {
               const cmd = { id, new_index: newIndex };
-              send(`VARIABLE_REORDER:${JSON.stringify(cmd)}`);
+              send({ command: 'VariableReorder', payload: cmd });
             }}
             onClose={() => setShowVariablesPanel(false)}
           />
@@ -754,13 +754,13 @@ const App: Component = () => {
           groups={selectionGroups()}
           currentSelectionCount={selection().length}
           onCreateGroup={(name) => {
-            send(`SELECTION_GROUP_CREATE:${name}`);
+            send({ command: 'SelectionGroupCreate', payload: { name } });
           }}
           onRestoreGroup={(name) => {
-            send(`SELECTION_GROUP_RESTORE:${name}`);
+            send({ command: 'SelectionGroupRestore', payload: { name } });
           }}
           onDeleteGroup={(name) => {
-            send(`SELECTION_GROUP_DELETE:${name}`);
+            send({ command: 'SelectionGroupDelete', payload: { name } });
           }}
           onClose={() => setShowNamedSelectionsPanel(false)}
         />
@@ -768,10 +768,10 @@ const App: Component = () => {
         <SelectionPanel
           selection={selection()}
           onDeselect={(topoId) => {
-            send(`SELECT:${JSON.stringify({ id: topoId, modifier: "remove" })}`);
+            send({ command: 'Select', payload: { id: topoId, modifier: "remove" } });
           }}
           onClearAll={() => {
-            send(`CLEAR_SELECTION`);
+            send({ command: 'ClearSelection' });
           }}
         />
 

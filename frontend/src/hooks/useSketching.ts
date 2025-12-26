@@ -1,11 +1,12 @@
 import { createSignal, createEffect, createMemo, onCleanup, untrack, type Accessor } from 'solid-js';
-import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState, type ActiveMeasurement, type MeasurementResult } from '../types';
-import { applySnapping, applyAngularSnapping } from '../snapUtils';
+import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState, type ActiveMeasurement, type MeasurementResult, type WebSocketCommand } from '../types';
+import { applySnapping, applyAngularSnapping, applyAutoConstraints } from '../snapUtils';
 import { detectInferredConstraints, type InferredConstraint, defaultInferenceConfig } from '../utils/ConstraintInference';
-import { ToolRegistry } from '../tools/ToolRegistry';
+import { useSketchUI } from './useSketchUI';
+import { useSketchSelection } from './useSketchSelection';
 
 interface UseSketchingProps {
-  send: (msg: string) => void;
+  send: (msg: WebSocketCommand) => void;
   graph: Accessor<FeatureGraphState>;
   selection: Accessor<string[]>;
   setSelection: (sel: string[]) => void;
@@ -13,117 +14,52 @@ interface UseSketchingProps {
   solveResult?: Accessor<SolveResult | null>;
 }
 
+import { useSketchTool } from './useSketchTool';
+
 export function useSketching(props: UseSketchingProps) {
+  // --- Decomposed Hooks ---
+  const ui = useSketchUI();
+  const sel = useSketchSelection(ui.sketchTool);
+
+  // Destructure UI State
+  const {
+    sketchMode, setSketchMode,
+    activeSketchId, setActiveSketchId,
+    sketchTool, setSketchTool,
+    constructionMode, setConstructionMode,
+    sketchSetupMode, setSketchSetupMode,
+    pendingSketchId, setPendingSketchId,
+    offsetState, setOffsetState,
+    linearPatternState, setLinearPatternState,
+    circularPatternState, setCircularPatternState,
+    mirrorState, setMirrorState,
+    editingDimension, setEditingDimension
+  } = ui;
+
+  // Destructure Selection State
+  const {
+    sketchSelection, setSketchSelection,
+    constraintSelection, setConstraintSelection,
+    dimensionSelection, setDimensionSelection,
+    measurementSelection, setMeasurementSelection,
+    measurementPending, setMeasurementPending
+  } = sel;
+
   // Feature Graph State managed by hook
   const [autostartNextSketch, setAutostartNextSketch] = createSignal(false);
 
-  // Sketch State
-  const [sketchMode, setSketchMode] = createSignal(false);
-  const [activeSketchId, setActiveSketchId] = createSignal<string | null>(null);
-  const [sketchTool, setSketchTool] = createSignal<SketchToolType>("select");
-  const [constructionMode, setConstructionMode] = createSignal(false);
-  // Sketch Setup Mode State
-  const [sketchSetupMode, setSketchSetupMode] = createSignal(false);
-  const [pendingSketchId, setPendingSketchId] = createSignal<string | null>(null);
-  // Sketch Selection State (Local)
-  const [sketchSelection, setSketchSelection] = createSignal<SelectionCandidate[]>([]);
-
-  // State for multi-step constraint creation (e.g., Coincident needs 2 points)
-  const [constraintSelection, setConstraintSelection] = createSignal<ConstraintPoint[]>([]);
+  // Current Sketch State (The active sketch data)
   const [currentSketch, setCurrentSketch] = createSignal<Sketch>({
-    plane: {
-      origin: [0, 0, 0],
-      normal: [0, 0, 1],
-      x_axis: [1, 0, 0],
-      y_axis: [0, 1, 0]
-    },
+    plane: { type: 'xy', origin: [0, 0, 0], x_axis: [1, 0, 0], y_axis: [0, 1, 0], z_axis: [0, 0, 1] },
     entities: [],
     constraints: [],
     history: []
   });
 
-  const [mirrorState, setMirrorState] = createSignal<{ axis: string | null, entities: string[], activeField: 'axis' | 'entities' }>({ axis: null, entities: [], activeField: 'axis' });
-
-  // Offset State
-  const [offsetState, setOffsetState] = createSignal<{
-    isPanelOpen: boolean;
-    distance: number;
-    flip: boolean;
-    selection: string[];
-    previewGeometry: SketchEntity[];
-  }>({
-    isPanelOpen: false,
-    distance: 0.5,
-    flip: false,
-    selection: [],
-    previewGeometry: []
-  });
-
-  // Linear Pattern State
-  const [linearPatternState, setLinearPatternState] = createSignal<{
-    direction: string | null;
-    entities: string[];
-    count: number;
-    spacing: number;
-    activeField: 'direction' | 'entities';
-    flipDirection: boolean;
-    previewGeometry: SketchEntity[];
-  }>({
-    direction: null,
-    entities: [],
-    count: 3,
-    spacing: 2.0,
-    activeField: 'direction',
-    flipDirection: false,
-    previewGeometry: []
-  });
-
-  // Circular Pattern State
-  const [circularPatternState, setCircularPatternState] = createSignal<{
-    centerType: 'origin' | 'point' | null;
-    centerId: string | null;
-    entities: string[];
-    count: number;
-    totalAngle: number;
-    activeField: 'center' | 'entities';
-    flipDirection: boolean;
-    previewGeometry: SketchEntity[];
-  }>({
-    centerType: null,
-    centerId: null,
-    entities: [],
-    count: 6,
-    totalAngle: 360,
-    activeField: 'center',
-    flipDirection: false,
-    previewGeometry: []
-  });
-
   // Store original state for "Cancel"
   const [originalSketch, setOriginalSketch] = createSignal<Sketch | null>(null);
 
-  // Snap State
-  const [snapConfig, setSnapConfig] = createSignal<SnapConfig>(defaultSnapConfig);
-  const [activeSnap, setActiveSnap] = createSignal<SnapPoint | null>(null);
-  // Track what was snapped to for auto-constraint creation
-  // Track what was snapped to for auto-constraint creation
-  const [startSnap, setStartSnap] = createSignal<SnapPoint | null>(null);
-
-  // Temp Point for multipoint tools (moved up for scope access in toolRegistry)
-  const [tempPoint, setTempPoint] = createSignal<[number, number] | null>(null);
-  const [tempStartPoint, setTempStartPoint] = createSignal<[number, number] | null>(null);
-
-  // Dimension Editing State
-  const [editingDimension, setEditingDimension] = createSignal<{
-    constraintIndex: number;
-    type: 'Distance' | 'Angle' | 'Radius';
-    currentValue: number;
-    expression?: string;
-    isNew?: boolean;
-  } | null>(null);
-
-  // Dimension Tool State
-  const [dimensionSelection, setDimensionSelection] = createSignal<SelectionCandidate[]>([]);
+  // Dimension & Measurement State that is shared/needed for tool hook
   const [dimensionProposedAction, setDimensionProposedAction] = createSignal<{
     label: string;
     type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "Unsupported";
@@ -131,20 +67,379 @@ export function useSketching(props: UseSketchingProps) {
     isValid: boolean;
   } | null>(null);
   const [dimensionPlacementMode, setDimensionPlacementMode] = createSignal(false);
-  // Mouse position for dynamic dimension mode switching (Onshape-style)
   const [dimensionMousePosition, setDimensionMousePosition] = createSignal<[number, number] | null>(null);
-
-  // ===== MEASUREMENT TOOL STATE =====
-  // Measurement tool works similar to dimension but creates temporary, non-driving measurements
-  const [measurementSelection, setMeasurementSelection] = createSignal<SelectionCandidate[]>([]);
   const [activeMeasurements, setActiveMeasurements] = createSignal<ActiveMeasurement[]>([]);
-  const [measurementPending, setMeasurementPending] = createSignal<SelectionCandidate | null>(null);
 
-  // Sketch Solver Status (DOF indicator)
-  // Sketch Solver Status (DOF indicator) managed by hook
 
   // Camera alignment trigger for sketch mode
   const [cameraAlignPlane, setCameraAlignPlane] = createSignal<SketchPlane | null>(null);
+
+
+  // Props destructuring
+  const { send, graph, selection } = props;
+
+  // --- Hoisted Helper Functions ---
+
+  // Send sketch update to backend to run solver and update geometry live
+  const sendSketchUpdate = (sketch: Sketch) => {
+    if (activeSketchId()) {
+      const payload = {
+        id: activeSketchId()!,
+        // Rust Feature serializes as "parameters", and ParameterValue::Sketch as {"Sketch": {...}}
+        params: {
+          "sketch_data": { Sketch: sketch }
+        }
+      };
+
+      send({ command: 'UpdateFeature', payload: { id: payload.id, params: payload.params } });
+      console.log("Sent sketch update to backend for solving");
+    }
+  };
+  const handleMeasurementCancel = () => { setMeasurementSelection([]); setMeasurementPending(null); };
+
+  const calculateMeasurement = (c1: SelectionCandidate, c2: SelectionCandidate): ActiveMeasurement | null => {
+    const sketch = currentSketch();
+
+    // Helper to get entity info
+    const getEntityInfo = (c: SelectionCandidate): { type: 'point' | 'line' | 'circle' | 'arc', pos?: [number, number], entity?: SketchEntity } | null => {
+      if (c.type === 'origin') {
+        return { type: 'point', pos: [0, 0] };
+      }
+      if (c.type === 'point' && c.position) {
+        return { type: 'point', pos: c.position };
+      }
+      const entity = sketch.entities.find(e => e.id === c.id);
+      if (!entity) return null;
+
+      if (entity.geometry.Line) {
+        if (c.type === 'point' && c.index !== undefined) {
+          const pos = c.index === 0 ? entity.geometry.Line.start : entity.geometry.Line.end;
+          return { type: 'point', pos, entity };
+        }
+        return { type: 'line', entity };
+      }
+      if (entity.geometry.Circle) {
+        if (c.type === 'point') {
+          return { type: 'point', pos: entity.geometry.Circle.center, entity };
+        }
+        return { type: 'circle', entity };
+      }
+      if (entity.geometry.Arc) {
+        if (c.type === 'point') {
+          return { type: 'point', pos: entity.geometry.Arc.center, entity };
+        }
+        return { type: 'arc', entity };
+      }
+      if (entity.geometry.Point) {
+        return { type: 'point', pos: entity.geometry.Point.pos, entity };
+      }
+      return null;
+    };
+
+    const info1 = getEntityInfo(c1);
+    const info2 = getEntityInfo(c2);
+    if (!info1 || !info2) return null;
+
+    let result: MeasurementResult | null = null;
+    let displayPosition: [number, number] = [0, 0];
+
+    // Helper for distance
+    const dist = (p1: [number, number], p2: [number, number]) => Math.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2);
+
+    // Point to Point
+    if (info1.type === 'point' && info2.type === 'point' && info1.pos && info2.pos) {
+      result = { Distance: { value: dist(info1.pos, info2.pos) } };
+      displayPosition = [(info1.pos[0] + info2.pos[0]) / 2, (info1.pos[1] + info2.pos[1]) / 2];
+    }
+    // Point to Line
+    else if (info1.type === 'point' && info1.pos && info2.type === 'line' && info2.entity?.geometry.Line) {
+      const line = info2.entity.geometry.Line;
+      const p = info1.pos;
+      const l1 = line.start;
+      const l2 = line.end;
+
+      const dx = l2[0] - l1[0];
+      const dy = l2[1] - l1[1];
+      const lenSq = dx * dx + dy * dy;
+
+      if (lenSq < 1e-6) { // Line is a point
+        result = { Distance: { value: dist(p, l1) } };
+        displayPosition = [(p[0] + l1[0]) / 2, (p[1] + l1[1]) / 2];
+      } else {
+        const t = ((p[0] - l1[0]) * dx + (p[1] - l1[1]) * dy) / lenSq;
+        const projection = [l1[0] + t * dx, l1[1] + t * dy] as [number, number];
+        result = { Distance: { value: dist(p, projection) } };
+        displayPosition = [(p[0] + projection[0]) / 2, (p[1] + projection[1]) / 2];
+      }
+    }
+    // Line to Point (swap order)
+    else if (info1.type === 'line' && info1.entity?.geometry.Line && info2.type === 'point' && info2.pos) {
+      return calculateMeasurement(c2, c1); // Recurse with swapped candidates
+    }
+    // Line to Line (parallel distance)
+    else if (info1.type === 'line' && info1.entity?.geometry.Line && info2.type === 'line' && info2.entity?.geometry.Line) {
+      const line1 = info1.entity.geometry.Line;
+      const line2 = info2.entity.geometry.Line;
+
+      const dx1 = line1.end[0] - line1.start[0];
+      const dy1 = line1.end[1] - line1.start[1];
+      const dx2 = line2.end[0] - line2.start[0];
+      const dy2 = line2.end[1] - line2.start[1];
+
+      const crossProduct = dx1 * dy2 - dy1 * dx2;
+      if (Math.abs(crossProduct) < 1e-6) { // Lines are parallel
+        // Distance from a point on line1 to line2
+        const p = line1.start;
+        const l1 = line2.start;
+        const l2 = line2.end;
+
+        const dx = l2[0] - l1[0];
+        const dy = l2[1] - l1[1];
+        const lenSq = dx * dx + dy * dy;
+
+        if (lenSq < 1e-6) { // Line2 is a point
+          result = { Distance: { value: dist(p, l1) } };
+          displayPosition = [(p[0] + l1[0]) / 2, (p[1] + l1[1]) / 2];
+        } else {
+          const t = ((p[0] - l1[0]) * dx + (p[1] - l1[1]) * dy) / lenSq;
+          const projection = [l1[0] + t * dx, l1[1] + t * dy] as [number, number];
+          result = { Distance: { value: dist(p, projection) } };
+          displayPosition = [(p[0] + projection[0]) / 2, (p[1] + projection[1]) / 2];
+        }
+      } else { // Lines are not parallel, angle
+        const angle1 = Math.atan2(dy1, dx1);
+        const angle2 = Math.atan2(dy2, dx2);
+        let angle = Math.abs(angle1 - angle2);
+        if (angle > Math.PI) angle = 2 * Math.PI - angle;
+        result = { Angle: { value: angle * 180 / Math.PI } };
+        // For angle, display position is more complex, maybe intersection or midpoint
+        displayPosition = [
+          (line1.start[0] + line1.end[0] + line2.start[0] + line2.end[0]) / 4,
+          (line1.start[1] + line1.end[1] + line2.start[1] + line2.end[1]) / 4
+        ];
+      }
+    }
+    // Circle/Arc Radius
+    else if (info1.type === 'circle' && info1.entity?.geometry.Circle) {
+      result = { Radius: { value: info1.entity.geometry.Circle.radius } };
+      displayPosition = info1.entity.geometry.Circle.center;
+    }
+    else if (info1.type === 'arc' && info1.entity?.geometry.Arc) {
+      result = { Radius: { value: info1.entity.geometry.Arc.radius } };
+      displayPosition = info1.entity.geometry.Arc.center;
+    }
+    // Length of a line
+    else if (info1.type === 'line' && info1.entity?.geometry.Line && !info2) {
+      const line = info1.entity.geometry.Line;
+      result = { Distance: { value: dist(line.start, line.end) } };
+      displayPosition = [(line.start[0] + line.end[0]) / 2, (line.start[1] + line.end[1]) / 2];
+    }
+
+    if (result) {
+      return {
+        entity1Id: c1.id,
+        point1Index: c1.index ?? -1,
+        entity2Id: c2 ? c2.id : "",
+        point2Index: c2 ? (c2.index ?? -1) : -1,
+        result: result,
+        displayPosition: displayPosition
+      };
+    }
+    return null;
+  };
+
+  const handleDimensionFinish = (offsetOverride?: [number, number]) => {
+    const action = dimensionProposedAction();
+    const selections = dimensionSelection();
+    if (!action || !action.isValid) return;
+
+    const sketch = currentSketch();
+    let constraint: SketchConstraint | null = null;
+
+    if (action.type === "Length") {
+      // Single Line
+      const c = selections[0];
+      if (c && c.type === "entity") {
+        constraint = {
+          Distance: {
+            points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+          }
+        };
+      }
+    } else if (action.type === "Radius") {
+      const c = selections[0];
+      if (c && c.type === "entity") {
+        constraint = {
+          Radius: {
+            entity: c.id,
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0.7, 0.7] }
+          }
+        };
+      }
+    } else if (action.type === "Angle") {
+      const [c1, c2] = selections;
+      constraint = {
+        Angle: {
+          lines: [c1.id, c2.id],
+          value: action.value!,
+          style: { driven: false, offset: [0, 1.0] }
+        }
+      };
+    } else if (action.type === "DistancePointLine") {
+      const c1 = selections[0];
+      const c2 = selections[1];
+      const lineCand = c1.type === "entity" ? c1 : c2;
+      const pointCand = c1.type === "entity" ? c2 : c1;
+
+      const getConstraintPoint = (c: SelectionCandidate): { id: string, index: number } => {
+        if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+        return { id: c.id, index: c.index || 0 };
+      };
+
+      constraint = {
+        DistancePointLine: {
+          point: getConstraintPoint(pointCand),
+          line: lineCand.id,
+          value: action.value!,
+        }
+      };
+    } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
+      // Point-Point or Inferred Line endpoints
+      let p1: { id: string, index: number } | null = null;
+      let p2: { id: string, index: number } | null = null;
+
+      if (selections.length === 2) {
+        const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
+          if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+          if (c.type === "point") return { id: c.id, index: c.index || 0 };
+          if (c.type === "entity") return { id: c.id, index: c.index || 0 };
+          return null;
+        };
+        p1 = getPoint(selections[0]);
+        p2 = getPoint(selections[1]);
+      } else if (selections.length === 1 && selections[0].type === 'entity') {
+        // Single line selection -> using endpoints 0 and 1
+        p1 = { id: selections[0].id, index: 0 };
+        p2 = { id: selections[0].id, index: 1 };
+      }
+
+      if (p1 && p2) {
+        if (action.type === "HorizontalDistance") {
+          constraint = {
+            HorizontalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else if (action.type === "VerticalDistance") {
+          constraint = {
+            VerticalDistance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        } else {
+          constraint = {
+            Distance: {
+              points: [p1, p2],
+              value: action.value!,
+              style: { driven: false, offset: offsetOverride || [0, 1.0] }
+            }
+          };
+        }
+      }
+    } else if (action.type === "DistanceParallelLines") {
+      // Two parallel lines - constrain distance between them
+      const [c1, c2] = selections;
+      if (c1.type === "entity" && c2.type === "entity") {
+        constraint = {
+          DistanceParallelLines: {
+            lines: [c1.id, c2.id],
+            value: action.value!,
+            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+          }
+        };
+      }
+    }
+
+    if (constraint) {
+      const updated = { ...sketch };
+      updated.constraints = [...updated.constraints, wrapConstraint(constraint)];
+      updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
+      setCurrentSketch(updated);
+      sendSketchUpdate(updated); // Send to backend to persist and solve
+
+      // Trigger edit mode for the newly created constraint
+      const newIndex = updated.constraints.length - 1;
+      setEditingDimension({
+        constraintIndex: newIndex,
+        type: action.type === 'Radius' ? 'Radius' : (action.type === 'Angle' ? 'Angle' : 'Distance'),
+        currentValue: action.value!,
+        isNew: true
+      });
+      // console.log("Added Advanced Dimension and triggered edit:", action.type);
+    }
+
+    // Cleanup
+    setDimensionSelection([]);
+    setDimensionProposedAction(null);
+    setDimensionPlacementMode(false);
+    setSketchTool("select");
+  };
+
+  const handleDimensionCancel = () => {
+    setDimensionSelection([]);
+    setDimensionProposedAction(null);
+    setDimensionPlacementMode(false);
+    setSketchTool("select");
+  };
+
+  const handleMeasurementClearPending = () => {
+    setMeasurementSelection([]);
+    setMeasurementPending(null);
+    setActiveMeasurements([]);
+  };
+
+
+  // --- Initialize Tool Hook ---
+  const toolHook = useSketchTool(
+    currentSketch,
+    setCurrentSketch,
+    sketchSelection,
+    setSketchSelection,
+    setEditingDimension,
+    dimensionSelection,
+    setDimensionSelection,
+    handleDimensionFinish,
+    setDimensionMousePosition,
+    measurementSelection,
+    setMeasurementSelection,
+    calculateMeasurement,
+    (m) => setActiveMeasurements(prev => [...prev, m]),
+    constructionMode,
+    sendSketchUpdate,
+    dimensionPlacementMode,
+    dimensionProposedAction
+  );
+
+  // Destructure Tool Hook State
+  const {
+    snapConfig, setSnapConfig,
+    activeSnap, setActiveSnap,
+    startSnap, setStartSnap,
+    tempPoint, setTempPoint,
+    tempStartPoint, setTempStartPoint,
+    cursorPosition, setCursorPosition,
+    inferenceSuppress, setInferenceSuppress,
+    toolRegistry,
+    inferredConstraints,
+    handleSketchInput: handleSketchHookInput // <--- New export from toolHook
+  } = toolHook;
 
   // Pattern Preview
   const patternPreview = createMemo<SketchEntity[]>(() => {
@@ -272,215 +567,6 @@ export function useSketching(props: UseSketchingProps) {
     return [];
   });
 
-  // Props destructuring
-  const { send, graph, selection } = props;
-
-  const handleDimensionFinish = (offsetOverride?: [number, number]) => {
-    const action = dimensionProposedAction();
-    const selections = dimensionSelection();
-    if (!action || !action.isValid) return;
-
-    const sketch = currentSketch();
-    let constraint: SketchConstraint | null = null;
-
-    if (action.type === "Length") {
-      // Single Line
-      const c = selections[0];
-      if (c && c.type === "entity") {
-        constraint = {
-          Distance: {
-            points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0, 1.0] }
-          }
-        };
-      }
-    } else if (action.type === "Radius") {
-      const c = selections[0];
-      if (c && c.type === "entity") {
-        constraint = {
-          Radius: {
-            entity: c.id,
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0.7, 0.7] }
-          }
-        };
-      }
-    } else if (action.type === "Angle") {
-      const [c1, c2] = selections;
-      constraint = {
-        Angle: {
-          lines: [c1.id, c2.id],
-          value: action.value!,
-          style: { driven: false, offset: [0, 1.0] }
-        }
-      };
-    } else if (action.type === "DistancePointLine") {
-      const c1 = selections[0];
-      const c2 = selections[1];
-      const lineCand = c1.type === "entity" ? c1 : c2;
-      const pointCand = c1.type === "entity" ? c2 : c1;
-
-      const getConstraintPoint = (c: SelectionCandidate): { id: string, index: number } => {
-        if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
-        return { id: c.id, index: c.index || 0 };
-      };
-
-      constraint = {
-        DistancePointLine: {
-          point: getConstraintPoint(pointCand),
-          line: lineCand.id,
-          value: action.value!,
-        }
-      };
-    } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
-      // Point-Point or Inferred Line endpoints
-      let p1: { id: string, index: number } | null = null;
-      let p2: { id: string, index: number } | null = null;
-
-      if (selections.length === 2) {
-        const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
-          if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
-          if (c.type === "point") return { id: c.id, index: c.index || 0 };
-          if (c.type === "entity") return { id: c.id, index: c.index || 0 };
-          return null;
-        };
-        p1 = getPoint(selections[0]);
-        p2 = getPoint(selections[1]);
-      } else if (selections.length === 1 && selections[0].type === 'entity') {
-        // Single line selection -> using endpoints 0 and 1
-        p1 = { id: selections[0].id, index: 0 };
-        p2 = { id: selections[0].id, index: 1 };
-      }
-
-      if (p1 && p2) {
-        if (action.type === "HorizontalDistance") {
-          constraint = {
-            HorizontalDistance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        } else if (action.type === "VerticalDistance") {
-          constraint = {
-            VerticalDistance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        } else {
-          constraint = {
-            Distance: {
-              points: [p1, p2],
-              value: action.value!,
-              style: { driven: false, offset: offsetOverride || [0, 1.0] }
-            }
-          };
-        }
-      }
-    } else if (action.type === "DistanceParallelLines") {
-      // Two parallel lines - constrain distance between them
-      const [c1, c2] = selections;
-      if (c1.type === "entity" && c2.type === "entity") {
-        constraint = {
-          DistanceParallelLines: {
-            lines: [c1.id, c2.id],
-            value: action.value!,
-            style: { driven: false, offset: offsetOverride || [0, 1.0] }
-          }
-        };
-      }
-    } else if (action.type === "DistancePointLine") {
-      const [c1, c2] = selections;
-      // Identify which is point and which is line
-      // We assume one is point-like and one is line entity because analyzeDimensionSelection verified it
-      const isC1Line = c1.type === "entity" && sketch.entities.find(e => e.id === c1.id)?.geometry.Line;
-      const lineC = isC1Line ? c1 : c2;
-      const pointC = isC1Line ? c2 : c1;
-
-      // Construct ConstraintPoint for the point
-      let pointDef: ConstraintPoint;
-      if (pointC.id === "origin") {
-        // Origin is special, but constraint expects EntityId? 
-        // Most backends allow "origin" or specific UUID. 
-        // If "origin" string is not a valid UUID, this might fail if backend expects UUID.
-        // But SelectionCandidate uses "origin". 
-        // Let's assume ID is passed as is.
-        pointDef = { id: "origin", index: 0 };
-      } else {
-        pointDef = { id: pointC.id, index: pointC.index || 0 };
-      }
-
-      constraint = {
-        DistancePointLine: {
-          point: pointDef,
-          line: lineC.id,
-          value: action.value!,
-          style: { driven: false, offset: offsetOverride || [0, 1.0] }
-        }
-      };
-    }
-
-    if (constraint) {
-      const updated = { ...sketch };
-      updated.constraints = [...updated.constraints, wrapConstraint(constraint)];
-      updated.history = [...(updated.history || []), { AddConstraint: { constraint: constraint } }];
-      setCurrentSketch(updated);
-      sendSketchUpdate(updated); // Send to backend to persist and solve
-
-      // Trigger edit mode for the newly created constraint
-      const newIndex = updated.constraints.length - 1;
-      setEditingDimension({
-        constraintIndex: newIndex,
-        type: action.type === 'Radius' ? 'Radius' : (action.type === 'Angle' ? 'Angle' : 'Distance'),
-        currentValue: action.value!,
-        isNew: true
-      });
-      // console.log("Added Advanced Dimension and triggered edit:", action.type);
-    }
-
-    // Cleanup
-    setDimensionSelection([]);
-    setDimensionProposedAction(null);
-    setDimensionPlacementMode(false);
-    setSketchTool("select");
-  };
-
-  // Tool Registry
-  const toolRegistry = new ToolRegistry({
-    get sketch() { return currentSketch(); },
-    setSketch: (s) => setCurrentSketch(s),
-    get selection() { return sketchSelection(); },
-    setSelection: (s) => setSketchSelection(s),
-    setEditingDimension: (dim) => setEditingDimension(dim),
-    setTempPoint, // Expose temp point setter
-    get dimensionSelection() { return dimensionSelection(); },
-    setDimensionSelection: (s) => setDimensionSelection(s),
-    commitDimension: () => {
-      if (dimensionPlacementMode() && dimensionProposedAction()?.isValid) {
-        handleDimensionFinish();
-        return true;
-      }
-      return false;
-    },
-    setDimensionMousePosition: (pos) => setDimensionMousePosition(pos),
-    setMeasurementSelection: (s) => setMeasurementSelection(s),
-    calculateMeasurement: (c1, c2) => calculateMeasurement(c1, c2),
-    addActiveMeasurement: (m) => setActiveMeasurements(prev => [...prev, m]),
-    get snapPoint() { return activeSnap(); },
-    get constructionMode() { return constructionMode(); },
-    sendUpdate: (s) => sendSketchUpdate(s),
-    spawnEntity: (e) => {
-      // Simple spawn implementation
-      const sketch = currentSketch();
-      const updated = { ...sketch, entities: [...sketch.entities, e] };
-      setCurrentSketch(updated);
-      sendSketchUpdate(updated);
-    }
-  });
-
   // Effect to sync solved sketch
   createEffect(() => {
     const data = graph();
@@ -546,74 +632,8 @@ export function useSketching(props: UseSketchingProps) {
 
   // Keyboard shortcuts are now handled centrally by useKeyboardShortcuts in App.tsx
 
-  const handleSelect = (topoId: any, modifier: "replace" | "add" | "remove" = "replace") => {
-    console.log("Selecting:", topoId, modifier);
-
-    if (sketchMode()) {
-      if (topoId === null) {
-        setSketchSelection([]);
-        return;
-      }
-      // Handle Sketch Entity Selection locally
-      let newSel = [...sketchSelection()];
-      // If dimension tool is active, use dimensionSelection instead
-      if (sketchTool() === "dimension") {
-        newSel = [...dimensionSelection()];
-      }
-
-      const areEqual = (a: SelectionCandidate, b: SelectionCandidate) => {
-        return a.id === b.id && a.type === b.type && a.index === b.index;
-      };
-
-      const candidate = topoId as SelectionCandidate;
-      const existingIdx = newSel.findIndex(s => areEqual(s, candidate));
-      const exists = existingIdx !== -1;
-
-      // Handle Toggle behavior for "add" (Ctrl+Click)
-      if (modifier === "add") {
-        if (exists) {
-          // Toggle OFF
-          newSel.splice(existingIdx, 1);
-        } else {
-          // Toggle ON
-          newSel.push(candidate);
-        }
-      } else if (modifier === "remove") {
-        if (exists) {
-          newSel.splice(existingIdx, 1);
-        }
-      } else {
-        // Replace - default behavior
-        // Special handling for dimension tool: Allow accumulating up to 2 items even without modifier
-        if (sketchTool() === "dimension" && !exists && newSel.length < 2) {
-          newSel.push(candidate);
-        } else {
-          // Standard replace behavior
-          if (newSel.length === 1 && exists) {
-            newSel = []; // Deselect if clicking single selected item
-          } else {
-            newSel = [candidate];
-          }
-        }
-      }
-
-      if (sketchTool() === "dimension") {
-        setDimensionSelection(newSel);
-      } else {
-        setSketchSelection(newSel);
-      }
-      return;
-    }
-
-    if (topoId) {
-      const payload = {
-        id: topoId,
-        modifier: modifier
-      };
-      send(`SELECT:${JSON.stringify(payload)}`);
-    } else if (!topoId) {
-      send(`SELECT:CLEAR`);
-    }
+  const handleSelect = (topoId: string | null, modifier: "replace" | "add" | "remove" = "replace") => {
+    sel.handleSelect(topoId, modifier, send, sketchMode());
   };
 
 
@@ -649,7 +669,7 @@ export function useSketching(props: UseSketchingProps) {
         "sketch_data": { Sketch: newSketch }
       }
     };
-    send(`UPDATE_FEATURE:${JSON.stringify(payload)}`);
+    send({ command: 'UpdateFeature', payload: { id, params: payload.params } });
 
     // Trigger camera alignment to sketch plane
     setCameraAlignPlane(plane);
@@ -752,12 +772,12 @@ export function useSketching(props: UseSketchingProps) {
       if (originalSketch()) {
         // Revert to original
         const payload = {
-          id: activeSketchId(),
+          id: activeSketchId()!,
           params: {
             "sketch_data": { Sketch: originalSketch() }
           }
         };
-        send(`UPDATE_FEATURE:${JSON.stringify(payload)}`);
+        send({ command: 'UpdateFeature', payload: { id: payload.id, params: payload.params } });
       } else {
         // If no original (e.g. was new), maybe just leave it or empty it?
         // If it was new, we might want to delete the pending feature? 
@@ -776,31 +796,19 @@ export function useSketching(props: UseSketchingProps) {
     if (activeSketchId()) {
       // Send UPDATE_FEATURE
       const payload = {
-        id: activeSketchId(),
+        id: activeSketchId()!,
         params: {
           "sketch_data": { Sketch: currentSketch() }
         }
       };
-      send(`UPDATE_FEATURE:${JSON.stringify(payload)}`);
+      send({ command: 'UpdateFeature', payload: { id: payload.id, params: payload.params } });
     }
     setSketchMode(false);
     setActiveSketchId(null);
     setConstraintSelection([]); // Reset any in-progress constraint selection
   };
 
-  // Send sketch update to backend to run solver and update geometry live
-  const sendSketchUpdate = (sketch: Sketch) => {
-    if (activeSketchId()) {
-      const payload = {
-        id: activeSketchId(),
-        params: {
-          "sketch_data": { Sketch: sketch }
-        }
-      };
-      send(`UPDATE_FEATURE:${JSON.stringify(payload)}`);
-      console.log("Sent sketch update to backend for solving");
-    }
-  };
+
 
   // Handle dimension text drag to update offset
   const handleDimensionDrag = (constraintIndex: number, newOffset: [number, number]) => {
@@ -1211,11 +1219,6 @@ export function useSketching(props: UseSketchingProps) {
 
   // Old offset effect removed
 
-  const handleDimensionCancel = () => {
-    setDimensionSelection([]);
-    setDimensionProposedAction(null);
-    setSketchTool("select");
-  };
 
   // ===== MEASUREMENT TOOL HELPERS =====
 
@@ -1259,160 +1262,15 @@ export function useSketching(props: UseSketchingProps) {
     return Math.acos(Math.max(-1, Math.min(1, dot)));
   };
 
-  /** Perform measurement between two selection candidates and create ActiveMeasurement */
-  const calculateMeasurement = (c1: SelectionCandidate, c2: SelectionCandidate): ActiveMeasurement | null => {
-    const sketch = currentSketch();
-
-    // Get entity data for each candidate
-    const getEntityInfo = (c: SelectionCandidate): { type: 'point' | 'line' | 'circle' | 'arc', pos?: [number, number], entity?: SketchEntity } | null => {
-      if (c.type === 'origin') {
-        return { type: 'point', pos: [0, 0] };
-      }
-      if (c.type === 'point' && c.position) {
-        return { type: 'point', pos: c.position };
-      }
-      const entity = sketch.entities.find(e => e.id === c.id);
-      if (!entity) return null;
-
-      if (entity.geometry.Line) {
-        if (c.type === 'point' && c.index !== undefined) {
-          const pos = c.index === 0 ? entity.geometry.Line.start : entity.geometry.Line.end;
-          return { type: 'point', pos, entity };
-        }
-        return { type: 'line', entity };
-      }
-      if (entity.geometry.Circle) {
-        if (c.type === 'point') {
-          return { type: 'point', pos: entity.geometry.Circle.center, entity };
-        }
-        return { type: 'circle', entity };
-      }
-      if (entity.geometry.Arc) {
-        if (c.type === 'point') {
-          return { type: 'point', pos: entity.geometry.Arc.center, entity };
-        }
-        return { type: 'arc', entity };
-      }
-      if (entity.geometry.Point) {
-        return { type: 'point', pos: entity.geometry.Point.pos, entity };
-      }
-      return null;
-    };
-
-    const info1 = getEntityInfo(c1);
-    const info2 = getEntityInfo(c2);
-    if (!info1 || !info2) return null;
-
-    let result: MeasurementResult;
-    let displayPosition: [number, number] = [0, 0];
-
-    // Point to Point
-    if (info1.type === 'point' && info2.type === 'point' && info1.pos && info2.pos) {
-      const distance = calculatePointPointDistance(info1.pos, info2.pos);
-      result = { Distance: { value: distance } };
-      displayPosition = [(info1.pos[0] + info2.pos[0]) / 2, (info1.pos[1] + info2.pos[1]) / 2];
-    }
-    // Point to Line
-    else if (info1.type === 'point' && info2.type === 'line' && info1.pos && info2.entity?.geometry.Line) {
-      const { start, end } = info2.entity.geometry.Line;
-      const distance = calculatePointLineDistance(info1.pos, start, end);
-      result = { Distance: { value: distance } };
-      displayPosition = info1.pos;
-    }
-    // Line to Point
-    else if (info1.type === 'line' && info2.type === 'point' && info2.pos && info1.entity?.geometry.Line) {
-      const { start, end } = info1.entity.geometry.Line;
-      const distance = calculatePointLineDistance(info2.pos, start, end);
-      result = { Distance: { value: distance } };
-      displayPosition = info2.pos;
-    }
-    // Line to Line (angle)
-    else if (info1.type === 'line' && info2.type === 'line' && info1.entity?.geometry.Line && info2.entity?.geometry.Line) {
-      const l1 = info1.entity.geometry.Line;
-      const l2 = info2.entity.geometry.Line;
-      const angle = calculateLineLineAngle(l1.start, l1.end, l2.start, l2.end);
-      result = { Angle: { value: angle } };
-      // Display at midpoint between line midpoints
-      const mid1: [number, number] = [(l1.start[0] + l1.end[0]) / 2, (l1.start[1] + l1.end[1]) / 2];
-      const mid2: [number, number] = [(l2.start[0] + l2.end[0]) / 2, (l2.start[1] + l2.end[1]) / 2];
-      displayPosition = [(mid1[0] + mid2[0]) / 2, (mid1[1] + mid2[1]) / 2];
-    }
-    // Circle/Arc radius (same entity selected twice)
-    else if (c1.id === c2.id && (info1.type === 'circle' || info1.type === 'arc')) {
-      const radius = info1.entity?.geometry.Circle?.radius || info1.entity?.geometry.Arc?.radius || 0;
-      result = { Radius: { value: radius } };
-      const center = info1.entity?.geometry.Circle?.center || info1.entity?.geometry.Arc?.center || [0, 0];
-      displayPosition = [center[0] + radius * 0.7, center[1] + radius * 0.7];
-    }
-    else {
-      result = { Error: { message: 'Cannot measure between these entities' } };
-    }
-
-    return {
-      entity1Id: c1.id,
-      point1Index: c1.index || 0,
-      entity2Id: c2.id,
-      point2Index: c2.index || 0,
-      result,
-      displayPosition
-    };
-  };
-
-  /** Clear active measurements and reset state */
-  const handleMeasurementCancel = () => {
-    setMeasurementSelection([]);
-    setMeasurementPending(null);
-    setActiveMeasurements([]);
-    setSketchTool("select");
-  };
-
-  /** Clear just the pending selection (escape during multi-step) */
-  const handleMeasurementClearPending = () => {
-    setMeasurementSelection([]);
-    setMeasurementPending(null);
-  };
 
   // const [tempPoint, setTempPoint] declared at top (moved)
   // const [tempStartPoint, setTempStartPoint] declared at top (moved)
 
   // ===== CONSTRAINT INFERENCE STATE =====
-  // Track cursor position for inference detection
-  const [cursorPosition, setCursorPosition] = createSignal<[number, number] | null>(null);
-  // Shift key suppresses inference display
-  const [inferenceSuppress, setInferenceSuppress] = createSignal(false);
-
-  // Computed inferred constraints based on current drawing state
-  const inferredConstraints = createMemo<InferredConstraint[]>(() => {
-    // Only show inferences when actively drawing in sketch mode
-    if (!sketchMode() || inferenceSuppress()) return [];
-
-    const cursor = cursorPosition();
-    if (!cursor) return [];
-
-    // Use tempPoint as the start point during line drawing
-    const startPoint = tempPoint();
-    const sketch = currentSketch();
-    const activeTool = sketchTool();
-    const snap = activeSnap();
-
-    const result = detectInferredConstraints(
-      cursor,
-      startPoint,
-      sketch,
-      activeTool,
-      snap,
-      defaultInferenceConfig
-    );
-
-    // Debug logging (remove after debugging)
-    // if (result.length > 0) {
-    //   console.log('[Inference] Detected:', result.map(r => `${r.type}@${r.displayPosition}`));
-    // }
-    return result;
-  });
 
 
   const handleSketchInput = (type: string, point: [number, number, number], event?: MouseEvent) => {
+
 
     if (type === "cancel") { return; }
     if (!sketchMode()) return;
@@ -1433,19 +1291,30 @@ export function useSketching(props: UseSketchingProps) {
       setInferenceSuppress(event?.shiftKey ?? false);
     }
 
-    // Delegate to Tool Registry
+    // DEBUG: Log tool state on click
+    if (type === "click") {
+      console.log("[DEBUG handleSketchInput] Click detected, activeTool:", sketchTool());
+    }
+
+    // Delegate to Tool Registry (Except Dimension/Measure which have legacy complex logic for now)
     const activeTool = sketchTool();
-    const toolInstance = toolRegistry.getTool(activeTool);
-    if (toolInstance) {
-      // Pass input to tool
-      if (type === "click") {
-        toolInstance.onMouseDown && toolInstance.onMouseDown(rawPoint[0], rawPoint[1], event);
-      } else if (type === "move") {
-        toolInstance.onMouseMove && toolInstance.onMouseMove(rawPoint[0], rawPoint[1], event);
-      } else if (type === "up") { // Assuming "up" type is passed or mapped
-        toolInstance.onMouseUp && toolInstance.onMouseUp(rawPoint[0], rawPoint[1], event);
+    console.log("[DEBUG handleSketchInput] Active tool before delegation:", activeTool, "type:", type);
+    if (activeTool !== 'dimension' && activeTool !== 'measure') {
+      console.log("[DEBUG handleSketchInput] Delegating to ToolRegistry for tool:", activeTool);
+      const toolInstance = toolRegistry.getTool(activeTool);
+      if (toolInstance) {
+        // Pass input to tool
+        if (type === "click") {
+          toolInstance.onMouseDown && toolInstance.onMouseDown(rawPoint[0], rawPoint[1], event);
+        } else if (type === "move") {
+          toolInstance.onMouseMove && toolInstance.onMouseMove(rawPoint[0], rawPoint[1], event);
+        } else if (type === "up") { // Assuming "up" type is passed or mapped
+          toolInstance.onMouseUp && toolInstance.onMouseUp(rawPoint[0], rawPoint[1], event);
+        }
+        return;
       }
-      return;
+    } else {
+      console.log("[DEBUG handleSketchInput] NOT delegating - tool is dimension or measure");
     }
 
     // Use snapped position for all geometry operations
@@ -1453,129 +1322,6 @@ export function useSketching(props: UseSketchingProps) {
     let effectivePoint: [number, number] = snappedPos;
     const tool = sketchTool();
     const startPt = tempPoint();
-
-    // For line/rectangle tools, apply angular snapping which may also land on axes
-    if ((tool === "line" || tool === "rectangle") && startPt) {
-      // First try angular snapping (H/V constraint)
-      const angularResult = applyAngularSnapping(startPt, snappedPos);
-      if (angularResult.snapped) {
-        effectivePoint = angularResult.position;
-        console.log("Angular snap:", angularResult.snapType);
-
-        // Check if the angular-snapped point is also on an axis
-        const axisThreshold = snapConfig().snap_radius;
-        if (Math.abs(effectivePoint[1]) < axisThreshold) {
-          // Snap to X axis (Y=0) - keep X, set Y to 0
-          effectivePoint = [effectivePoint[0], 0];
-          console.log("Combined snap: angular + AxisX");
-        } else if (Math.abs(effectivePoint[0]) < axisThreshold) {
-          // Snap to Y axis (X=0) - keep Y, set X to 0
-          effectivePoint = [0, effectivePoint[1]];
-          console.log("Combined snap: angular + AxisY");
-        }
-      } else if (!snap) {
-        // No angular snap and no entity snap - check for axis-only snap
-        const axisThreshold = snapConfig().snap_radius;
-        if (Math.abs(effectivePoint[1]) < axisThreshold) {
-          effectivePoint = [effectivePoint[0], 0];
-        } else if (Math.abs(effectivePoint[0]) < axisThreshold) {
-          effectivePoint = [0, effectivePoint[1]];
-        }
-      }
-    }
-
-    // Helper for auto-constraining new entities based on snaps
-    const applyAutoConstraintsDebug = (
-      sketch: Sketch,
-      newEntityId: string,
-      startSnap: SnapPoint | null,
-      endSnap: SnapPoint | null
-    ): SketchConstraint[] => {
-      console.error("[applyAutoConstraintsDebug] Called with startSnap:", startSnap?.snap_type, "endSnap:", endSnap?.snap_type);
-      const constraints: SketchConstraint[] = [];
-
-      // Helper to convert snap to constraint point
-      const snapToCP = (snap: SnapPoint): ConstraintPoint | null => {
-        if (!snap.entity_id) return null;
-        // Basic heuristic for index, refined by finding closest entity point
-        // For now, we reuse the existing logic or simple index mapping if possible?
-        // Actually, we need to know the index on the TARGET entity.
-        // We can re-use findClosestPoint logic or just check distance to known points.
-
-        const entity = sketch.entities.find(e => e.id === snap.entity_id);
-        if (!entity) return null;
-
-        if (entity.geometry.Line) {
-          const dStart = Math.sqrt((entity.geometry.Line.start[0] - snap.position[0]) ** 2 + (entity.geometry.Line.start[1] - snap.position[1]) ** 2);
-          const dEnd = Math.sqrt((entity.geometry.Line.end[0] - snap.position[0]) ** 2 + (entity.geometry.Line.end[1] - snap.position[1]) ** 2);
-          return { id: snap.entity_id, index: dStart < dEnd ? 0 : 1 };
-        } else if (entity.geometry.Circle) {
-          return { id: snap.entity_id, index: 0 }; // Center
-        } else if (entity.geometry.Arc) {
-          // Check center vs endpoints
-          const { center, radius, start_angle, end_angle } = entity.geometry.Arc;
-          const dCenter = Math.sqrt((center[0] - snap.position[0]) ** 2 + (center[1] - snap.position[1]) ** 2);
-          if (dCenter < 0.1) return { id: snap.entity_id, index: 0 };
-
-          const pStart = [center[0] + radius * Math.cos(start_angle), center[1] + radius * Math.sin(start_angle)];
-          const pEnd = [center[0] + radius * Math.cos(end_angle), center[1] + radius * Math.sin(end_angle)];
-          const dStart = Math.sqrt((pStart[0] - snap.position[0]) ** 2 + (pStart[1] - snap.position[1]) ** 2);
-          const dEnd = Math.sqrt((pEnd[0] - snap.position[0]) ** 2 + (pEnd[1] - snap.position[1]) ** 2);
-
-          if (dStart < dEnd) return { id: snap.entity_id, index: 1 };
-          return { id: snap.entity_id, index: 2 };
-        }
-        return null;
-      };
-
-      const processSnap = (snap: SnapPoint, newEntityIndex: number) => {
-        // console.error(`[processSnap DEBUG] Processing snap for index ${newEntityIndex}:`, snap.snap_type, snap.position, snap.entity_id);
-        // Force alert for user verification
-        window.alert(`Snap Processed: ${snap.snap_type} (Index: ${newEntityIndex})`);
-
-        console.error(`[processSnap DEBUG] Processing snap for index ${newEntityIndex}:`, snap.snap_type);
-
-        // Create Coincident constraint only for snaps that map to actual constraint points
-        // Midpoint is NOT supported as a coincident target - it snaps visually but no constraint is created
-        if (snap.snap_type === "Endpoint" || snap.snap_type === "Center" || snap.snap_type === "Intersection") {
-          // Create Coincident
-          const cp = snapToCP(snap);
-          if (cp) {
-            // Prevent self-constraint if snapping to self (unlikely during creation but possible)
-            if (cp.id !== newEntityId) {
-              constraints.push({
-                Coincident: {
-                  points: [
-                    cp,
-                    { id: newEntityId, index: newEntityIndex }
-                  ]
-                }
-              });
-              console.log("Auto-Constraint: Coincident to", snap.snap_type, cp.id);
-            }
-          }
-        } else if (snap.snap_type === "Midpoint") {
-          // Midpoint snap: visual snap works but NO coincident constraint is created
-          // The constraint system doesn't support midpoint indices
-          console.log("Midpoint snap: visual snap only, no auto-constraint (not supported)");
-        } else if (snap.snap_type === "Origin") {
-          // Create Fix at 0,0
-          // NOTE: We fix the NEW point, not the origin (which is implicit)
-          constraints.push({
-            Fix: {
-              point: { id: newEntityId, index: newEntityIndex },
-              position: [0, 0]
-            }
-          });
-          console.log("Auto-Constraint: Fix to Origin");
-        }
-      };
-
-      if (startSnap) processSnap(startSnap, 0); // Start/Center of new entity
-      if (endSnap) processSnap(endSnap, 1);     // End of new entity (if applicable)
-
-      return constraints;
-    };
 
     // ===== DIMENSION EDITING: Double-click on dimension text to edit =====
     if (type === "dblclick") {
@@ -2041,58 +1787,6 @@ export function useSketching(props: UseSketchingProps) {
 
 
     if (sketchTool() === "line") {
-      if (type === "click") {
-        if (!tempPoint()) {
-          // Legacy dead code - handled by LineTool
-          setTempPoint(effectivePoint);
-          setStartSnap(snap);
-        } else {
-          console.error("[Line Tool] Finishing line");
-          const start = tempPoint()!;
-          const newEntityId = crypto.randomUUID();
-          const newEntity: SketchEntity = {
-            id: newEntityId,
-            geometry: {
-              Line: {
-                start: start,
-                end: effectivePoint
-              }
-            },
-            is_construction: constructionMode()
-          };
-
-          const updated = { ...currentSketch() };
-          updated.entities = updated.entities.filter(e => e.id !== "preview_line");
-          updated.entities = [...updated.entities, newEntity];
-          updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
-
-          console.error("[Line Tool] calling applyAutoConstraintsDebug with:", startSnap(), snap);
-          alert("About to apply constraints");
-          const autoConstraints = applyAutoConstraintsDebug(updated, newEntityId, startSnap(), snap);
-          console.error("[Line Tool] result constraints:", autoConstraints);
-
-          updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
-          updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
-
-          setCurrentSketch(updated);
-          sendSketchUpdate(updated);
-
-          setTempPoint(null);
-          setStartSnap(null);
-        }
-      } else if (type === "move") {
-        if (tempPoint()) {
-          const PREVIEW_ID = "preview_line";
-          const start = tempPoint()!;
-          const previewEntity: SketchEntity = {
-            id: PREVIEW_ID,
-            geometry: { Line: { start, end: effectivePoint } },
-            is_construction: constructionMode()
-          };
-          const entities = currentSketch().entities.filter(e => e.id !== PREVIEW_ID);
-          setCurrentSketch({ ...currentSketch(), entities: [...entities, previewEntity] });
-        }
-      }
     } else if (sketchTool() === "ellipse") {
       if (type === "click") {
         if (!tempPoint()) {
@@ -2143,7 +1837,7 @@ export function useSketching(props: UseSketchingProps) {
           updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
 
           // Auto-constraints (Center snap)
-          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
+          const autoConstraints = applyAutoConstraints(updated, newEntity.id, startSnap(), null);
           updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
           updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -2207,191 +1901,7 @@ export function useSketching(props: UseSketchingProps) {
         }
       }
     } else if (sketchTool() === "circle") {
-      if (type === "click") {
-        if (!tempPoint()) {
-          setTempPoint(effectivePoint);
-        } else {
-          const center = tempPoint()!;
-          const dx = effectivePoint[0] - center[0];
-          const dy = effectivePoint[1] - center[1];
-          const radius = Math.sqrt(dx * dx + dy * dy);
-
-          const newEntity: SketchEntity = {
-            id: crypto.randomUUID(),
-            geometry: {
-              Circle: {
-                center: center,
-                radius: radius
-              }
-            },
-            is_construction: constructionMode()
-          };
-
-          const updated = { ...currentSketch() };
-          updated.entities = updated.entities.filter(e => e.id !== "preview_circle");
-          updated.entities = [...updated.entities, newEntity];
-          updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
-
-          // Auto-constraints (Center snap)
-          // We only have Center snap for circle creation center (first click)
-          // The second click defines radius, snapping there might mean Coincident with something on circumference?
-          // Usually we just care about Center.
-          // Note: tempPoint() was set on first click, but we didn't save snap?
-          // We need to track startSnap like in Line tool.
-          // Oops, Circle tool didn't save startSnap. I should check if I missed that.
-          // Actually, I can rely on a saved snap if I add logic to save it. 
-          // Current code for circle click 1: `setTempPoint(effectivePoint);`
-          // I will modify it to `setStartSnap(snap);` as well.
-
-          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
-          updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
-          updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
-
-          setCurrentSketch(updated);
-          sendSketchUpdate(updated); // Sync to backend for live DOF updates
-
-          setTempPoint(null);
-          setStartSnap(null); // Clear
-          console.log("Added sketch circle with constraints:", autoConstraints.length);
-        }
-      } else if (type === "move") {
-        if (tempPoint()) {
-          const center = tempPoint()!;
-          const dx = effectivePoint[0] - center[0];
-          const dy = effectivePoint[1] - center[1];
-          const radius = Math.sqrt(dx * dx + dy * dy);
-
-          const PREVIEW_ID = "preview_circle";
-          const previewEntity: SketchEntity = {
-            id: PREVIEW_ID,
-            geometry: {
-              Circle: {
-                center: center,
-                radius: radius
-              }
-            },
-            is_construction: constructionMode()
-          };
-
-          const entities = currentSketch().entities.filter(e => e.id !== PREVIEW_ID);
-          setCurrentSketch({ ...currentSketch(), entities: [...entities, previewEntity] });
-        }
-      }
     } else if (sketchTool() === "arc") {
-      if (type === "click") {
-        if (!tempPoint()) {
-          // Click 1: Set Center
-          setTempPoint(effectivePoint);
-          setStartSnap(snap);
-        } else if (!tempStartPoint()) {
-          // Click 2: Set Start Point (Radius + Start Angle)
-          setTempStartPoint(effectivePoint);
-        } else {
-          // Click 3: Set End Point (End Angle)
-          const center = tempPoint()!;
-          const start = tempStartPoint()!;
-
-          const radius = Math.sqrt(Math.pow(start[0] - center[0], 2) + Math.pow(start[1] - center[1], 2));
-          const startAngle = Math.atan2(start[1] - center[1], start[0] - center[0]);
-          let endAngle = Math.atan2(effectivePoint[1] - center[1], effectivePoint[0] - center[0]);
-
-          const newEntity: SketchEntity = {
-            id: crypto.randomUUID(),
-            geometry: {
-              Arc: {
-                center: center,
-                radius: radius,
-                start_angle: startAngle,
-                end_angle: endAngle
-              }
-            },
-            is_construction: constructionMode()
-          };
-
-          const updated = { ...currentSketch() };
-          updated.entities = updated.entities.filter(e => e.id !== "preview_arc");
-          updated.entities = [...updated.entities, newEntity];
-          updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
-
-          // Arc Creation:
-          // Click 1 (Center) -> startSnap (use saved var if I add it, or maybe I reuse startSnap logic)
-          // Click 2 (Start) -> tempStartPoint set? 
-          // Click 3 (End) -> effectivePoint
-          // Constraint Logic: 
-          // Center -> Coincident/Fix (from Click 1)
-          // Start -> Coincident (from Click 2)
-          // End -> Coincident (from Click 3)
-
-          // Current Arc tool state management is a bit complex.
-          // I need to ensure I captured snaps for Center and Start.
-          // Currently I only see `setTempPoint` and `setTempStartPoint`.
-          // I'll need to add a side-effect to store `centerSnap` and `startPtSnap`.
-          // For now, let's just use `applyAutoConstraints` with what we have. 
-          // If I didn't save snaps, I can't constrain. 
-          // I will update Arc tool state logic first/concurrently?
-          // Actually, I can assume I'll add `setStartSnap` for Center.
-          // For StartPoint, I need another state variable? `const [midSnap, setMidSnap]`?
-          // Or just reuse startSnap for center, and... wait.
-          // `startSnap` is usually for the first point of the operation.
-
-          // LIMITATION: `applyAutoConstraints` takes (start, end).
-          // Arc has Center, Start, End.
-          // I'll leave Arc strictly with Center constraint for now (using startSnap logic).
-
-          const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, startSnap(), null);
-          // If I want Start/End constraints, I'd need to track those snaps.
-
-          updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
-          updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
-
-          setCurrentSketch(updated);
-          sendSketchUpdate(updated); // Sync to backend for live DOF updates
-
-          setTempPoint(null);
-          setTempStartPoint(null);
-          setStartSnap(null);
-          console.log("Added sketch arc with constraints:", autoConstraints.length);
-        }
-      } else if (type === "move") {
-        if (tempPoint()) {
-          const center = tempPoint()!;
-          let radius = 1.0;
-          let startAngle = 0.0;
-          let endAngle = 0.0;
-
-          if (!tempStartPoint()) {
-            // Moving to determine start point
-            const dx = effectivePoint[0] - center[0];
-            const dy = effectivePoint[1] - center[1];
-            radius = Math.sqrt(dx * dx + dy * dy);
-            startAngle = Math.atan2(dy, dx);
-            endAngle = startAngle;
-          } else {
-            // Center and Start fixed, moving for End Angle
-            const start = tempStartPoint()!;
-            radius = Math.sqrt(Math.pow(start[0] - center[0], 2) + Math.pow(start[1] - center[1], 2));
-            startAngle = Math.atan2(start[1] - center[1], start[0] - center[0]);
-            endAngle = Math.atan2(effectivePoint[1] - center[1], effectivePoint[0] - center[0]);
-          }
-
-          const PREVIEW_ID = "preview_arc";
-          const previewEntity: SketchEntity = {
-            id: PREVIEW_ID,
-            geometry: {
-              Arc: {
-                center: center,
-                radius: radius,
-                start_angle: startAngle,
-                end_angle: endAngle
-              }
-            },
-            is_construction: constructionMode()
-          };
-
-          const entities = currentSketch().entities.filter(e => e.id !== PREVIEW_ID);
-          setCurrentSketch({ ...currentSketch(), entities: [...entities, previewEntity] });
-        }
-      }
     } else if (sketchTool() === "point") {
       // POINT TOOL - single click creates a point
       if (type === "click") {
@@ -2410,7 +1920,7 @@ export function useSketching(props: UseSketchingProps) {
         updated.history = [...(updated.history || []), { AddGeometry: { id: newEntity.id, geometry: newEntity.geometry } }];
 
         // Apply auto-constraints if snapped to something
-        const autoConstraints = applyAutoConstraintsDebug(updated, newEntity.id, snap, null);
+        const autoConstraints = applyAutoConstraints(updated, newEntity.id, snap, null);
         updated.constraints = [...(updated.constraints || []), ...autoConstraints.map(c => wrapConstraint(c))];
         updated.history = [...(updated.history || []), ...autoConstraints.map(c => ({ AddConstraint: { constraint: c } }))];
 
@@ -2421,112 +1931,6 @@ export function useSketching(props: UseSketchingProps) {
       }
       // No preview for point tool - it's instant
     } else if (sketchTool() === "rectangle") {
-      if (type === "click") {
-        if (!tempPoint()) {
-          setTempPoint(effectivePoint);
-          setStartSnap(snap);
-        } else {
-          const p1 = tempPoint()!;
-          const p2 = effectivePoint;
-
-          // Create 4 Lines
-          // V1(p1.x, p1.y) -> V2(p2.x, p1.y) -> V3(p2.x, p2.y) -> V4(p1.x, p2.y) -> V1
-
-          const v1 = [p1[0], p1[1]];
-          const v2 = [p2[0], p1[1]];
-          const v3 = [p2[0], p2[1]];
-          const v4 = [p1[0], p2[1]];
-
-          const l1_id = crypto.randomUUID();
-          const l2_id = crypto.randomUUID();
-          const l3_id = crypto.randomUUID();
-          const l4_id = crypto.randomUUID();
-
-          const l1: SketchEntity = { id: l1_id, geometry: { Line: { start: [v1[0], v1[1]], end: [v2[0], v2[1]] } }, is_construction: constructionMode() };
-          const l2: SketchEntity = { id: l2_id, geometry: { Line: { start: [v2[0], v2[1]], end: [v3[0], v3[1]] } }, is_construction: constructionMode() };
-          const l3: SketchEntity = { id: l3_id, geometry: { Line: { start: [v3[0], v3[1]], end: [v4[0], v4[1]] } }, is_construction: constructionMode() };
-          const l4: SketchEntity = { id: l4_id, geometry: { Line: { start: [v4[0], v4[1]], end: [v1[0], v1[1]] } }, is_construction: constructionMode() };
-
-          // Constraints
-          const constraints: any[] = [
-            // Horizontal/Vertical
-            { Horizontal: { entity: l1_id } },
-            { Vertical: { entity: l2_id } },
-            { Horizontal: { entity: l3_id } },
-            { Vertical: { entity: l4_id } },
-
-            // Coincident Corners
-            // L1.end -> L2.start
-            { Coincident: { points: [{ id: l1_id, index: 1 }, { id: l2_id, index: 0 }] } },
-            // L2.end -> L3.start
-            { Coincident: { points: [{ id: l2_id, index: 1 }, { id: l3_id, index: 0 }] } },
-            // L3.end -> L4.start
-            { Coincident: { points: [{ id: l3_id, index: 1 }, { id: l4_id, index: 0 }] } },
-            // L4.end -> L1.start
-            { Coincident: { points: [{ id: l4_id, index: 1 }, { id: l1_id, index: 0 }] } },
-          ];
-
-          const updated = { ...currentSketch() };
-
-          // Auto-Constraints for Rectangle
-          // Constrain P1 (L1 start) to startSnap
-          const constraintsArr: SketchConstraint[] = [...constraints];
-
-          if (startSnap() && startSnap()!.entity_id) {
-            const s = startSnap()!;
-            // Manually invoke logic or reuse helper?
-            // Helper expects 1 entity ID.
-            // We can check snap type manually.
-            const autoC = applyAutoConstraintsDebug(updated, l1_id, s, null);
-            constraintsArr.push(...autoC);
-          }
-
-          // Constrain P2 (L3 start, which is v3) to current snap
-          // Note: l3 starts at v3 (p2).
-          if (snap && snap.entity_id) {
-            const autoC = applyAutoConstraintsDebug(updated, l3_id, snap, null); // Treating snap as "start" of l3 for constraint purpose
-            constraintsArr.push(...autoC);
-          }
-
-          updated.entities = updated.entities.filter(e => !e.id.startsWith("preview_rect"));
-          updated.entities = [...updated.entities, l1, l2, l3, l4];
-          updated.history = [
-            ...(updated.history || []),
-            { AddGeometry: { id: l1.id, geometry: l1.geometry } },
-            { AddGeometry: { id: l2.id, geometry: l2.geometry } },
-            { AddGeometry: { id: l3.id, geometry: l3.geometry } },
-            { AddGeometry: { id: l4.id, geometry: l4.geometry } }
-          ];
-
-          updated.constraints = [...updated.constraints, ...constraintsArr.map(c => wrapConstraint(c))];
-          updated.history = [...updated.history, ...constraintsArr.map(c => ({ AddConstraint: { constraint: c } }))];
-
-          setCurrentSketch(updated);
-          sendSketchUpdate(updated); // Sync to backend for live DOF updates
-          setTempPoint(null);
-          setStartSnap(null); // Clear
-          console.log("Added sketch rectangle with constraints");
-        }
-      } else if (type === "move") {
-        if (tempPoint()) {
-          const p1 = tempPoint()!;
-          const p2 = effectivePoint;
-
-          const v1 = [p1[0], p1[1]];
-          const v2 = [p2[0], p1[1]];
-          const v3 = [p2[0], p2[1]];
-          const v4 = [p1[0], p2[1]];
-
-          // Preview Entities
-          const l1: SketchEntity = { id: "preview_rect_1", geometry: { Line: { start: [v1[0], v1[1]], end: [v2[0], v2[1]] } }, is_construction: constructionMode() };
-          const l2: SketchEntity = { id: "preview_rect_2", geometry: { Line: { start: [v2[0], v2[1]], end: [v3[0], v3[1]] } }, is_construction: constructionMode() };
-          const l3: SketchEntity = { id: "preview_rect_3", geometry: { Line: { start: [v3[0], v3[1]], end: [v4[0], v4[1]] } }, is_construction: constructionMode() };
-          const l4: SketchEntity = { id: "preview_rect_4", geometry: { Line: { start: [v4[0], v4[1]], end: [v1[0], v1[1]] } }, is_construction: constructionMode() };
-
-          const entities = currentSketch().entities.filter(e => !e.id.startsWith("preview_rect"));
-          setCurrentSketch({ ...currentSketch(), entities: [...entities, l1, l2, l3, l4] });
-        }
-      }
     } else if (sketchTool() === "mirror") {
       if (type === "click") {
         if (mirrorState().activeField === 'axis') {
@@ -3330,7 +2734,9 @@ export function useSketching(props: UseSketchingProps) {
 
 
     if (sketchTool() === "dimension") {
+      console.log("[Dimension Tool] Handler reached, type:", type);
       if (type === "click") {
+        console.log("[Dimension Tool] Click detected");
         const sketch = currentSketch();
 
         // Advanced Selection: Find generic candidates
@@ -3526,11 +2932,19 @@ export function useSketching(props: UseSketchingProps) {
           return; // Early return - placement done, don't try to select more
         }
 
+        console.log("[Dimension Tool] Hit found:", hit, "Current selection count:", dimensionSelection().length);
+
         if (hit) {
-          // If we hit a valid entity, we let the Viewport's onSelect handle the selection.
-          // This avoids a race condition where mousedown selects the entity here, 
-          // and then click (onSelect) sees it selected and toggles it off.
-          return;
+          // Add hit to dimension selection (accumulate up to 2 selections)
+          const current = dimensionSelection();
+          if (current.length < 2) {
+            console.log("[Dimension Tool] Adding hit to dimensionSelection");
+            setDimensionSelection([...current, hit]);
+            // Note: dimensionProposedAction will be computed in the move handler based on selection
+          } else {
+            console.log("[Dimension Tool] Already have 2 selections, ignoring hit");
+          }
+          return; // Selection added, don't fall through
         } else {
           // No hit - check if we are in placement mode
           if (dimensionPlacementMode()) {
@@ -3759,13 +3173,17 @@ export function useSketching(props: UseSketchingProps) {
           }
         }
       }
+      return; // Don't fall through to other tool handlers
     }
 
 
     // ===== MEASURE TOOL (Non-driving, temporary) =====
     // Similar to dimension tool but creates temporary measurements that don't affect constraints
+    console.log("[DEBUG Before Measure Handler] sketchTool():", sketchTool(), "type:", type);
     if (sketchTool() === "measure") {
+      console.log("[Measure Tool] Handler reached, type:", type);
       if (type === "click") {
+        console.log("[Measure Tool] Click detected");
         const sketch = currentSketch();
 
         // Find selection candidate at click position (reuse dimension logic)
@@ -3891,6 +3309,7 @@ export function useSketching(props: UseSketchingProps) {
           }
         }
       }
+      return; // Don't fall through to other tool handlers
     }
 
 
@@ -4206,7 +3625,7 @@ export function useSketching(props: UseSketchingProps) {
     setCurrentSketch(updated);
     sendSketchUpdate(updated);
 
-    setMirrorState({ axis: null, entities: [], activeField: 'axis' });
+    setMirrorState({ axis: null, entities: [], activeField: 'axis', previewGeometry: [] });
     setSketchTool("select");
   };
 
@@ -4442,65 +3861,7 @@ export function useSketching(props: UseSketchingProps) {
       };
     }
   });
-
-  return {
-    sketchMode, setSketchMode,
-    activeSketchId, setActiveSketchId,
-    sketchTool, setSketchTool,
-    sketchSelection, setSketchSelection,
-    constraintSelection, setConstraintSelection,
-    currentSketch, setCurrentSketch,
-    originalSketch, setOriginalSketch,
-    sketchSetupMode, setSketchSetupMode,
-    pendingSketchId, setPendingSketchId,
-    constructionMode, setConstructionMode,
-    cameraAlignPlane, setCameraAlignPlane,
-    // Helper states for tools
-    offsetState, setOffsetState,
-    mirrorState, setMirrorState,
-    linearPatternState, setLinearPatternState,
-    circularPatternState, setCircularPatternState,
-    patternPreview,
-    // Handlers
-    handleSketchInput,
-    handleSketchFinish,
-    handleCancelSketch,
-    handlePlaneSelected,
-    handleStartSketch,
-    handleSelect,
-    // Snap/Dimension
-    snapConfig, setSnapConfig,
-    activeSnap, setActiveSnap,
-    editingDimension, setEditingDimension,
-    dimensionSelection, setDimensionSelection,
-    dimensionPlacementMode, setDimensionPlacementMode,
-    dimensionProposedAction, setDimensionProposedAction,
-    setDimensionMousePosition,
-    handleDimensionFinish,
-    handleDimensionCancel,
-    handleDimensionDrag,
-    // Measurement Tool (non-driving, temporary)
-    measurementSelection, setMeasurementSelection,
-    measurementPending, setMeasurementPending,
-    activeMeasurements, setActiveMeasurements,
-    handleMeasurementCancel,
-    handleMeasurementClearPending,
-    // Modal Actions
-    confirmOffset,
-    cancelOffset,
-    setOffsetDist,
-    setOffsetFlip,
-    confirmMirror,
-    confirmLinearPattern,
-    confirmCircularPattern,
-    // Autostart
-    autostartNextSketch, setAutostartNextSketch,
-    sendSketchUpdate,
-    // Constraint Inference Previews
-    inferredConstraints,
-    setInferenceSuppress
-  };
-  // Offset Logic New
+  // Offset Geometry Calculation (for offset tool preview and confirmation)
   function calculateOffsetGeometry(
     sketch: Sketch,
     selection: string[],
@@ -4585,9 +3946,67 @@ export function useSketching(props: UseSketchingProps) {
     }
 
     return { entities: newEntities, constraints: newConstraints };
+  }
+
+
+  return {
+    sketchMode, setSketchMode,
+    activeSketchId, setActiveSketchId,
+    sketchTool, setSketchTool,
+    sketchSelection, setSketchSelection,
+    constraintSelection, setConstraintSelection,
+    currentSketch, setCurrentSketch,
+    originalSketch, setOriginalSketch,
+    sketchSetupMode, setSketchSetupMode,
+    pendingSketchId, setPendingSketchId,
+    constructionMode, setConstructionMode,
+    cameraAlignPlane, setCameraAlignPlane,
+    // Helper states for tools
+    offsetState, setOffsetState,
+    mirrorState, setMirrorState,
+    linearPatternState, setLinearPatternState,
+    circularPatternState, setCircularPatternState,
+    patternPreview,
+    // Handlers
+    handleSketchInput,
+    handleSketchFinish,
+    handleCancelSketch,
+    handlePlaneSelected,
+    handleStartSketch,
+    handleSelect,
+    // Snap/Dimension
+    snapConfig, setSnapConfig,
+    activeSnap, setActiveSnap,
+    editingDimension, setEditingDimension,
+    dimensionSelection, setDimensionSelection,
+    dimensionPlacementMode, setDimensionPlacementMode,
+    dimensionProposedAction, setDimensionProposedAction,
+    setDimensionMousePosition,
+    handleDimensionFinish,
+    handleDimensionCancel,
+    handleDimensionDrag,
+    // Measurement Tool (non-driving, temporary)
+    measurementSelection, setMeasurementSelection,
+    measurementPending, setMeasurementPending,
+    activeMeasurements, setActiveMeasurements,
+    handleMeasurementCancel,
+    handleMeasurementClearPending,
+    // Modal Actions
+    confirmOffset,
+    cancelOffset,
+    setOffsetDist,
+    setOffsetFlip,
+    confirmMirror,
+    confirmLinearPattern,
+    confirmCircularPattern,
+    // Autostart
+    autostartNextSketch, setAutostartNextSketch,
+    sendSketchUpdate,
+    // Constraint Inference Previews
+    inferredConstraints,
+    setInferenceSuppress
   };
-
-
 
 };
 
+// Force update

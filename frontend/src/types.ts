@@ -320,3 +320,24 @@ export function getMeasurementValue(result: MeasurementResult): { type: string; 
     if ('Circumference' in result) return { type: 'circumference', value: result.Circumference.value };
     return null;
 }
+
+// ===== WebSocket Command Protocol =====
+
+export type WebSocketCommand =
+    | { command: "Regen" }
+    | { command: "Select", payload: { id: string, modifier?: string } }
+    | { command: "SetFilter", payload: { filter: string } }
+    | { command: "ClearSelection" }
+    | { command: "CreateFeature", payload: { type: string, name: string, dependencies?: string[] } }
+    | { command: "UpdateFeature", payload: { id: string, params: Record<string, any> } }
+    | { command: "DeleteFeature", payload: { id: string } }
+    | { command: "VariableAdd", payload: { name: string, expression: string, unit?: VariableUnit, description?: string } }
+    | { command: "VariableUpdate", payload: { id: string, name?: string, expression?: string, unit?: VariableUnit, description?: string } }
+    | { command: "VariableDelete", payload: { id: string } }
+    | { command: "VariableReorder", payload: { id: string, new_index: number } }
+    | { command: "GetRegions", payload: { id: string } }
+    | { command: "SelectionGroupCreate", payload: { name: string } }
+    | { command: "SelectionGroupRestore", payload: { name: string } }
+    | { command: "SelectionGroupDelete", payload: { name: string } }
+    | { command: "SelectionGroupsList" }
+    | { command: "ToggleSuppression", payload: { id: string } };

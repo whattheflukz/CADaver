@@ -50,8 +50,6 @@ pub struct EvaluationResult {
 }
 
 /// The MicroCAD Runtime environment.
-/// In a real scenario, this would wrap the WASM or native binding.
-/// For now, it mocks the execution of the AST.
 pub struct Runtime {
     // Placeholder for memory/state
 }
@@ -130,8 +128,6 @@ impl Runtime {
                 logs.push(format!("Created cube with ID {}", id));
                 
                 let ctx = NamingContext::new(id);
-                // "FaceTop" is just an example seed.
-                // In a real kernel, we'd iterate faces.
                 let face_id = ctx.derive("FaceTop", TopoRank::Face);
 
                 // Register the analytic geometry
