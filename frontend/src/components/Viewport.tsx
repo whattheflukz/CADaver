@@ -37,6 +37,8 @@ interface ViewportProps {
     onRegionClick?: (point2d: [number, number]) => void;
     // Callback for dimension mouse position (Onshape-style dynamic dimension mode)
     onDimensionMouseMove?: (point2d: [number, number]) => void;
+    // Active measurements (temporary, non-driving)
+    activeMeasurements?: any[];
 }
 
 
@@ -609,6 +611,10 @@ const Viewport: Component<ViewportProps> = (props) => {
             sketchRenderer.update(props.clientSketch, props.selection || [], props.solveResult);
             const res = (window as any).viewportLineResolution || new THREE.Vector2(window.innerWidth, window.innerHeight);
             dimensionRenderer.update(props.clientSketch, res);
+            // Render temporary measurements (non-driving)
+            if (props.activeMeasurements && props.activeMeasurements.length > 0) {
+                dimensionRenderer.renderMeasurements(props.clientSketch, props.activeMeasurements);
+            }
             snapMarkers.update(props.activeSnap || null, props.clientSketch);
 
             // Hide main mesh when in sketch mode? 

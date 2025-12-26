@@ -132,7 +132,11 @@ const App: Component = () => {
     handleSelect: handleSketchSelect,
     autostartNextSketch, setAutostartNextSketch,
     cameraAlignPlane,
-    sendSketchUpdate
+    sendSketchUpdate,
+    // Measurement tool exports
+    activeMeasurements,
+    measurementSelection,
+    measurementPending
   } = sketchHook;
 
   // Bridge handleSelect - hook handles both sketch and feature selection via its logic
@@ -488,6 +492,7 @@ const App: Component = () => {
                 ? setDimensionMousePosition
                 : undefined
             }
+            activeMeasurements={sketchMode() ? activeMeasurements() : undefined}
           />
 
 

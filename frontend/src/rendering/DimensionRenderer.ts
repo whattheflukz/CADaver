@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LineMaterial, LineSegmentsGeometry, LineSegments2 } from 'three-stdlib';
-import type { Sketch } from '../types';
+import type { Sketch, ActiveMeasurement } from '../types';
+import { getMeasurementValue } from '../types';
 import {
     sketchToWorld,
     getConstraintPointPosition,
@@ -406,4 +407,93 @@ export class DimensionRenderer {
     public getGroup() {
         return this.group;
     }
+
+    /**
+     * Render temporary, non-driving measurements
+     * These have distinct visual styling (magenta/purple) to differentiate from constraints
+     */
+    public renderMeasurements(sketch: Sketch | null, measurements: ActiveMeasurement[]) {
+        if (!sketch || !measurements || measurements.length === 0) return;
+
+        // Measurement color (magenta/purple to differentiate from cyan dimensions)
+        const MEASURE_COLOR = 0xff00ff;
+        const MEASURE_COLOR_STR = '#ff00ff';
+
+        measurements.forEach((measurement, index) => {
+            if (!measurement.result) return;
+
+            const result = measurement.result;
+            const displayPos = measurement.displayPosition || [0, 0];
+
+            try {
+                // Render based on measurement type
+                if ('Distance' in result && result.Distance) {
+                    // Get entity positions
+                    const p1 = getConstraintPointPosition(sketch, { id: measurement.entity1Id, index: measurement.point1Index });
+                    const p2 = getConstraintPointPosition(sketch, { id: measurement.entity2Id, index: measurement.point2Index });
+
+                    if (p1 && p2) {
+                        // Draw measurement line
+                        this.createMeasurementLine(sketch, p1, p2, MEASURE_COLOR);
+
+                        // Draw text at display position
+                        const valueObj = getMeasurementValue(result);
+                        if (valueObj !== null) {
+                            const pos = sketchToWorld(displayPos[0], displayPos[1], sketch.plane);
+                            const sprite = createTextSprite(`📏 ${valueObj.value.toFixed(2)}`, MEASURE_COLOR_STR, 0.035);
+                            sprite.position.copy(pos);
+                            this.group.add(sprite);
+                        }
+                    }
+                } else if ('Angle' in result && result.Angle) {
+                    // Angle measurement
+                    const valueObj = getMeasurementValue(result);
+                    if (valueObj !== null) {
+                        const degrees = (valueObj.value * 180 / Math.PI).toFixed(1);
+                        const pos = sketchToWorld(displayPos[0], displayPos[1], sketch.plane);
+                        const sprite = createTextSprite(`📐 ${degrees}°`, MEASURE_COLOR_STR, 0.035);
+                        sprite.position.copy(pos);
+                        this.group.add(sprite);
+                    }
+                } else if ('Radius' in result && result.Radius) {
+                    // Radius measurement  
+                    const valueObj = getMeasurementValue(result);
+                    if (valueObj !== null) {
+                        const pos = sketchToWorld(displayPos[0], displayPos[1], sketch.plane);
+                        const sprite = createTextSprite(`⭕ R${valueObj.value.toFixed(2)}`, MEASURE_COLOR_STR, 0.035);
+                        sprite.position.copy(pos);
+                        this.group.add(sprite);
+                    }
+                }
+            } catch (e) {
+                console.error('[DimensionRenderer] Error rendering measurement:', index, measurement, e);
+            }
+        });
+    }
+
+    /**
+     * Create a measurement line with distinct styling (thicker, magenta)
+     */
+    private createMeasurementLine(sketch: Sketch, start: [number, number], end: [number, number], color: number) {
+        const v1 = sketchToWorld(start[0], start[1], sketch.plane);
+        const v2 = sketchToWorld(end[0], end[1], sketch.plane);
+
+        const geo = new LineSegmentsGeometry();
+        geo.setPositions([v1.x, v1.y, v1.z, v2.x, v2.y, v2.z]);
+
+        // Use thicker line and magenta color for measurements
+        const mat = new LineMaterial({
+            color,
+            linewidth: 3,
+            resolution: this.resolution,
+            depthTest: false,
+            dashed: true,
+            dashSize: 0.1,
+            gapSize: 0.05
+        });
+        const line = new LineSegments2(geo, mat);
+        line.computeLineDistances();
+        this.group.add(line);
+    }
 }
+

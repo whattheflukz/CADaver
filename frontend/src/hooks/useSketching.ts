@@ -1,5 +1,5 @@
 import { createSignal, createEffect, createMemo, onCleanup, untrack, type Accessor } from 'solid-js';
-import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState } from '../types';
+import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState, type ActiveMeasurement, type MeasurementResult } from '../types';
 import { applySnapping, applyAngularSnapping } from '../snapUtils';
 import { ToolRegistry } from '../tools/ToolRegistry';
 
@@ -127,6 +127,12 @@ export function useSketching(props: UseSketchingProps) {
   const [dimensionPlacementMode, setDimensionPlacementMode] = createSignal(false);
   // Mouse position for dynamic dimension mode switching (Onshape-style)
   const [dimensionMousePosition, setDimensionMousePosition] = createSignal<[number, number] | null>(null);
+
+  // ===== MEASUREMENT TOOL STATE =====
+  // Measurement tool works similar to dimension but creates temporary, non-driving measurements
+  const [measurementSelection, setMeasurementSelection] = createSignal<SelectionCandidate[]>([]);
+  const [activeMeasurements, setActiveMeasurements] = createSignal<ActiveMeasurement[]>([]);
+  const [measurementPending, setMeasurementPending] = createSignal<SelectionCandidate | null>(null);
 
   // Sketch Solver Status (DOF indicator)
   // Sketch Solver Status (DOF indicator) managed by hook
@@ -496,23 +502,32 @@ export function useSketching(props: UseSketchingProps) {
       handleDimensionCancel();
       return;
     }
+    // 4. Clear Measurement Selection (NEW)
+    if (measurementSelection().length > 0 || measurementPending()) {
+      handleMeasurementClearPending();
+      return;
+    }
 
-    // 4. Reset Tool to Select
+    // 5. Reset Tool to Select
     if (sketchTool() !== "select") {
       setSketchTool("select");
       setTempPoint(null);
       setTempStartPoint(null);
       setStartSnap(null);
+      // Also clear any active measurements when leaving measure tool
+      if (activeMeasurements().length > 0) {
+        setActiveMeasurements([]);
+      }
       return;
     }
 
-    // 5. Clear Sketch Selection
+    // 6. Clear Sketch Selection
     if (sketchSelection().length > 0) {
       setSketchSelection([]);
       return;
     }
 
-    // 6. Clear Backend Selection
+    // 7. Clear Backend Selection
     if (selection().length > 0) {
       handleSelect(null); // Sends SELECT:CLEAR
       return;
@@ -1192,8 +1207,164 @@ export function useSketching(props: UseSketchingProps) {
     setSketchTool("select");
   };
 
+  // ===== MEASUREMENT TOOL HELPERS =====
+
+  /** Calculate measurement value between two points */
+  const calculatePointPointDistance = (p1: [number, number], p2: [number, number]): number => {
+    const dx = p2[0] - p1[0];
+    const dy = p2[1] - p1[1];
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  /** Calculate perpendicular distance from point to line */
+  const calculatePointLineDistance = (point: [number, number], lineStart: [number, number], lineEnd: [number, number]): number => {
+    const dx = lineEnd[0] - lineStart[0];
+    const dy = lineEnd[1] - lineStart[1];
+    const lineLenSq = dx * dx + dy * dy;
+
+    if (lineLenSq < 1e-15) {
+      return calculatePointPointDistance(point, lineStart);
+    }
+
+    const cross = (point[0] - lineStart[0]) * dy - (point[1] - lineStart[1]) * dx;
+    return Math.abs(cross) / Math.sqrt(lineLenSq);
+  };
+
+  /** Calculate angle between two lines (in radians) */
+  const calculateLineLineAngle = (l1Start: [number, number], l1End: [number, number], l2Start: [number, number], l2End: [number, number]): number => {
+    const d1x = l1End[0] - l1Start[0];
+    const d1y = l1End[1] - l1Start[1];
+    const d2x = l2End[0] - l2Start[0];
+    const d2y = l2End[1] - l2Start[1];
+
+    const len1 = Math.sqrt(d1x * d1x + d1y * d1y);
+    const len2 = Math.sqrt(d2x * d2x + d2y * d2y);
+
+    if (len1 < 1e-10 || len2 < 1e-10) return 0;
+
+    const u1x = d1x / len1, u1y = d1y / len1;
+    const u2x = d2x / len2, u2y = d2y / len2;
+
+    const dot = u1x * u2x + u1y * u2y;
+    return Math.acos(Math.max(-1, Math.min(1, dot)));
+  };
+
+  /** Perform measurement between two selection candidates and create ActiveMeasurement */
+  const calculateMeasurement = (c1: SelectionCandidate, c2: SelectionCandidate): ActiveMeasurement | null => {
+    const sketch = currentSketch();
+
+    // Get entity data for each candidate
+    const getEntityInfo = (c: SelectionCandidate): { type: 'point' | 'line' | 'circle' | 'arc', pos?: [number, number], entity?: SketchEntity } | null => {
+      if (c.type === 'origin') {
+        return { type: 'point', pos: [0, 0] };
+      }
+      if (c.type === 'point' && c.position) {
+        return { type: 'point', pos: c.position };
+      }
+      const entity = sketch.entities.find(e => e.id === c.id);
+      if (!entity) return null;
+
+      if (entity.geometry.Line) {
+        if (c.type === 'point' && c.index !== undefined) {
+          const pos = c.index === 0 ? entity.geometry.Line.start : entity.geometry.Line.end;
+          return { type: 'point', pos, entity };
+        }
+        return { type: 'line', entity };
+      }
+      if (entity.geometry.Circle) {
+        if (c.type === 'point') {
+          return { type: 'point', pos: entity.geometry.Circle.center, entity };
+        }
+        return { type: 'circle', entity };
+      }
+      if (entity.geometry.Arc) {
+        if (c.type === 'point') {
+          return { type: 'point', pos: entity.geometry.Arc.center, entity };
+        }
+        return { type: 'arc', entity };
+      }
+      if (entity.geometry.Point) {
+        return { type: 'point', pos: entity.geometry.Point.pos, entity };
+      }
+      return null;
+    };
+
+    const info1 = getEntityInfo(c1);
+    const info2 = getEntityInfo(c2);
+    if (!info1 || !info2) return null;
+
+    let result: MeasurementResult;
+    let displayPosition: [number, number] = [0, 0];
+
+    // Point to Point
+    if (info1.type === 'point' && info2.type === 'point' && info1.pos && info2.pos) {
+      const distance = calculatePointPointDistance(info1.pos, info2.pos);
+      result = { Distance: { value: distance } };
+      displayPosition = [(info1.pos[0] + info2.pos[0]) / 2, (info1.pos[1] + info2.pos[1]) / 2];
+    }
+    // Point to Line
+    else if (info1.type === 'point' && info2.type === 'line' && info1.pos && info2.entity?.geometry.Line) {
+      const { start, end } = info2.entity.geometry.Line;
+      const distance = calculatePointLineDistance(info1.pos, start, end);
+      result = { Distance: { value: distance } };
+      displayPosition = info1.pos;
+    }
+    // Line to Point
+    else if (info1.type === 'line' && info2.type === 'point' && info2.pos && info1.entity?.geometry.Line) {
+      const { start, end } = info1.entity.geometry.Line;
+      const distance = calculatePointLineDistance(info2.pos, start, end);
+      result = { Distance: { value: distance } };
+      displayPosition = info2.pos;
+    }
+    // Line to Line (angle)
+    else if (info1.type === 'line' && info2.type === 'line' && info1.entity?.geometry.Line && info2.entity?.geometry.Line) {
+      const l1 = info1.entity.geometry.Line;
+      const l2 = info2.entity.geometry.Line;
+      const angle = calculateLineLineAngle(l1.start, l1.end, l2.start, l2.end);
+      result = { Angle: { value: angle } };
+      // Display at midpoint between line midpoints
+      const mid1: [number, number] = [(l1.start[0] + l1.end[0]) / 2, (l1.start[1] + l1.end[1]) / 2];
+      const mid2: [number, number] = [(l2.start[0] + l2.end[0]) / 2, (l2.start[1] + l2.end[1]) / 2];
+      displayPosition = [(mid1[0] + mid2[0]) / 2, (mid1[1] + mid2[1]) / 2];
+    }
+    // Circle/Arc radius (same entity selected twice)
+    else if (c1.id === c2.id && (info1.type === 'circle' || info1.type === 'arc')) {
+      const radius = info1.entity?.geometry.Circle?.radius || info1.entity?.geometry.Arc?.radius || 0;
+      result = { Radius: { value: radius } };
+      const center = info1.entity?.geometry.Circle?.center || info1.entity?.geometry.Arc?.center || [0, 0];
+      displayPosition = [center[0] + radius * 0.7, center[1] + radius * 0.7];
+    }
+    else {
+      result = { Error: { message: 'Cannot measure between these entities' } };
+    }
+
+    return {
+      entity1Id: c1.id,
+      point1Index: c1.index || 0,
+      entity2Id: c2.id,
+      point2Index: c2.index || 0,
+      result,
+      displayPosition
+    };
+  };
+
+  /** Clear active measurements and reset state */
+  const handleMeasurementCancel = () => {
+    setMeasurementSelection([]);
+    setMeasurementPending(null);
+    setActiveMeasurements([]);
+    setSketchTool("select");
+  };
+
+  /** Clear just the pending selection (escape during multi-step) */
+  const handleMeasurementClearPending = () => {
+    setMeasurementSelection([]);
+    setMeasurementPending(null);
+  };
+
   const [tempPoint, setTempPoint] = createSignal<[number, number] | null>(null);
   const [tempStartPoint, setTempStartPoint] = createSignal<[number, number] | null>(null);
+
 
   const handleSketchInput = (type: "click" | "move" | "dblclick" | "up", point: [number, number, number], event?: MouseEvent) => {
     if (!sketchMode()) return;
@@ -3540,6 +3711,138 @@ export function useSketching(props: UseSketchingProps) {
     }
 
 
+    // ===== MEASURE TOOL (Non-driving, temporary) =====
+    // Similar to dimension tool but creates temporary measurements that don't affect constraints
+    if (sketchTool() === "measure") {
+      if (type === "click") {
+        const sketch = currentSketch();
+
+        // Find selection candidate at click position (reuse dimension logic)
+        const findMeasureCandidate = (px: number, py: number): SelectionCandidate | null => {
+          let best: SelectionCandidate | null = null;
+          let minD = Infinity;
+          const threshold = 0.5;
+
+          // Check Origin
+          const dOrigin = Math.sqrt(px * px + py * py);
+          if (dOrigin < threshold && dOrigin < minD) {
+            minD = dOrigin;
+            best = { id: "00000000-0000-0000-0000-000000000000", type: "origin", position: [0, 0] };
+          }
+
+          // Check Points (Endpoints, Centers)
+          for (const e of sketch.entities) {
+            if (e.id.startsWith("preview")) continue;
+
+            if (e.geometry.Line) {
+              const { start, end } = e.geometry.Line;
+              const dStart = Math.sqrt((px - start[0]) ** 2 + (py - start[1]) ** 2);
+              const dEnd = Math.sqrt((px - end[0]) ** 2 + (py - end[1]) ** 2);
+              const ptThreshold = 0.25;
+
+              if (dStart < ptThreshold && dStart < minD) {
+                minD = dStart;
+                best = { id: e.id, type: "point", index: 0, position: start };
+              }
+              if (dEnd < ptThreshold && dEnd < minD) {
+                minD = dEnd;
+                best = { id: e.id, type: "point", index: 1, position: end };
+              }
+            } else if (e.geometry.Circle) {
+              const { center } = e.geometry.Circle;
+              const dCenter = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
+              if (dCenter < threshold && dCenter < minD) {
+                minD = dCenter;
+                best = { id: e.id, type: "point", index: 0, position: center };
+              }
+            } else if (e.geometry.Arc) {
+              const { center } = e.geometry.Arc;
+              const dCenter = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
+              if (dCenter < threshold && dCenter < minD) {
+                minD = dCenter;
+                best = { id: e.id, type: "point", index: 0, position: center };
+              }
+            } else if (e.geometry.Point) {
+              const { pos } = e.geometry.Point;
+              const d = Math.sqrt((px - pos[0]) ** 2 + (py - pos[1]) ** 2);
+              if (d < threshold && d < minD) {
+                minD = d;
+                best = { id: e.id, type: "point", index: 0, position: pos };
+              }
+            }
+          }
+
+          if (best && minD < 0.15) return best;
+
+          // Check Bodies (lines, circles, arcs)
+          for (const e of sketch.entities) {
+            if (e.id.startsWith("preview")) continue;
+            let d = Infinity;
+
+            if (e.geometry.Line) {
+              const { start, end } = e.geometry.Line;
+              const l2 = (end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2;
+              if (l2 === 0) d = Math.sqrt((px - start[0]) ** 2 + (py - start[1]) ** 2);
+              else {
+                let t = ((px - start[0]) * (end[0] - start[0]) + (py - start[1]) * (end[1] - start[1])) / l2;
+                t = Math.max(0, Math.min(1, t));
+                d = Math.sqrt((px - (start[0] + t * (end[0] - start[0]))) ** 2 + (py - (start[1] + t * (end[1] - start[1]))) ** 2);
+              }
+            } else if (e.geometry.Circle) {
+              const { center, radius } = e.geometry.Circle;
+              const distCenter = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
+              d = Math.abs(distCenter - radius);
+            } else if (e.geometry.Arc) {
+              const { center, radius } = e.geometry.Arc;
+              const distCenter = Math.sqrt((px - center[0]) ** 2 + (py - center[1]) ** 2);
+              d = Math.abs(distCenter - radius);
+            }
+
+            if (d < 0.5 && d < minD) {
+              minD = d;
+              best = { id: e.id, type: "entity" };
+            }
+          }
+
+          return best;
+        };
+
+        const hit = findMeasureCandidate(effectivePoint[0], effectivePoint[1]);
+
+        if (hit) {
+          const pending = measurementPending();
+
+          if (!pending) {
+            // First selection - store and wait for second
+            setMeasurementPending(hit);
+            setMeasurementSelection([hit]);
+            console.log("[Measure] First selection:", hit.id, hit.type);
+          } else {
+            // Second selection - calculate measurement and display
+            const measurement = calculateMeasurement(pending, hit);
+
+            if (measurement && measurement.result && !('Error' in measurement.result)) {
+              // Add to active measurements list
+              setActiveMeasurements(prev => [...prev, measurement]);
+              console.log("[Measure] Created measurement:", measurement);
+            }
+
+            // Reset pending state for next measurement
+            setMeasurementPending(null);
+            setMeasurementSelection([]);
+          }
+        } else {
+          // Clicked on empty space - clear pending if any
+          if (measurementPending()) {
+            setMeasurementPending(null);
+            setMeasurementSelection([]);
+            console.log("[Measure] Cleared pending selection");
+          }
+        }
+      }
+    }
+
+
     // ===== TRIM TOOL =====
     if (sketchTool() === "trim") {
       if (type === "click") {
@@ -4039,6 +4342,40 @@ export function useSketching(props: UseSketchingProps) {
     }
   });
 
+  // === SYNC SKETCH SELECTION TO MEASURE TOOL ===
+  createEffect(() => {
+    const tool = sketchTool();
+    if (tool === "measure") {
+      // When entering measure mode, adopt existing sketch selection
+      const currentSketchSel = sketchSelection();
+      const currentMeasureSel = untrack(() => measurementSelection());
+      const currentPending = untrack(() => measurementPending());
+
+      // Only adopt if no measurement work in progress
+      if (currentMeasureSel.length === 0 && !currentPending && currentSketchSel.length > 0) {
+        const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
+
+        if (valid.length >= 2) {
+          // Two or more entities selected - automatically create measurement
+          const measurement = calculateMeasurement(valid[0], valid[1]);
+          if (measurement && measurement.result && !('Error' in measurement.result)) {
+            setActiveMeasurements(prev => [...prev, measurement]);
+            console.log("[Measure] Auto-created measurement from selection:", measurement);
+          }
+          // Clear sketch selection after adopting
+          setSketchSelection([]);
+        } else if (valid.length === 1) {
+          // Single entity - set as pending for next click
+          setMeasurementPending(valid[0]);
+          setMeasurementSelection([valid[0]]);
+          console.log("[Measure] Adopted single selection as pending:", valid[0]);
+          // Clear sketch selection after adopting
+          setSketchSelection([]);
+        }
+      }
+    }
+  });
+
   // Expose state for E2E testing
   createEffect(() => {
     if (typeof window !== 'undefined') {
@@ -4091,6 +4428,12 @@ export function useSketching(props: UseSketchingProps) {
     handleDimensionFinish,
     handleDimensionCancel,
     handleDimensionDrag,
+    // Measurement Tool (non-driving, temporary)
+    measurementSelection, setMeasurementSelection,
+    measurementPending, setMeasurementPending,
+    activeMeasurements, setActiveMeasurements,
+    handleMeasurementCancel,
+    handleMeasurementClearPending,
     // Modal Actions
     confirmOffset,
     cancelOffset,
