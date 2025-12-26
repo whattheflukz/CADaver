@@ -20,6 +20,7 @@ import CommandPalette from './components/CommandPalette';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import VariablesPanel from './components/VariablesPanel';
 import NamedSelectionsPanel from './components/NamedSelectionsPanel';
+import ErrorToast from './components/ErrorToast';
 import SelectionPanel from './components/SelectionPanel';
 import SketchSelectionPanel from './components/SketchSelectionPanel';
 import ExpressionInput from './components/ExpressionInput';
@@ -74,6 +75,8 @@ const App: Component = () => {
     setGraph,
     backendRegions,
     selectionGroups,
+    kernelErrors,
+    dismissError,
   } = useMicrocadConnection({
     autostartNextSketch: () => false, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
@@ -120,6 +123,7 @@ const App: Component = () => {
     dimensionSelection, setDimensionSelection,
     dimensionPlacementMode, setDimensionPlacementMode,
     dimensionProposedAction, setDimensionProposedAction,
+    setDimensionMousePosition,
     handleDimensionFinish,
     handleDimensionCancel,
     handleDimensionDrag,
@@ -459,6 +463,13 @@ const App: Component = () => {
                 ? setRegionClickPoint
                 : undefined
             }
+            onDimensionMouseMove={
+              // Track mouse position for dynamic dimension mode (horizontal/vertical/aligned)
+              // Enable as soon as dimension tool is active, not just in placement mode
+              sketchMode() && sketchTool() === "dimension"
+                ? setDimensionMousePosition
+                : undefined
+            }
           />
 
 
@@ -763,6 +774,13 @@ const App: Component = () => {
               setSketchSelection([]);
             }
           }}
+        />
+
+        {/* Kernel Error Toasts */}
+        <ErrorToast
+          errors={kernelErrors}
+          onDismiss={dismissError}
+          autoDismissMs={5000}
         />
       </main >
     </div >

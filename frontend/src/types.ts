@@ -259,3 +259,27 @@ export interface ShortcutConfig {
     /** Custom bindings: commandId -> shortcut */
     bindings: Record<string, string>;
 }
+
+// ===== Kernel Error Types =====
+
+/** Error codes for kernel errors */
+export type KernelErrorCode =
+    | 'REGEN_FAILED'
+    | 'FEATURE_ERROR'
+    | 'CONSTRAINT_ERROR'
+    | 'PARSE_ERROR'
+    | 'UNKNOWN';
+
+/** Kernel error from backend that should be shown to user */
+export interface KernelError {
+    /** Error category code */
+    code: KernelErrorCode;
+    /** Human-readable error message */
+    message: string;
+    /** Severity level for styling */
+    severity: 'error' | 'warning';
+    /** Optional context (e.g., which feature failed) */
+    context?: Record<string, string>;
+    /** Timestamp when error occurred */
+    timestamp: number;
+}

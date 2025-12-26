@@ -1,5 +1,5 @@
 import { createSignal, onMount, onCleanup, type Accessor } from 'solid-js';
-import { type FeatureGraphState, type Tessellation, type SolveResult, type Sketch } from '../types';
+import { type FeatureGraphState, type Tessellation, type SolveResult, type Sketch, type KernelError } from '../types';
 
 export interface SelectionGroup {
     name: string;
@@ -22,6 +22,8 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
     const [solveResult, setSolveResult] = createSignal<SolveResult | null>(null);
     const [backendRegions, setBackendRegions] = createSignal<any[] | null>(null);
     const [selectionGroups, setSelectionGroups] = createSignal<SelectionGroup[]>([]);
+    const [kernelErrors, setKernelErrors] = createSignal<KernelError[]>([]);
+    const MAX_ERRORS = 5; // Keep only this many recent errors
 
     // We can track selectedFeature here or just let App handle it via effect on graph?
     // The original code set selectedFeature logic inside onmessage.
@@ -154,6 +156,23 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
                     } catch (e) {
                         console.error("Failed to parse selection groups update", e);
                     }
+                } else if (msg.startsWith("ERROR_UPDATE:")) {
+                    try {
+                        const json = msg.substring("ERROR_UPDATE:".length);
+                        const data = JSON.parse(json);
+                        const error: KernelError = {
+                            code: data.code || 'UNKNOWN',
+                            message: data.message || 'Unknown error',
+                            severity: data.severity || 'error',
+                            context: data.context,
+                            timestamp: Date.now()
+                        };
+                        console.error("Kernel error:", error);
+                        // Add to errors list, keeping only MAX_ERRORS most recent
+                        setKernelErrors(prev => [...prev, error].slice(-MAX_ERRORS));
+                    } catch (e) {
+                        console.error("Failed to parse error update", e);
+                    }
                 } else {
                     console.log("Msg:", msg);
                 }
@@ -180,6 +199,12 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         }
     };
 
+    // Error management functions
+    const clearErrors = () => setKernelErrors([]);
+    const dismissError = (timestamp: number) => {
+        setKernelErrors(prev => prev.filter(e => e.timestamp !== timestamp));
+    };
+
     return {
         status,
         graph,
@@ -194,6 +219,9 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         setSelection, // App handleSelect clears selection locally? Yes.
         backendRegions,
         setBackendRegions,
-        selectionGroups
+        selectionGroups,
+        kernelErrors,
+        clearErrors,
+        dismissError
     };
 }

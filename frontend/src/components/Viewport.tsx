@@ -28,6 +28,8 @@ interface ViewportProps {
     previewGeometry?: SketchEntity[];
     // Callback for region click (extrude mode profile selection)
     onRegionClick?: (point2d: [number, number]) => void;
+    // Callback for dimension mouse position (Onshape-style dynamic dimension mode)
+    onDimensionMouseMove?: (point2d: [number, number]) => void;
 }
 
 
@@ -1565,6 +1567,148 @@ const Viewport: Component<ViewportProps> = (props) => {
                             };
                             indicatorGroup.add(hitboxLine);
                         }
+                    } else if (constraint.HorizontalDistance && constraint.HorizontalDistance.style) {
+                        // Horizontal Distance dimension with visual annotation 
+                        const cp1 = constraint.HorizontalDistance.points[0];
+                        const cp2 = constraint.HorizontalDistance.points[1];
+                        const p1 = getPointPos(cp1);
+                        const p2 = getPointPos(cp2);
+
+                        if (p1 && p2) {
+                            const dimStyle = constraint.HorizontalDistance.style;
+                            const value = constraint.HorizontalDistance.value;
+
+                            // Y position of the dimension line is calculated from offset
+                            // Offset[1] determines the distance from midpoint Y
+                            const midY = (p1[1] + p2[1]) / 2;
+                            const dimY = midY + dimStyle.offset[1];
+
+                            // Line color: cyan for driving, gray for driven
+                            const dimColor = dimStyle.driven ? 0x888888 : 0x00dddd;
+                            const dimMat = new THREE.LineBasicMaterial({ color: dimColor, depthTest: false });
+
+                            // Extension lines: vertical lines from each point to dimension line
+                            const extGeo1 = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(p1[0], p1[1], 0.01),
+                                new THREE.Vector3(p1[0], dimY, 0.01)
+                            ]);
+                            const extLine1 = new THREE.Line(extGeo1, dimMat);
+                            extLine1.renderOrder = 10000;
+                            indicatorGroup.add(extLine1);
+
+                            const extGeo2 = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(p2[0], p2[1], 0.01),
+                                new THREE.Vector3(p2[0], dimY, 0.01)
+                            ]);
+                            const extLine2 = new THREE.Line(extGeo2, dimMat);
+                            extLine2.renderOrder = 10000;
+                            indicatorGroup.add(extLine2);
+
+                            // Dimension line: horizontal line between extension endpoints
+                            const dimGeo = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(p1[0], dimY, 0.01),
+                                new THREE.Vector3(p2[0], dimY, 0.01)
+                            ]);
+                            const dimLine = new THREE.Line(dimGeo, dimMat);
+                            dimLine.renderOrder = 10000;
+                            indicatorGroup.add(dimLine);
+
+                            // Value text at midpoint of dimension line
+                            const midX = (p1[0] + p2[0]) / 2;
+                            const valueText = value.toFixed(2);
+                            const textColor = dimStyle.driven ? "#888888" : "#00dddd";
+                            const textSprite = createTextSprite(valueText, textColor, 1.0);
+                            textSprite.position.set(midX, dimY, 0.02);
+                            indicatorGroup.add(textSprite);
+
+                            // Hitbox for click detection
+                            const textWidth = valueText.length * 0.12;
+                            const textHeight = 0.3;
+                            const hitboxMat = new THREE.SpriteMaterial({ color: 0xff00ff, depthTest: false, transparent: true, opacity: 0.0 });
+                            const hitboxSprite = new THREE.Sprite(hitboxMat);
+                            hitboxSprite.position.set(midX, dimY, 0.02);
+                            hitboxSprite.scale.set(textWidth * 4, textHeight * 4, 1); // Larger hitbox for easier clicking
+                            hitboxSprite.renderOrder = 9999;
+                            hitboxSprite.userData = {
+                                isDimensionHitbox: true,
+                                index: index,
+                                type: "HorizontalDistance",
+                                dirX: 1, // Horizontal direction
+                                dirY: 0,
+                            };
+                            indicatorGroup.add(hitboxSprite);
+                        }
+                    } else if (constraint.VerticalDistance && constraint.VerticalDistance.style) {
+                        // Vertical Distance dimension with visual annotation
+                        const cp1 = constraint.VerticalDistance.points[0];
+                        const cp2 = constraint.VerticalDistance.points[1];
+                        const p1 = getPointPos(cp1);
+                        const p2 = getPointPos(cp2);
+
+                        if (p1 && p2) {
+                            const dimStyle = constraint.VerticalDistance.style;
+                            const value = constraint.VerticalDistance.value;
+
+                            // X position of the dimension line is calculated from offset
+                            // Offset[0] determines the distance from midpoint X
+                            const midX = (p1[0] + p2[0]) / 2;
+                            const dimX = midX + dimStyle.offset[0];
+
+                            // Line color: cyan for driving, gray for driven
+                            const dimColor = dimStyle.driven ? 0x888888 : 0x00dddd;
+                            const dimMat = new THREE.LineBasicMaterial({ color: dimColor, depthTest: false });
+
+                            // Extension lines: horizontal lines from each point to dimension line
+                            const extGeo1 = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(p1[0], p1[1], 0.01),
+                                new THREE.Vector3(dimX, p1[1], 0.01)
+                            ]);
+                            const extLine1 = new THREE.Line(extGeo1, dimMat);
+                            extLine1.renderOrder = 10000;
+                            indicatorGroup.add(extLine1);
+
+                            const extGeo2 = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(p2[0], p2[1], 0.01),
+                                new THREE.Vector3(dimX, p2[1], 0.01)
+                            ]);
+                            const extLine2 = new THREE.Line(extGeo2, dimMat);
+                            extLine2.renderOrder = 10000;
+                            indicatorGroup.add(extLine2);
+
+                            // Dimension line: vertical line between extension endpoints
+                            const dimGeo = new THREE.BufferGeometry().setFromPoints([
+                                new THREE.Vector3(dimX, p1[1], 0.01),
+                                new THREE.Vector3(dimX, p2[1], 0.01)
+                            ]);
+                            const dimLine = new THREE.Line(dimGeo, dimMat);
+                            dimLine.renderOrder = 10000;
+                            indicatorGroup.add(dimLine);
+
+                            // Value text at midpoint of dimension line
+                            const midY = (p1[1] + p2[1]) / 2;
+                            const valueText = value.toFixed(2);
+                            const textColor = dimStyle.driven ? "#888888" : "#00dddd";
+                            const textSprite = createTextSprite(valueText, textColor, 1.0);
+                            textSprite.position.set(dimX, midY, 0.02);
+                            indicatorGroup.add(textSprite);
+
+                            // Hitbox for click detection
+                            const textWidth = valueText.length * 0.12;
+                            const textHeight = 0.3;
+                            const hitboxMat = new THREE.SpriteMaterial({ color: 0xff00ff, depthTest: false, transparent: true, opacity: 0.0 });
+                            const hitboxSprite = new THREE.Sprite(hitboxMat);
+                            hitboxSprite.position.set(dimX, midY, 0.02);
+                            hitboxSprite.scale.set(textWidth * 4, textHeight * 4, 1); // Larger hitbox for easier clicking
+                            hitboxSprite.renderOrder = 9999;
+                            hitboxSprite.userData = {
+                                isDimensionHitbox: true,
+                                index: index,
+                                type: "VerticalDistance",
+                                dirX: 0, // Vertical direction
+                                dirY: 1,
+                            };
+                            indicatorGroup.add(hitboxSprite);
+                        }
                     } else if (constraint.Angle && constraint.Angle.style) {
                         // Angular dimension with arc visualization
                         const line1 = getLineById(constraint.Angle.lines[0]);
@@ -2066,7 +2210,7 @@ const Viewport: Component<ViewportProps> = (props) => {
     // State must be outside effect to persist across sketch updates
     let isDragging = false;
     let dragIndex = -1;
-    let dragType: "Distance" | "Angle" | "Radius" | "DistanceParallelLines" | null = null;
+    let dragType: "Distance" | "Angle" | "Radius" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | null = null;
     let startOffset = [0, 0];
     let dragUserData: any = null;
     let dragStartPoint = new THREE.Vector3(); // World
@@ -2119,7 +2263,9 @@ const Viewport: Component<ViewportProps> = (props) => {
                     dragStartPoint.copy(hit.point);
                     dragStartLocal = getLocalPos(hit.point); // Cache start in local space
 
-                    const constraint = props.clientSketch.constraints[dragIndex];
+                    const entry = props.clientSketch.constraints[dragIndex];
+                    // Unwrap SketchConstraintEntry to get the actual constraint (same as rendering code)
+                    const constraint = (entry as any).constraint || entry;
                     if (dragType === "Distance" && constraint.Distance && constraint.Distance.style) {
                         startOffset = [...constraint.Distance.style.offset];
                     } else if (dragType === "Angle" && constraint.Angle && constraint.Angle.style) {
@@ -2128,6 +2274,10 @@ const Viewport: Component<ViewportProps> = (props) => {
                         startOffset = [...constraint.Radius.style.offset];
                     } else if (dragType === "DistanceParallelLines" && constraint.DistanceParallelLines && constraint.DistanceParallelLines.style) {
                         startOffset = [...constraint.DistanceParallelLines.style.offset];
+                    } else if (dragType === "HorizontalDistance" && constraint.HorizontalDistance && constraint.HorizontalDistance.style) {
+                        startOffset = [...constraint.HorizontalDistance.style.offset];
+                    } else if (dragType === "VerticalDistance" && constraint.VerticalDistance && constraint.VerticalDistance.style) {
+                        startOffset = [...constraint.VerticalDistance.style.offset];
                     }
 
                     // Disable orbit controls
@@ -2243,6 +2393,26 @@ const Viewport: Component<ViewportProps> = (props) => {
                 ];
 
                 if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
+            } else if (dragType === "HorizontalDistance") {
+                // For HorizontalDistance, only Y movement affects offset[1] (vertical position of horizontal dim line)
+                const dy = currentLocal.y - dragStartLocal.y;
+
+                const newOffset: [number, number] = [
+                    startOffset[0],
+                    startOffset[1] + dy
+                ];
+
+                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
+            } else if (dragType === "VerticalDistance") {
+                // For VerticalDistance, only X movement affects offset[0] (horizontal position of vertical dim line)
+                const dx = currentLocal.x - dragStartLocal.x;
+
+                const newOffset: [number, number] = [
+                    startOffset[0] + dx,
+                    startOffset[1]
+                ];
+
+                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
             }
         };
 
@@ -2338,6 +2508,13 @@ const Viewport: Component<ViewportProps> = (props) => {
         }
 
         console.log("[Viewport onPointerMove] previewDimension:", props.previewDimension);
+
+        // Report mouse position for dynamic dimension mode switching (Onshape-style)
+        // Always report when callback exists, not just when previewDimension exists,
+        // so the mode can be calculated correctly based on current mouse position
+        if (props.onDimensionMouseMove) {
+            props.onDimensionMouseMove([worldPos.x, worldPos.y]);
+        }
 
         if (props.previewDimension && props.previewDimension.selections.length > 0) {
             console.log("[Viewport] Rendering preview dimension:", props.previewDimension);

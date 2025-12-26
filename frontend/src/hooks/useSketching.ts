@@ -125,6 +125,8 @@ export function useSketching(props: UseSketchingProps) {
     isValid: boolean;
   } | null>(null);
   const [dimensionPlacementMode, setDimensionPlacementMode] = createSignal(false);
+  // Mouse position for dynamic dimension mode switching (Onshape-style)
+  const [dimensionMousePosition, setDimensionMousePosition] = createSignal<[number, number] | null>(null);
 
   // Sketch Solver Status (DOF indicator)
   // Sketch Solver Status (DOF indicator) managed by hook
@@ -473,9 +475,10 @@ export function useSketching(props: UseSketchingProps) {
 
   /* ===== DIMENSION PREVIEW EFFECT ===== */
   createEffect(() => {
-    // When dimension selection changes, update the proposed action (preview)
+    // When dimension selection OR mouse position changes, update the proposed action (preview)
     const sel = dimensionSelection();
-    console.log("[DimPreview Effect] Selection changed:", sel.length, "items", sel);
+    const mousePos = dimensionMousePosition(); // Track mouse position for reactivity
+    console.log("[DimPreview Effect] Selection changed:", sel.length, "items, mouse:", mousePos);
     if (sel.length > 0) {
       analyzeDimensionSelection(sel);
       console.log("[DimPreview Effect] After analyze:", {
@@ -628,6 +631,10 @@ export function useSketching(props: UseSketchingProps) {
       entry.constraint.Angle.style.offset = newOffset;
     } else if (entry.constraint.DistanceParallelLines && entry.constraint.DistanceParallelLines.style) {
       entry.constraint.DistanceParallelLines.style.offset = newOffset;
+    } else if (entry.constraint.HorizontalDistance && entry.constraint.HorizontalDistance.style) {
+      entry.constraint.HorizontalDistance.style.offset = newOffset;
+    } else if (entry.constraint.VerticalDistance && entry.constraint.VerticalDistance.style) {
+      entry.constraint.VerticalDistance.style.offset = newOffset;
     }
 
     setCurrentSketch({ ...sketch });
@@ -678,6 +685,53 @@ export function useSketching(props: UseSketchingProps) {
       if (ent.geometry.Arc) return ent.geometry.Arc.center;
     }
     return null;
+  };
+
+  /**
+   * Determines dimension mode based on mouse position relative to two points.
+   * - Mouse outside bounding box horizontally (left/right): HorizontalDistance
+   * - Mouse outside bounding box vertically (above/below): VerticalDistance  
+   * - Mouse inside bounding box: Distance (aligned/diagonal)
+   */
+  const getDimensionModeFromMousePosition = (
+    p1: [number, number],
+    p2: [number, number],
+    mousePos: [number, number] | null
+  ): "Distance" | "HorizontalDistance" | "VerticalDistance" => {
+    if (!mousePos) return "Distance";
+
+    const minX = Math.min(p1[0], p2[0]);
+    const maxX = Math.max(p1[0], p2[0]);
+    const minY = Math.min(p1[1], p2[1]);
+    const maxY = Math.max(p1[1], p2[1]);
+
+    const [mx, my] = mousePos;
+
+    // Check if mouse is outside the bounding box horizontally
+    const outsideHorizontally = mx < minX || mx > maxX;
+    // Check if mouse is outside the bounding box vertically
+    const outsideVertically = my < minY || my > maxY;
+
+    if (outsideHorizontally && !outsideVertically) {
+      // Mouse is to the left or right -> Horizontal dimension
+      return "HorizontalDistance";
+    } else if (outsideVertically && !outsideHorizontally) {
+      // Mouse is above or below -> Vertical dimension
+      return "VerticalDistance";
+    } else if (outsideHorizontally && outsideVertically) {
+      // Mouse is in a corner region - decide based on which edge is closer
+      const distToVerticalEdge = Math.min(Math.abs(mx - minX), Math.abs(mx - maxX));
+      const distToHorizontalEdge = Math.min(Math.abs(my - minY), Math.abs(my - maxY));
+
+      if (distToVerticalEdge < distToHorizontalEdge) {
+        return "HorizontalDistance";
+      } else {
+        return "VerticalDistance";
+      }
+    }
+
+    // Inside the bounding box -> Aligned/diagonal dimension
+    return "Distance";
   };
 
   const analyzeDimensionSelection = (candidates: SelectionCandidate[]) => {
@@ -744,24 +798,40 @@ export function useSketching(props: UseSketchingProps) {
 
       // Distance: Point-Point, Point-Origin, or Point Entity - Point Entity
       if (isPointLike(c1) && isPointLike(c2)) {
-        // Generic Distance
-        // Calculate value for preview
+        // Calculate positions and determine dimension mode based on mouse position
         const p1 = getCandidatePosition(c1, sketch);
         const p2 = getCandidatePosition(c2, sketch);
-        let dist = 0;
-        if (p1 && p2) {
-          dist = Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
-        }
-        console.log("[analyzeDimensionSelection] Point-Point matched! p1:", p1, "p2:", p2, "dist:", dist);
 
-        setDimensionProposedAction({
-          label: `Distance (${dist.toFixed(2)})`,
-          type: "Distance",
-          value: dist,
-          isValid: true
-        });
-        setDimensionPlacementMode(true);
-        return;
+        if (p1 && p2) {
+          const mousePos = dimensionMousePosition();
+          const mode = getDimensionModeFromMousePosition(p1, p2, mousePos);
+
+          // Calculate appropriate value based on mode
+          let value = 0;
+          let label = "";
+
+          if (mode === "HorizontalDistance") {
+            value = Math.abs(p2[0] - p1[0]);
+            label = `Horizontal (${value.toFixed(2)})`;
+          } else if (mode === "VerticalDistance") {
+            value = Math.abs(p2[1] - p1[1]);
+            label = `Vertical (${value.toFixed(2)})`;
+          } else {
+            value = Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
+            label = `Distance (${value.toFixed(2)})`;
+          }
+
+          console.log("[analyzeDimensionSelection] Point-Point matched! p1:", p1, "p2:", p2, "mode:", mode, "value:", value);
+
+          setDimensionProposedAction({
+            label,
+            type: mode,
+            value,
+            isValid: true
+          });
+          setDimensionPlacementMode(true);
+          return;
+        }
       }
 
       // Line + Line => Check if parallel first, then decide Angle vs Distance
@@ -3925,6 +3995,7 @@ export function useSketching(props: UseSketchingProps) {
     dimensionSelection, setDimensionSelection,
     dimensionPlacementMode, setDimensionPlacementMode,
     dimensionProposedAction, setDimensionProposedAction,
+    setDimensionMousePosition,
     handleDimensionFinish,
     handleDimensionCancel,
     handleDimensionDrag,

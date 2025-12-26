@@ -13,6 +13,16 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use std::sync::{Arc, RwLock};
 use cad_core::features::dag::FeatureGraph;
 use serde::Deserialize;
+use serde_json::json;
+
+/// Format a kernel error as a JSON message for the frontend
+fn format_error(code: &str, message: &str, severity: &str) -> String {
+    format!("ERROR_UPDATE:{}", json!({
+        "code": code,
+        "message": message,
+        "severity": severity
+    }))
+}
 
 // Application State
 struct AppState {
@@ -135,6 +145,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     }
                     Err(e) => {
                         warn!("Regeneration failed: {}", e);
+                        let error_msg = format_error("REGEN_FAILED", &format!("Regeneration failed: {}", e), "error");
+                        let _ = socket.send(Message::Text(error_msg)).await;
                     }
                 }
             } else if text.starts_with("SELECT:") {
@@ -351,7 +363,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                  if let Ok(cmd) = serde_json::from_str::<UpdateCmd>(json_str) {
                       let entity_id = cad_core::topo::EntityId::from_uuid(cmd.id);
                       
-                      let (json_update, program, solve_result_json) = {
+                      let (json_update, program, solve_result_json, error_msg) = {
                           let mut graph = state.graph.write().unwrap();
                           match graph.update_feature_params(entity_id, cmd.params) {
                               Ok(_) => {
@@ -378,11 +390,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                                    
                                    let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
                                    let program = graph.regenerate();
-                                   (Some(json), Some(program), solve_result_json)
+                                   (Some(json), Some(program), solve_result_json, None)
                               }
                               Err(e) => {
-                                  warn!("Failed to update feature: {}", e);
-                                  (None, None, None)
+                                  let err_str = format!("Failed to update feature: {}", e);
+                                  warn!("{}", err_str);
+                                  (None, None, None, Some(err_str))
                               }
                           }
                       };
@@ -391,6 +404,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
                               return;
                           }
+                      }
+
+                      // Send error to frontend if feature update failed
+                      if let Some(err) = error_msg {
+                          let error_ws_msg = format_error("FEATURE_ERROR", &err, "error");
+                          let _ = socket.send(Message::Text(error_ws_msg)).await;
                       }
 
                       // Send sketch solve status for DOF display

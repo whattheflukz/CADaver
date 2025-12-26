@@ -1320,7 +1320,7 @@ mod tests {
         assert!(res.topology_manifest.len() >= 2, "Should have face TopoIds in manifest");
         
         // Check logs for success message
-        assert!(res.logs.iter().any(|l| l.contains("Processing") && l.contains("loops for extrusion")), 
+        assert!(res.logs.iter().any(|l| l.contains("Processing") && l.contains("profiles for extrusion")), 
                 "Logs should indicate successful extrusion processing: {:?}", res.logs);
     }
 
