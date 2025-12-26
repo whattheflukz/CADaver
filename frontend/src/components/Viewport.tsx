@@ -2,12 +2,14 @@ import { onCleanup, onMount, createEffect, createSignal, type Component } from "
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineMaterial, LineSegmentsGeometry, LineSegments2 } from 'three-stdlib';
-import type { Tessellation, SnapPoint, SketchPlane, SolveResult, EntityConstraintStatus, SketchEntity } from "../types";
+import type { Tessellation, SnapPoint, SketchPlane, SolveResult, SketchEntity } from "../types";
 import { SketchRenderer } from "../rendering/SketchRenderer";
 import { DimensionRenderer } from "../rendering/DimensionRenderer";
 import { SnapMarkers } from "../rendering/SnapMarkers";
 import { sketchToWorld } from "../utils/sketchGeometry";
 import { createPointMarkerTexture } from "../utils/threeHelpers";
+import { getIntersects as doRaycastIntersects, getSketchPlaneIntersection as doSketchPlaneIntersection, getIntersectsWithPlanes as doIntersectsWithPlanes } from "../hooks/useRaycasting";
+import { updateHighlightMesh as doUpdateHighlightMesh } from "../hooks/useSelectionHighlight";
 
 interface ViewportProps {
     tessellation: Tessellation | null;
@@ -294,116 +296,27 @@ const Viewport: Component<ViewportProps> = (props) => {
         console.log("Camera aligned to sketch plane:", plane);
     });
 
-    // Helper functions
+    // Helper functions - thin wrappers around extracted modules
+    const getRaycastContext = () => ({
+        containerRef: containerRef || null,
+        camera,
+        scene,
+        mainMesh,
+        raycaster,
+        mouse
+    });
+
+    const getSketchContext = () => ({
+        plane: props.clientSketch?.plane || null
+    });
+
     const getSketchPlaneIntersection = (clientX: number, clientY: number): [number, number, number] | null => {
-        if (!props.clientSketch || !props.clientSketch.plane || !camera || !containerRef) return null;
-
-        // 1. Construct Sketch Plane
-        const p = props.clientSketch.plane;
-        const origin = new THREE.Vector3().fromArray(p.origin);
-        const xAxis = new THREE.Vector3().fromArray(p.x_axis);
-        const yAxis = new THREE.Vector3().fromArray(p.y_axis);
-        const normal = new THREE.Vector3().fromArray(p.normal || [0, 0, 1]); // Fallback if normal missing
-
-        // Plane constant w = -dot(Origin, Normal)
-        const constant = -origin.dot(normal);
-        const plane = new THREE.Plane(normal, constant);
-
-        // 2. Raycast
-        const rect = containerRef.getBoundingClientRect();
-        mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-
-        const targetWorld = new THREE.Vector3();
-        const hit = raycaster.ray.intersectPlane(plane, targetWorld);
-
-        if (!hit) return null;
-
-        // 3. Project to Local Coordinates
-        // P_local = P_world - Origin
-        // local_x = dot(P_local, xAxis)
-        // local_y = dot(P_local, yAxis)
-        const diff = new THREE.Vector3().subVectors(targetWorld, origin);
-        const u = diff.dot(xAxis);
-        const v = diff.dot(yAxis);
-
-        return [u, v, 0];
+        if (!props.clientSketch?.plane) return null;
+        return doSketchPlaneIntersection(clientX, clientY, getRaycastContext(), getSketchContext());
     };
 
     const getIntersects = (clientX: number, clientY: number) => {
-        if (!containerRef || !camera) return [];
-        // Note: mainMesh and tessellation can be null in sketch mode - don't require them
-        const rect = containerRef.getBoundingClientRect();
-        mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-
-        // Set thresholds for easier picking
-        raycaster.params.Points.threshold = 10; // Pixels
-        raycaster.params.Line.threshold = 4.0; // World units (Aggressive pick tolerance) - bumped from 1.0
-
-        // Raycast against mainMesh (faces) and Sketch Groups
-        let targets: THREE.Object3D[] = [];
-
-        // 1. Tessellation (Main Mesh)
-        if (mainMesh) {
-            targets.push(mainMesh);
-            // Also children (lines/points)
-            if (mainMesh.children.length > 0) {
-                mainMesh.children.forEach(c => targets.push(c));
-            }
-        }
-
-        // 2. Sketch Renderer Group
-        const sketchGroup = scene.getObjectByName("sketch_renderer_group");
-        if (sketchGroup) targets.push(sketchGroup);
-
-        // 3. Dimension Renderer Group (for hitboxes)
-        const dimGroup = scene.getObjectByName("dimension_renderer_group");
-        if (dimGroup) targets.push(dimGroup);
-
-        // 4. Snap Markers (optional, usually not selectable but good for debug)
-        const snapGroup = scene.getObjectByName("snap_markers_group");
-        if (snapGroup) targets.push(snapGroup);
-
-
-        // Recursive intersect for groups
-        const intersects = raycaster.intersectObjects(targets, true);
-
-        // Sort by priority
-        intersects.sort((a, b) => {
-            const distDiff = a.distance - b.distance;
-            // If distances are significantly different, closest object wins
-            if (Math.abs(distDiff) > 0.0001) {
-                return distDiff;
-            }
-
-            const typeScore = (obj: THREE.Object3D) => {
-                // Highest priority: Dimension Hitboxes / Controls
-                if (obj.userData && obj.userData.isDimensionHitbox) return -3;
-
-                // High priority: Sketch Elements (Lines/Points)
-                // Check if it belongs to sketch group
-                let parent = obj.parent;
-                while (parent) {
-                    if (parent.name === "sketch_renderer_group") return -2;
-                    if (parent.name === "snap_markers_group") return -1;
-                    parent = parent.parent;
-                }
-
-                if (obj.type === 'Points') return -1; // Sketch points
-                if (obj.type === 'LineSegments') return 0; // Sketch lines
-                return 2; // Mesh (Faces) - lowest priority
-            };
-
-            const scoreA = typeScore(a.object);
-            const scoreB = typeScore(b.object);
-
-            return scoreA - scoreB;
-        });
-
-        return intersects;
+        return doRaycastIntersects(clientX, clientY, getRaycastContext());
     };
 
     const updateHighlightMesh = (
@@ -413,48 +326,7 @@ const Viewport: Component<ViewportProps> = (props) => {
         opacity: number,
         name: string
     ) => {
-        if (!mainMesh) return;
-
-        let mesh = mainMesh.getObjectByName(name) as THREE.Mesh;
-
-        if (indices.length === 0) {
-            if (mesh) {
-                mainMesh.remove(mesh);
-                // Don't dispose geometry - it references mainMesh's position attribute
-                // Just dispose the material
-                (mesh.material as THREE.Material).dispose();
-            }
-            return;
-        }
-
-        if (!mesh) {
-            const highlightGeo = new THREE.BufferGeometry();
-            // Share the position attribute (no need to clone since we're only changing indices)
-            highlightGeo.setAttribute('position', mainMesh.geometry.getAttribute('position'));
-            highlightGeo.setIndex(indices);
-
-            const highlightMat = new THREE.MeshBasicMaterial({
-                color: color,
-                depthTest: true, // Enable depth test but use polygon offset
-                depthWrite: false,
-                transparent: true,
-                opacity: opacity,
-                side: THREE.DoubleSide,
-                polygonOffset: true,
-                polygonOffsetFactor: -1,
-                polygonOffsetUnits: -1
-            });
-            mesh = new THREE.Mesh(highlightGeo, highlightMat);
-            mesh.name = name;
-            mesh.renderOrder = 998; // Hover is below selection (1001)
-            mainMesh.add(mesh);
-        } else {
-            mesh.geometry.setIndex(indices);
-            // Update material properties in case they changed
-            const mat = mesh.material as THREE.MeshBasicMaterial;
-            mat.color.setHex(color);
-            mat.opacity = opacity;
-        }
+        doUpdateHighlightMesh(mainMesh, { indices, color, opacity, name });
     };
 
     // Plane Selection Helpers (Visuals)
@@ -538,27 +410,7 @@ const Viewport: Component<ViewportProps> = (props) => {
 
     // Helper: Raycast including Plane Helpers
     const getIntersectsWithPlanes = (clientX: number, clientY: number) => {
-        if (!containerRef || !camera || !scene) return [];
-
-        const rect = containerRef.getBoundingClientRect();
-        mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-
-        const targets: THREE.Object3D[] = [];
-
-        // Add Plane Helpers
-        const planeGroup = scene.getObjectByName("plane_selection_helpers");
-        if (planeGroup) {
-            targets.push(...planeGroup.children);
-        }
-
-        // Add Geometry Faces
-        if (mainMesh) {
-            targets.push(mainMesh);
-        }
-
-        return raycaster.intersectObjects(targets, false);
+        return doIntersectsWithPlanes(clientX, clientY, getRaycastContext());
     };
 
     const onCanvasClick = (event: MouseEvent) => {

@@ -1,6 +1,5 @@
-import { createSignal, createEffect, createMemo, onCleanup, onMount, untrack, type Accessor } from 'solid-js';
+import { createSignal, createEffect, createMemo, onCleanup, untrack, type Accessor } from 'solid-js';
 import { type Sketch, type SketchEntity, type SketchConstraint, type ConstraintPoint, type SnapPoint, type SnapConfig, type SketchPlane, defaultSnapConfig, type SelectionCandidate, type SketchToolType, type SolveResult, wrapConstraint, type FeatureGraphState } from '../types';
-import { getSketchAction } from '../sketchInputManager';
 import { applySnapping, applyAngularSnapping } from '../snapUtils';
 import { ToolRegistry } from '../tools/ToolRegistry';
 
@@ -520,51 +519,7 @@ export function useSketching(props: UseSketchingProps) {
     }
   };
 
-  onMount(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      console.log("Global KeyDown:", e.key, "SketchMode:", sketchMode());
-      // Only active in Sketch Mode
-      if (!sketchMode()) return;
-
-      // Skip keyboard shortcuts when dimension modal is open
-      if (editingDimension()) return;
-
-      const action = getSketchAction(e);
-      if (!action) return;
-
-      console.log("Sketch Key Action:", action.type, "Tool:", 'tool' in action ? action.tool : 'N/A');
-
-      switch (action.type) {
-        case "SET_TOOL":
-          console.log("Setting tool via Keyboard:", action.tool);
-          setTempPoint(null);
-          setTempStartPoint(null);
-          setStartSnap(null);
-          setConstraintSelection([]);
-          setSketchTool(action.tool);
-          break;
-        case "CANCEL":
-          handleEsc();
-          break;
-        case "TOGGLE_CONSTRUCTION":
-          setConstructionMode(!constructionMode());
-          break;
-        case "DELETE_SELECTION":
-          console.log("Deleting selection...");
-          handleSketchDelete();
-          break;
-        case "UNDO":
-        case "REDO":
-          console.log("Undo/Redo via keyboard not implemented yet");
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    onCleanup(() => {
-      window.removeEventListener("keydown", handleKeyDown);
-    });
-  });
+  // Keyboard shortcuts are now handled centrally by useKeyboardShortcuts in App.tsx
 
   const handleSelect = (topoId: any, modifier: "replace" | "add" | "remove" = "replace") => {
     console.log("Selecting:", topoId, modifier);
