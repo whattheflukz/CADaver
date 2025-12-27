@@ -8,7 +8,13 @@ import { DimensionRenderer } from "../rendering/DimensionRenderer";
 import { SnapMarkers } from "../rendering/SnapMarkers";
 import { sketchToWorld } from "../utils/sketchGeometry";
 import { createPointMarkerTexture } from "../utils/threeHelpers";
-import { getIntersects as doRaycastIntersects, getSketchPlaneIntersection as doSketchPlaneIntersection, getIntersectsWithPlanes as doIntersectsWithPlanes } from "../hooks/useRaycasting";
+import {
+    getIntersects as doRaycastIntersects,
+    getSketchPlaneIntersection as doSketchPlaneIntersection,
+    getIntersectsWithPlanes as doIntersectsWithPlanes,
+    worldToSketchLocal,
+    topoIdMatches
+} from "../services/RaycastService";
 import { updateHighlightMesh as doUpdateHighlightMesh } from "../hooks/useSelectionHighlight";
 
 interface ViewportProps {
@@ -19,6 +25,7 @@ interface ViewportProps {
     onCanvasClick?: (type: "click" | "move" | "dblclick", point: [number, number, number], event?: MouseEvent) => void;
     activeSnap?: SnapPoint | null; // Current snap point for visual indicator
     onDimensionDrag?: (constraintIndex: number, newOffset: [number, number]) => void;
+    onDimensionEdit?: (constraintIndex: number, type: string) => void;
     // New props for sketch setup
     sketchSetupMode?: boolean;
     onSelectPlane?: (plane: SketchPlane) => void;
@@ -150,7 +157,22 @@ const Viewport: Component<ViewportProps> = (props) => {
         if (containerRef) {
             containerRef.addEventListener('click', onCanvasClick);
             containerRef.addEventListener('dblclick', (e) => {
-                if (!props.onCanvasClick || !camera) return;
+                if (!camera) return;
+
+                // Check for Dimension Edit (Hitbox) - using Raycasting
+                const intersects = getIntersects(e.clientX, e.clientY);
+                // Filter for dimension hitbox
+                const dimHit = intersects.find(h => h.object.userData && h.object.userData.isDimensionHitbox);
+
+                if (dimHit && props.onDimensionEdit) {
+                    props.onDimensionEdit(
+                        dimHit.object.userData.index,
+                        dimHit.object.userData.type
+                    );
+                    return;
+                }
+
+                if (!props.onCanvasClick) return;
                 const target = getSketchPlaneIntersection(e.clientX, e.clientY);
                 if (target) {
                     props.onCanvasClick("dblclick", target);
@@ -666,18 +688,7 @@ const Viewport: Component<ViewportProps> = (props) => {
         // Helper: Transform World Point to Local Sketch Space
         // This is CRITICAL for correct dragging on rotated planes
         const getLocalPos = (worldPos: THREE.Vector3) => {
-            if (!props.clientSketch || !props.clientSketch.plane) return { x: worldPos.x, y: worldPos.y };
-            const p = props.clientSketch.plane;
-            // Origin and Axis in World Space
-            const origin = new THREE.Vector3(p.origin[0], p.origin[1], p.origin[2]);
-            const xAxis = new THREE.Vector3(p.x_axis[0], p.x_axis[1], p.x_axis[2]);
-            const yAxis = new THREE.Vector3(p.y_axis[0], p.y_axis[1], p.y_axis[2]);
-
-            const diff = worldPos.clone().sub(origin);
-            return {
-                x: diff.dot(xAxis),
-                y: diff.dot(yAxis)
-            };
+            return worldToSketchLocal(worldPos, getSketchContext());
         };
 
         const onPointerDown = (e: PointerEvent) => {
@@ -1317,14 +1328,7 @@ const Viewport: Component<ViewportProps> = (props) => {
             return;
         }
 
-        // Helper: compare TopoIds robustly (handles large numbers as strings)
-        const topoIdMatches = (a: any, b: any): boolean => {
-            if (!a || !b) return false;
-            // Compare feature_id as string, local_id as string, rank as string
-            return String(a.feature_id) === String(b.feature_id)
-                && String(a.local_id) === String(b.local_id)
-                && String(a.rank) === String(b.rank);
-        };
+
 
         // === FACE SELECTION (triangles) ===
         const faceIndices: number[] = [];

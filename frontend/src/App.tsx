@@ -127,6 +127,7 @@ const App: Component = () => {
     handleDimensionFinish,
     handleDimensionCancel,
     handleDimensionDrag,
+    handleDimensionEdit,
     confirmOffset, cancelOffset, setOffsetDist, setOffsetFlip,
     confirmMirror, confirmLinearPattern, confirmCircularPattern,
     handleSelect: handleSketchSelect,
@@ -478,6 +479,7 @@ const App: Component = () => {
             } : undefined}
             activeSnap={activeSnap()}
             onDimensionDrag={sketchMode() ? handleDimensionDrag : undefined}
+            onDimensionEdit={sketchMode() ? handleDimensionEdit : undefined}
             sketchSetupMode={sketchSetupMode()}
             onSelectPlane={handlePlaneSelected}
             previewDimension={sketchMode() && sketchTool() === "dimension" && dimensionPlacementMode() && dimensionProposedAction()?.isValid ? {
