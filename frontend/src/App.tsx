@@ -139,7 +139,8 @@ const App: Component = () => {
     measurementPending,
     // Constraint inference exports
     inferredConstraints,
-    setInferenceSuppress
+    setInferenceSuppress,
+    handleToggleConstruction
   } = sketchHook;
 
   // Bridge handleSelect - hook handles both sketch and feature selection via its logic
@@ -248,7 +249,7 @@ const App: Component = () => {
         if (sketchMode()) handleCancelSketch();
         break;
       case 'action:toggle_construction':
-        if (sketchMode()) setConstructionMode(!constructionMode());
+        if (sketchMode()) handleToggleConstruction();
         break;
       case 'action:select':
         if (sketchMode()) setSketchTool('select');
@@ -390,7 +391,7 @@ const App: Component = () => {
                 }
               }}
               constructionMode={constructionMode()}
-              onToggleConstruction={() => setConstructionMode(!constructionMode())}
+              onToggleConstruction={handleToggleConstruction}
             />
           )}
 

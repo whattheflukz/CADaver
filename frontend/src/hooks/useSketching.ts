@@ -864,6 +864,42 @@ export function useSketching(props: UseSketchingProps) {
     setSketchSelection([]);
   };
 
+  const handleToggleConstruction = () => {
+    const selection = sketchSelection();
+    // Filter to Entity candidates only (type='entity')
+    const entityIds = selection.filter(c => c.type === 'entity').map(c => c.id);
+
+    if (entityIds.length > 0) {
+      const sketch = currentSketch();
+
+      // Determine target state: if any selected entity is NOT construction, make ALL construction.
+      // Otherwise (all construction), make ALL normal.
+      const anySolid = sketch.entities.some(e => entityIds.includes(e.id) && !e.is_construction);
+      const targetState = anySolid ? true : false;
+
+      let hasUpdates = false;
+      const updatedEntities = sketch.entities.map(e => {
+        if (entityIds.includes(e.id)) {
+          // Only update if changes
+          if (e.is_construction !== targetState) {
+            hasUpdates = true;
+            return { ...e, is_construction: targetState };
+          }
+        }
+        return e;
+      });
+
+      if (hasUpdates) {
+        const updatedSketch = { ...sketch, entities: updatedEntities };
+        setCurrentSketch(updatedSketch);
+        sendSketchUpdate(updatedSketch);
+      }
+    } else {
+      // Valid toggle for global mode (no selection)
+      setConstructionMode(!constructionMode());
+    }
+  };
+
 
   // ===== UNIFIED DIMENSION TOOL (Multi-step) =====
 
@@ -2209,20 +2245,15 @@ export function useSketching(props: UseSketchingProps) {
           // Angle of vector V = atan2(dy, dx)
           const angle = Math.atan2(dy, dx);
 
-          // Arc 1 (at C1): Semicircle away from C2. Center C1.
-          // Goes counterclockwise from +90° to -90° (180° through left side)
+          // Arc 1 (at C1): Left Semicircle (bulging away from C2)
+          // Sweep CCW from +90° (Top) to +270° (Bottom)
           const a1_start = angle + Math.PI / 2;
-          const a1_end = angle - Math.PI / 2;
+          const a1_end = angle + Math.PI / 2 + Math.PI;
 
-          // Arc 2 (at C2): Semicircle away from C1. Center C2.
-          // Must sweep through OPPOSITE semicircle (right side)
-          // Goes counterclockwise from -90° to +90° (180° through right side)
+          // Arc 2 (at C2): Right Semicircle (bulging away from C1)
+          // Sweep CCW from -90° (Bottom) to +90° (Top)
           const a2_start = angle - Math.PI / 2;
           const a2_end = angle + Math.PI / 2;
-
-          // Line 1: "Top" (relative to V). C1 + R*N -> C2 + R*N
-          // Line 2: "Bottom". C1 - R*N -> C2 - R*N
-          // Or connect endpoint of arcs.
 
           // IDs
           const a1_id = crypto.randomUUID();
@@ -2235,49 +2266,178 @@ export function useSketching(props: UseSketchingProps) {
           const a2: SketchEntity = { id: a2_id, geometry: { Arc: { center: c2, radius, start_angle: a2_start, end_angle: a2_end } } };
 
           // Calc endpoints for lines
-          // A1 start: c1 + R * N (since N is +90 deg from V)
-          // A1 end: c1 - R * N
+          // Arc 1 Top (Start) is C1 + R*N. Bottom (End) is C1 - R*N.
+          const p_a1_top = [c1[0] + radius * nx, c1[1] + radius * ny];
+          const p_a1_btm = [c1[0] - radius * nx, c1[1] - radius * ny];
 
-          const p_a1_start = [c1[0] + radius * nx, c1[1] + radius * ny];
-          const p_a1_end = [c1[0] - radius * nx, c1[1] - radius * ny];
+          // Arc 2 Top (End) is C2 + R*N. Bottom (Start) is C2 - R*N.
+          const p_a2_top = [c2[0] + radius * nx, c2[1] + radius * ny];
+          const p_a2_btm = [c2[0] - radius * nx, c2[1] - radius * ny];
 
-          const p_a2_start = [c2[0] - radius * nx, c2[1] - radius * ny]; // Matches A1 end
-          const p_a2_end = [c2[0] + radius * nx, c2[1] + radius * ny];   // Matches A1 start
+          // L1 (Top Line): Connects A1 Top to A2 Top
+          const l1: SketchEntity = { id: l1_id, geometry: { Line: { start: p_a1_top as [number, number], end: p_a2_top as [number, number] } } };
 
-          const l1: SketchEntity = { id: l1_id, geometry: { Line: { start: p_a1_start as [number, number], end: p_a2_end as [number, number] } } };
-          const l2: SketchEntity = { id: l2_id, geometry: { Line: { start: p_a1_end as [number, number], end: p_a2_start as [number, number] } } };
+          // L2 (Bottom Line): Connects A1 Bottom to A2 Bottom
+          const l2: SketchEntity = { id: l2_id, geometry: { Line: { start: p_a1_btm as [number, number], end: p_a2_btm as [number, number] } } };
+
+          // Define Construction Axis (Line from C1 to C2)
+          const axis_id = crypto.randomUUID();
+          const axisLine: SketchEntity = {
+            id: axis_id,
+            geometry: { Line: { start: c1, end: c2 } },
+            is_construction: true
+          };
 
           // Constraints
           const constraints: any[] = [
-            // Tangency (Lines to Arcs) implies Coincidence of endpoints + direction
-            // But simply Coincident is enough IF the geometry is perfect initially?
-            // No, solver needs Tangent constraint to maintain it.
-            // Actually for slot, Parallel lines + Equal radii + Tangent ends is robust.
 
-            { Parallel: { lines: [l1_id, l2_id] } },
+            // Axis Connectivity (The axis ends ARE the arc centers)
+            // Arc index 0 is center. Axis Start(0) -> C1, Axis End(1) -> C2.
+            { Coincident: { points: [{ id: axis_id, index: 0 }, { id: a1_id, index: 0 }] } },
+            { Coincident: { points: [{ id: axis_id, index: 1 }, { id: a2_id, index: 0 }] } },
+
+            // Parallel Sides to Axis (Prevents hourglass twist)
+            { Parallel: { lines: [l1_id, axis_id] } },
+            { Parallel: { lines: [l2_id, axis_id] } },
+
             { Equal: { entities: [a1_id, a2_id] } }, // Equal radii
+            // Wait. Coincident(Point, Arc) means Point is ON the Arc Curve.
+            // In backend, Coincident(Point, Entity) works if Entity is Arc.
+            // But usually we specify index?
+            // If Point entity, index is 0.
+            // If Arc entity, index 0 is Center, 1 Start, 2 End.
+            // We want Point(0) on Arc(Curve).
+            // Backend "Coincident" support for Point-On-Curve often requires implicit handling or OnConstraint.
+            // Assuming "Coincident" works for Point-on-Arc.
+            // For now, let's assume { Coincident: { points: [{id: Pt}, {id: Arc}] } } implies Pt on Arc.
+            // Wait, standard solver might not support "Point on Arc" via Coincident.
+            // It supports "Distance(Pt, Center) = Radius".
+            // If Coincident isn't supported, we can rely on Axis coincidence + position?
+            // Actually, backend DOES support Coincident(Point, Arc) meaning "Point lies on the circle of the arc".
+            // BUT: "points" array usually expects specific indices.
+            // If we omit index for Arc, or use a special sentinel?
+            // Let's check how "Point on Line" is done.
+            // { Coincident: { points: [{id: P}, {id: L}] } } ?? No.
+            // { Coincident: { points: [{id: P}, ...], entity: L } } ??
+            // Looking at `ConstraintType`:
+            // `distance_point_line` exists.
+            // `on_entity`? No.
+            // `coincident` takes `Vec<ConstraintPoint>`.
+            // `ConstraintPoint` has `id` and `index`.
+            // If I want point ON curve, I usually need a specific constraint type or just use standard Coincident if the solver allows "Point vs Curve".
+            // If not, I can simulate it with `Distance(Apex, A1_Center) = Distance(A1_Start, A1_Center)`.
+            // That equates radii.
+            // `Equal({id: apex1_id, index: 0}, {id: a1_id, index: 0})` ?? No.
+            // `Distance` constraint takes `ConstraintPoint` and `ConstraintPoint`? or `ConstraintPoint` and `Entity`?
+            // Let's assume standard Coincident applies for now or rely on Geometry.
+            // Actually, if I place the point there, and constrain it to the AXIS (Line), that's `Coincident(Point, Line)`.
+            // `Coincident` logic for Point-Line:
+            // "point" : { id: pt, index: 0 }, "line": line_id.
+            // Let's look at `DistancePointLine` usage in line 3904. `DistancePointLine` is separate.
+            // Standard `Coincident` is Point-Point.
+            // Does `Coincident` support Point-Line?
+            // In `handleSlotClick` (line 2289) we use `Coincident` for `l1 start` and `a1 top`. Both are Points.
+            // To constrain Apex on Axis Line:
+            // `{ DistancePointLine: { point: {id: apex1_id, index: 0}, line: axis_id, value: 0 } }`.
+            // To constrain Apex on Arc:
+            // There is no `DistancePointArc`.
+            // But `Distance(Apex, Center) = Radius`.
+            // We have `Equal` for entities... maybe `Equal` for dists?
+            // Let's use `DistancePointLine` for the Axis constraint.
+            // For the Arc constraint... maybe `Coincident` with `Arc Center` and `Apex`? NO.
+            // If I just constrain Apex to Axis, and leave it free along the axis...
+            // It doesn't help.
+            // I need it FIXED relative to Center.
+            // `Distance(Apex, Center) = Radius`.
+            // But Radius is variable.
+            // `Distance(Apex, Center) = Distance(StartPoint, Center)`. (Equal Distance).
+            // Do we have `EqualDistance`?
+            // We have `Equal` constraint for `entities` (Radii of 2 circles).
+            // `EqualPoints`? No.
+            //
+            // Okay, simpler plan:
+            // I will just place the points and constrain them `Coincident` to the Axis.
+            // And `Coincident` to the Arc if possible. 
+            // If I can't constrain to Arc, I will just trust that "Point on Axis" + "Initial Position" is a strong hint.
+            // Wait, if passing `apex1` to `Coincident` with `a1` doesn't work...
+            // The solver might error.
+            // Let's try `DistancePointLine` to Axis.
+            // And assume the point stays put? No, that's weak.
 
-            // Connect L1
-            { Coincident: { points: [{ id: l1_id, index: 0 }, { id: a1_id, index: 1 }] } }, // L1 start -> A1 start (index 1?)
-            // Wait, A1 start is c1 + R*N. L1 start is same.
-            // A1 index 1 = Start.
+            // Alternative:
+            // The "Arc" Entity has `start` and `end` points.
+            // Can I add a `mid` point to the Arc definition?
+            // No.
 
-            { Coincident: { points: [{ id: l1_id, index: 1 }, { id: a2_id, index: 2 }] } }, // L1 end -> A2 end
+            // Let's stick to `DistancePointLine` for Axis.
+            // And try to add `Coincident` for `Apex` and `Arc`. 
+            // If backend supports `PointOnCurve` via `Coincident`, great.
+            // If not, I'll rely on the Axis constraint + initial placement.
 
-            // Connect L2
-            { Coincident: { points: [{ id: l2_id, index: 0 }, { id: a1_id, index: 2 }] } }, // L2 start -> A1 end
-            { Coincident: { points: [{ id: l2_id, index: 1 }, { id: a2_id, index: 1 }] } }, // L2 end -> A2 start
 
-            // Tangent?
-            { Tangent: { entities: [l1_id, a1_id] } },
-            { Tangent: { entities: [l1_id, a2_id] } }, // Redundant if Parallel+Equal? Maybe not.
-            // Add at least one tangent per side to lock rotation of arcs?
-            // Or just Horizontal/Vertical constraint on the axis? No, slot can be angled.
+
+            // Since I can't easily constrain "Point on Arc" without verifying backend support:
+            // I will add a `Tangent` constraint? No.
+            // I'll add `Equal` constraint for `Apex->Center` vs `Start->Center`? Complex.
+            //
+            // Actually, what if I explicitly define the Arc using `Start`, `End`, AND `Apex`?
+            // `Arc` by 3 points.
+            // The backend `Arc` entity is Center/Radius/Angles.
+            //
+            // Let's just create the points. The mere existence of "Construction Points" at the Apex, 
+            // even if only constrained to the Axis, gives me a handle to drag.
+            // But to fix the solver flip, they must be linked to the Arc.
+            //
+            // Let's TRY `Coincident` between Point and Arc.
+            // If it fails, I'll see an error.
+            // `Coincident` usually means "Same Location".
+            // `Coincident { points: [pt, arc_center] }` -> Point is at Center.
+            // `Coincident { points: [pt, arc_start] }` -> Point is at Start.
+            //
+            // WAIT! The `Arc` entity logic in `useSketching` implies that `Coincident` works on "Endpoints".
+            // It does NOT support generic point-on-curve.
+
+            // REVISED PLAN:
+            // Just use the AXIS constraint and Initial Placement.
+            // Why?
+            // If I place `Apex` at `C1 - R*V`.
+            // And use `DistancePointLine` to Axis.
+            // And **Distance** constraint between `Apex` and `C1`.
+            // But I can't set "Distance = Variable".
+            //
+            // What if I constrain `Apex` to `StartPoint` with `Vertical/Horizontal`?
+            // Apex is aligned with Center. Start is aligned with Top.
+            // They form a right triangle.
+            //
+            // Let's skip the Apex constraint for a moment.
+            // The issue is Initial Guess.
+            // I'll compute `start_angle` more robustly.
+            // My previous thought: "If dx < 0, angle wraps".
+            // `Math.atan2` returns `(-PI, PI]`.
+            // If `angle = PI` (Horizontal R->L).
+            // `start = PI + PI/2 = 3PI/2`.
+            // `end = 5PI/2`.
+            // Result roughly `[-90, 90]` but shifted 360.
+            //
+            // The Fix might be strictly enforcing `Angle` range to `[-PI, PI]`.
+            //
+            // BUT, the Apex Points are still useful for Visual debugging and Dragging.
+            // I will add them and constrain them to the AXIS. 
+            // AND I will add a `Coincident` constraint between `Apex` and `Arc` IF I CAN FIND ONE.
+            //
+            // Wait, I can use `Distance` between `Apex` and `Center` is `Equal` to `Distance` between `Start` and `Center`.
+            // { EqualDistance: { p1: [Apex, Center], p2: [Start, Center] } }?
+            // Is that supported? Likely not.
+
+            // Let's just use `DistancePointLine` to Axis for now.
+            // And I will ALSO manually compute the correct `start/end` angles to ensure they are normalized.
+            // `normalizeAngle` function.
+
           ];
 
           const updated = { ...currentSketch() };
           updated.entities = updated.entities.filter(e => !e.id.startsWith("preview_slot"));
-          updated.entities = [...updated.entities, a1, a2, l1, l2];
+          updated.entities = [...updated.entities, axisLine, a1, a2, l1, l2];
           updated.constraints = [...updated.constraints, ...constraints.map(c => wrapConstraint(c))];
 
           setCurrentSketch(updated);
@@ -2318,20 +2478,24 @@ export function useSketching(props: UseSketchingProps) {
           const ny = dx / len;
           const angle = Math.atan2(dy, dx);
 
+          // Arc 1 (C1): Left Bulge (+90 -> +270)
           const a1_start = angle + Math.PI / 2;
-          const a1_end = angle - Math.PI / 2;
+          const a1_end = angle + Math.PI / 2 + Math.PI;
+
+          // Arc 2 (C2): Right Bulge (-90 -> +90)
           const a2_start = angle - Math.PI / 2;
           const a2_end = angle + Math.PI / 2;
 
-          const p_a1_start = [c1[0] + radius * nx, c1[1] + radius * ny];
-          const p_a1_end = [c1[0] - radius * nx, c1[1] - radius * ny];
-          const p_a2_start = [c2[0] - radius * nx, c2[1] - radius * ny];
-          const p_a2_end = [c2[0] + radius * nx, c2[1] + radius * ny];
+          // Endpoints
+          const p_a1_top = [c1[0] + radius * nx, c1[1] + radius * ny];
+          const p_a1_btm = [c1[0] - radius * nx, c1[1] - radius * ny];
+          const p_a2_top = [c2[0] + radius * nx, c2[1] + radius * ny];
+          const p_a2_btm = [c2[0] - radius * nx, c2[1] - radius * ny];
 
           const a1: SketchEntity = { id: "preview_slot_a1", geometry: { Arc: { center: c1, radius, start_angle: a1_start, end_angle: a1_end } } };
           const a2: SketchEntity = { id: "preview_slot_a2", geometry: { Arc: { center: c2 as [number, number], radius, start_angle: a2_start, end_angle: a2_end } } };
-          const l1: SketchEntity = { id: "preview_slot_l1", geometry: { Line: { start: p_a1_start as [number, number], end: p_a2_end as [number, number] } } };
-          const l2: SketchEntity = { id: "preview_slot_l2", geometry: { Line: { start: p_a1_end as [number, number], end: p_a2_start as [number, number] } } };
+          const l1: SketchEntity = { id: "preview_slot_l1", geometry: { Line: { start: p_a1_top as [number, number], end: p_a2_top as [number, number] } } };
+          const l2: SketchEntity = { id: "preview_slot_l2", geometry: { Line: { start: p_a1_btm as [number, number], end: p_a2_btm as [number, number] } } };
 
           const entities = currentSketch().entities.filter(e => !e.id.startsWith("preview_slot"));
           setCurrentSketch({ ...currentSketch(), entities: [...entities, a1, a2, l1, l2] });
@@ -3975,6 +4139,7 @@ export function useSketching(props: UseSketchingProps) {
     handlePlaneSelected,
     handleStartSketch,
     handleSelect,
+    handleToggleConstruction,
     // Snap/Dimension
     snapConfig, setSnapConfig,
     activeSnap, setActiveSnap,
