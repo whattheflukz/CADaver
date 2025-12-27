@@ -4,6 +4,7 @@ import { applySnapping } from '../snapUtils';
 import { useSketchUI } from './useSketchUI';
 import { useSketchSelection } from './useSketchSelection';
 import { useSketchLifecycle } from './useSketchLifecycle';
+import { executeMirror, executeLinearPattern, executeCircularPattern } from './usePatternTools';
 interface UseSketchingProps {
   send: (msg: WebSocketCommand) => void;
   graph: Accessor<FeatureGraphState>;
@@ -804,69 +805,8 @@ export function useSketching(props: UseSketchingProps) {
   });
   /* ===== MODAL CONFIRMATION HANDLERS ===== */
   const confirmMirror = () => {
-    const axisId = mirrorState().axis;
-    const entitiesToMirror = mirrorState().entities;
-    if (!axisId || entitiesToMirror.length === 0) return;
-    const sketch = currentSketch();
-    const axisEnt = sketch.entities.find(e => e.id === axisId);
-    if (!axisEnt || !axisEnt.geometry.Line) return;
-    const ae = axisEnt.geometry.Line;
-    const reflect = (p: [number, number]): [number, number] => {
-      const x1 = ae.start[0], y1 = ae.start[1];
-      const x2 = ae.end[0], y2 = ae.end[1];
-      const dx = x2 - x1, dy = y2 - y1;
-      const a = (dx * dx - dy * dy) / (dx * dx + dy * dy);
-      const b = 2 * dx * dy / (dx * dx + dy * dy);
-      const x2_p = a * (p[0] - x1) + b * (p[1] - y1) + x1;
-      const y2_p = b * (p[0] - x1) - a * (p[1] - y1) + y1;
-      return [x2_p, y2_p];
-    };
-    const newEntities: SketchEntity[] = [];
-    const newConstraints: SketchConstraint[] = [];
-    entitiesToMirror.forEach(targetId => {
-      const targetEnt = sketch.entities.find(e => e.id === targetId);
-      if (!targetEnt) return;
-      const newId = crypto.randomUUID();
-      let newGeo: any = null;
-      if (targetEnt.geometry.Point) {
-        newGeo = { Point: { pos: reflect(targetEnt.geometry.Point.pos) } };
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 0 }, p2: { id: newId, index: 0 }, axis: axisId } });
-      } else if (targetEnt.geometry.Line) {
-        const l = targetEnt.geometry.Line;
-        newGeo = { Line: { start: reflect(l.start), end: reflect(l.end) } };
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 0 }, p2: { id: newId, index: 0 }, axis: axisId } });
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 1 }, p2: { id: newId, index: 1 }, axis: axisId } });
-      } else if (targetEnt.geometry.Circle) {
-        const c = targetEnt.geometry.Circle;
-        newGeo = { Circle: { center: reflect(c.center), radius: c.radius } };
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 0 }, p2: { id: newId, index: 0 }, axis: axisId } });
-        newConstraints.push({ Equal: { entities: [targetId, newId] } });
-      } else if (targetEnt.geometry.Arc) {
-        const arc = targetEnt.geometry.Arc;
-        const startP: [number, number] = [arc.center[0] + arc.radius * Math.cos(arc.start_angle), arc.center[1] + arc.radius * Math.sin(arc.start_angle)];
-        const endP: [number, number] = [arc.center[0] + arc.radius * Math.cos(arc.end_angle), arc.center[1] + arc.radius * Math.sin(arc.end_angle)];
-        const newC = reflect(arc.center);
-        const newStart = reflect(startP);
-        const newEnd = reflect(endP);
-        const newStartAngle = Math.atan2(newStart[1] - newC[1], newStart[0] - newC[0]);
-        const newEndAngle = Math.atan2(newEnd[1] - newC[1], newEnd[0] - newC[0]);
-        newGeo = { Arc: { center: newC, radius: arc.radius, start_angle: newStartAngle, end_angle: newEndAngle } };
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 0 }, p2: { id: newId, index: 0 }, axis: axisId } });
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 1 }, p2: { id: newId, index: 1 }, axis: axisId } });
-        newConstraints.push({ Symmetric: { p1: { id: targetId, index: 2 }, p2: { id: newId, index: 2 }, axis: axisId } });
-      }
-      if (newGeo) {
-        newEntities.push({ id: newId, geometry: newGeo, is_construction: false });
-      }
-    });
-    const updated = { ...currentSketch() };
-    updated.entities = [...updated.entities, ...newEntities];
-    updated.constraints = [...updated.constraints, ...newConstraints.map(c => wrapConstraint(c))];
-    updated.history = [
-      ...(updated.history || []),
-      ...newEntities.map(e => ({ AddGeometry: { id: e.id, geometry: e.geometry } })),
-      ...newConstraints.map(c => ({ AddConstraint: { constraint: c } }))
-    ];
+    const updated = executeMirror(currentSketch(), mirrorState());
+    if (!updated) return;
     setCurrentSketch(updated);
     sendSketchUpdate(updated);
     setMirrorState({ axis: null, entities: [], activeField: 'axis', previewGeometry: [] });
