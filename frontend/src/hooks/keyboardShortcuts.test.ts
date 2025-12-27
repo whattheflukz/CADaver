@@ -6,6 +6,8 @@
  * Tests pure logic functions without DOM dependencies.
  */
 
+declare const process: { exit: (code: number) => void } | undefined;
+
 import { normalizeShortcut, matchesKeyEvent, formatShortcut } from './useKeyboardShortcuts';
 
 // Simple test harness
@@ -149,5 +151,7 @@ console.log(`Passed: ${passed}`);
 console.log(`Failed: ${failed}`);
 
 if (failed > 0) {
-    process.exit(1);
+    if (typeof process !== 'undefined') {
+        process.exit(1);
+    }
 }

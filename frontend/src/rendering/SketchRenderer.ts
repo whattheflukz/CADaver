@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { LineMaterial, LineSegmentsGeometry, LineSegments2 } from 'three-stdlib';
-import type { Sketch, SketchEntity, SolveResult } from '../types';
+import type { Sketch, SolveResult } from '../types';
 import { sketchToWorld } from '../utils/sketchGeometry';
 import { createPointMarkerTexture } from '../utils/threeHelpers';
 
@@ -77,7 +77,7 @@ export class SketchRenderer {
     public update(
         sketch: Sketch | null,
         selection: any[] = [],
-        solveResult?: SolveResult | null
+        _solveResult?: SolveResult | null
     ) {
         // Clear existing geometry
         this.clear();
@@ -174,7 +174,7 @@ export class SketchRenderer {
                 const segments = 32;
 
                 // Calculate step size based on angle difference
-                let diff = end_angle - start_angle;
+                let _diff = end_angle - start_angle;
                 // Normalize to positive
                 // if (diff < 0) diff += Math.PI * 2; // Arcs usually ccw from start??
 

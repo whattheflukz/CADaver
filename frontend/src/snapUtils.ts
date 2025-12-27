@@ -9,6 +9,7 @@ import { distance, lineLineIntersection } from './utils/geometryUtils';
 const SNAP_PRIORITY: Record<SnapType, number> = {
     Endpoint: 1,
     Center: 2,
+    Point: 2,
     Intersection: 3,
     Midpoint: 4,
     Origin: 5,

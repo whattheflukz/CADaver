@@ -165,7 +165,7 @@ export type ParameterValue =
 
 // Snap types for sketch snapping
 export type SnapType =
-    "Endpoint" | "Midpoint" | "Center" |
+    "Endpoint" | "Midpoint" | "Center" | "Point" |
     "Intersection" | "Origin" | "Grid" |
     "AxisX" | "AxisY";
 

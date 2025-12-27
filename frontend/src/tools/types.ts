@@ -1,4 +1,4 @@
-import type { Sketch, SketchEntity, SelectionCandidate, SnapPoint, SolveResult } from "../types";
+import type { Sketch, SketchEntity, SelectionCandidate, SnapPoint } from "../types";
 
 export interface SketchToolContext {
     // State Accessors
@@ -25,6 +25,11 @@ export interface SketchToolContext {
     calculateMeasurement?: (c1: SelectionCandidate, c2: SelectionCandidate) => any;
     addActiveMeasurement?: (measurement: any) => void;
 
+    // Constraint Selection (for multi-click constraints)
+    constraintSelection?: any[];
+    setConstraintSelection?: (selection: any[]) => void;
+    setTool?: (toolId: string) => void;
+
     // Actions
     sendUpdate: (sketch: Sketch) => void; // Trigger solver
     spawnEntity: (entity: SketchEntity) => void; // Add new entity helper
@@ -41,9 +46,9 @@ export interface SketchTool {
     onDeactivate?(): void;
 
     // Mouse Events (coordinates in sketch plane local space)
-    onMouseDown?(u: number, v: number, e?: MouseEvent): void;
-    onMouseMove?(u: number, v: number, e?: MouseEvent): void;
-    onMouseUp?(u: number, v: number, e?: MouseEvent): void;
+    onMouseDown?(u: number, v: number, _e?: MouseEvent): void;
+    onMouseMove?(u: number, v: number, _e?: MouseEvent): void;
+    onMouseUp?(u: number, v: number, _e?: MouseEvent): void;
 
     // Keyboard Events
     onKeyDown?(e: KeyboardEvent): void;

@@ -10,7 +10,7 @@ export class ArcTool extends BaseTool {
     private centerSnap: SnapPoint | null = null;
     private previewId = "preview_arc";
 
-    onMouseDown(u: number, v: number, e?: MouseEvent): void {
+    onMouseDown(u: number, v: number, __e?: MouseEvent): void {
         const snap = this.context.snapPoint;
         let effectivePoint: [number, number] = [u, v];
 
@@ -33,7 +33,7 @@ export class ArcTool extends BaseTool {
         }
     }
 
-    onMouseMove(u: number, v: number, e?: MouseEvent): void {
+    onMouseMove(u: number, v: number, __e?: MouseEvent): void {
         if (!this.centerPoint) return;
 
         const snap = this.context.snapPoint;

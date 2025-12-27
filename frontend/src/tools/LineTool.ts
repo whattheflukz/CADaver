@@ -9,7 +9,7 @@ export class LineTool extends BaseTool {
     private startSnap: SnapPoint | null = null;
     private previewId = "preview_line";
 
-    onMouseDown(u: number, v: number, e?: MouseEvent): void {
+    onMouseDown(u: number, v: number, _e?: MouseEvent): void {
         const snap = this.context.snapPoint;
         let effectivePoint: [number, number] = [u, v];
 
@@ -41,7 +41,7 @@ export class LineTool extends BaseTool {
         }
     }
 
-    onMouseMove(u: number, v: number, e?: MouseEvent): void {
+    onMouseMove(u: number, v: number, _e?: MouseEvent): void {
         if (!this.startPoint) return;
 
         const snap = this.context.snapPoint;

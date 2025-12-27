@@ -3,15 +3,19 @@ import type { SketchTool, SketchToolContext } from "./types";
 export abstract class BaseTool implements SketchTool {
     abstract id: string;
 
-    constructor(protected context: SketchToolContext) { }
+    protected context: SketchToolContext;
+
+    constructor(context: SketchToolContext) {
+        this.context = context;
+    }
 
     onActivate(): void { }
     onDeactivate(): void { }
 
-    onMouseDown(u: number, v: number, e: MouseEvent): void { }
-    onMouseMove(u: number, v: number, e: MouseEvent): void { }
-    onMouseUp(u: number, v: number, e: MouseEvent): void { }
-    onKeyDown(e: KeyboardEvent): void { }
+    onMouseDown(_u: number, _v: number, _e: MouseEvent): void { }
+    onMouseMove(_u: number, _v: number, _e: MouseEvent): void { }
+    onMouseUp(_u: number, _v: number, _e: MouseEvent): void { }
+    onKeyDown(_e: KeyboardEvent): void { }
     onCancel(): void { }
 
     // Helper to request a solver update

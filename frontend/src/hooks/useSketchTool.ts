@@ -1,8 +1,8 @@
 import { createSignal } from 'solid-js';
-import { type Sketch, type SnapPoint, type SnapConfig, defaultSnapConfig, type SketchConstraint } from '../types';
-import { applySnapping, applyAngularSnapping } from '../snapUtils';
+import { type Sketch, type SnapPoint, type SnapConfig, defaultSnapConfig } from '../types';
+import { applySnapping } from '../snapUtils';
 import { ToolRegistry } from '../tools/ToolRegistry';
-import { detectInferredConstraints, type InferredConstraint, defaultInferenceConfig } from '../utils/ConstraintInference';
+import { detectInferredConstraints, defaultInferenceConfig } from '../utils/ConstraintInference';
 
 export function useSketchTool(
     currentSketch: () => Sketch,
@@ -52,6 +52,7 @@ export function useSketchTool(
             return false;
         },
         setDimensionMousePosition: (pos) => setDimensionMousePosition(pos),
+        get measurementSelection() { return measurementSelection(); },
         setMeasurementSelection: (s) => setMeasurementSelection(s),
         calculateMeasurement: (c1, c2) => calculateMeasurement(c1, c2),
         addActiveMeasurement: (m) => addActiveMeasurement(m),

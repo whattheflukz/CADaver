@@ -1,28 +1,21 @@
-import type { SketchTool, SketchToolContext } from "./types";
+import { BaseTool } from "./BaseTool";
 
-/**
- * OffsetTool - Creates offset copies of selected geometry
- * For now, just handles selection like SelectTool
- * TODO: Implement actual offset logic
- */
-export class OffsetTool implements SketchTool {
+export class OffsetTool extends BaseTool {
     readonly id = "offset";
-    private context: SketchToolContext;
 
-    constructor(context: SketchToolContext) {
-        this.context = context;
-    }
 
-    onMouseDown(x: number, y: number, event?: MouseEvent): void {
+
+
+    onMouseDown(_x: number, _y: number, _event?: MouseEvent): void {
         // Selection is handled by Viewport's onSelect
         // TODO: After selection, implement offset preview
     }
 
-    onMouseMove(x: number, y: number, event?: MouseEvent): void {
+    onMouseMove(_x: number, _y: number, _event?: MouseEvent): void {
         // TODO: Show offset preview while hovering
     }
 
-    onMouseUp(x: number, y: number, event?: MouseEvent): void {
+    onMouseUp(_x: number, _y: number, _event?: MouseEvent): void {
         // Selection finalized by Viewport
     }
 

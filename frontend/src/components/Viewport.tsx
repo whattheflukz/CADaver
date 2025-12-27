@@ -59,7 +59,7 @@ const Viewport: Component<ViewportProps> = (props) => {
     let controls: OrbitControls;
     let animationId: number;
     let mainMesh: THREE.Mesh | null = null;
-    let selectionMesh: THREE.Mesh | null = null; // Highlighting for selected items
+    let _selectionMesh: THREE.Mesh | null = null; // Highlighting for selected items
     let hoverMesh: THREE.Mesh | null = null; // Highlighting for hovered items
     let planeHighlightMesh: THREE.Mesh | null = null; // Highlighting for potential sketch planes
 
@@ -210,7 +210,7 @@ const Viewport: Component<ViewportProps> = (props) => {
                 mainMesh.geometry.dispose();
                 (mainMesh.material as THREE.Material).dispose();
                 mainMesh = null;
-                selectionMesh = null;
+                _selectionMesh = null;
                 hoverMesh = null;
             }
             return;
@@ -224,7 +224,7 @@ const Viewport: Component<ViewportProps> = (props) => {
             mainMesh.geometry.dispose();
             (mainMesh.material as THREE.Material).dispose();
             mainMesh = null;
-            selectionMesh = null;
+            _selectionMesh = null;
             hoverMesh = null;
         }
 

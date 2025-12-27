@@ -515,9 +515,9 @@ export class DimensionRenderer {
         if (!sketch || constraints.length === 0) return;
 
         // Inference colors (semi-transparent to indicate preview)
-        const INFERENCE_COLOR = 0xffaa00;
+        const _INFERENCE_COLOR = 0xffaa00;
         const INFERENCE_COLOR_STR = '#ffaa00';
-        const opacity = 0.8;
+        const _opacity = 0.8;
 
         // Inference icons by type
         const icons: Record<string, string> = {

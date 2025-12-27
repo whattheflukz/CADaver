@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { SnapPoint, Sketch } from '../types';
 import { sketchToWorld } from '../utils/sketchGeometry';
-import { createCircleMarker, createDiamondMarker, createLine, createTextSprite } from '../utils/threeHelpers';
+import { createCircleMarker, createDiamondMarker } from '../utils/threeHelpers';
 
 export class SnapMarkers {
     private scene: THREE.Scene;

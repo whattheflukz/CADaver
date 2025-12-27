@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { SketchPlane } from '../types';
 
-interface RaycastingContext {
+export interface RaycastingContext {
     containerRef: HTMLDivElement | null;
     camera: THREE.Camera | null;
     scene: THREE.Scene;
@@ -21,7 +21,7 @@ interface RaycastingContext {
     mouse: THREE.Vector2;
 }
 
-interface SketchPlaneContext {
+export interface SketchPlaneContext {
     plane: SketchPlane | null;
 }
 
@@ -192,4 +192,15 @@ export function worldToSketchLocal(
         x: diff.dot(xAxis),
         y: diff.dot(yAxis)
     };
+}
+
+/**
+ * Helper: compare TopoIds robustly (handles large numbers as strings)
+ */
+export function topoIdMatches(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    // Compare feature_id as string, local_id as string, rank as string
+    return String(a.feature_id) === String(b.feature_id)
+        && String(a.local_id) === String(b.local_id)
+        && String(a.rank) === String(b.rank);
 }

@@ -12,7 +12,7 @@ import type { SelectionCandidate } from "../types";
 export class MeasureTool extends BaseTool {
     id = "measure";
 
-    onMouseDown(u: number, v: number, _e?: MouseEvent): void {
+    onMouseDown(u: number, v: number, __e?: MouseEvent): void {
         const rawPoint: [number, number] = [u, v];
         const sketch = this.context.sketch;
 

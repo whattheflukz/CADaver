@@ -1,5 +1,5 @@
 
-import { createSignal, createEffect, type Accessor, type Setter } from 'solid-js';
+import { createSignal, createEffect, type Accessor } from 'solid-js';
 import {
     type Sketch,
     type SketchEntity,
@@ -33,9 +33,9 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
         setEditingDimension,
         dimensionSelection,
         setDimensionSelection,
-        measurementSelection,
+        measurementSelection: _measurementSelection,
         setMeasurementSelection,
-        measurementPending,
+        measurementPending: _measurementPending,
         setMeasurementPending
     } = props;
 
@@ -249,31 +249,38 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
             const c = candidates[0];
             const info = getEntityInfo(c, sketch);
             if (info) {
-                if (info.type === 'line') {
-                    proposed = { label: "Length", type: "Length", value: calculateMeasurement(c, null!)?.result?.Distance?.value, isValid: true };
-                } else if (info.type === 'circle' || info.type === 'arc') {
-                    proposed = { label: "Radius", type: "Radius", value: calculateMeasurement(c, null!)?.result?.Radius?.value, isValid: true };
+                if (info.type === 'line' && info.entity?.geometry.Line) {
+                    // Calculate line length directly
+                    const line = info.entity.geometry.Line;
+                    const length = dist(line.start, line.end);
+                    proposed = { label: "Length", type: "Length", value: length, isValid: true };
+                } else if (info.type === 'circle' && info.entity?.geometry.Circle) {
+                    const radius = info.entity.geometry.Circle.radius;
+                    proposed = { label: "Radius", type: "Radius", value: radius, isValid: true };
+                } else if (info.type === 'arc' && info.entity?.geometry.Arc) {
+                    const radius = info.entity.geometry.Arc.radius;
+                    proposed = { label: "Radius", type: "Radius", value: radius, isValid: true };
                 }
-                // Point...
+                // Point alone doesn't create a dimension
             }
         }
         // Two Entities
         else if (candidates.length === 2) {
             const m = calculateMeasurement(candidates[0], candidates[1]);
             if (m && m.result) {
-                if (m.result.Distance) {
+                if ('Distance' in m.result) {
                     // Check for Horizontal/Vertical overrides
                     // We need p1 and p2 for mode detection
-                    let p1 = m.displayPosition; // Fallback
-                    let p2 = m.displayPosition;
+                    let _p1 = m.displayPosition; // Fallback
+                    let _p2 = m.displayPosition;
 
                     // Try to get actual points for mode detection
                     const info1 = getEntityInfo(candidates[0], sketch);
                     const info2 = getEntityInfo(candidates[1], sketch);
 
                     if (info1?.pos && info2?.pos) {
-                        p1 = info1.pos;
-                        p2 = info2.pos;
+                        _p1 = info1.pos;
+                        _p2 = info2.pos;
                     } else if (info1?.type === 'line' && info2?.type === 'line') {
                         // Parallel lines?
                         // ...
@@ -285,9 +292,9 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
                     }
 
                     proposed = { label: type, type: type as any, value: m.result.Distance.value, isValid: true };
-                } else if (m.result.Angle) {
+                } else if ('Angle' in m.result) {
                     proposed = { label: "Angle", type: "Angle", value: m.result.Angle.value, isValid: true };
-                } else if (m.result.Radius) {
+                } else if ('Radius' in m.result) {
                     proposed = { label: "Radius", type: "Radius", value: m.result.Radius.value, isValid: true };
                 }
             }
@@ -306,7 +313,7 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
     createEffect(() => {
         // Dimension Preview Effect
         const sel = dimensionSelection();
-        const mousePos = dimensionMousePosition();
+        const _mousePos = dimensionMousePosition();
         if (sel.length > 0) {
             analyzeDimensionSelection(sel);
         } else {
@@ -394,24 +401,27 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
 
         const updated = { ...sketch };
         const constraints = [...updated.constraints];
-        const c = constraints[constraintIndex];
+        const entry = constraints[constraintIndex];
+
+        // Deep clone for safety
+        const newEntry = JSON.parse(JSON.stringify(entry));
+
+        // Access the actual constraint within the entry
+        const c = newEntry.constraint || newEntry;
 
         // Update offset in style
-        // ... (Logic from useSketching handles mutable update or replacement)
-        // Deep clone for safety
-        const newC = JSON.parse(JSON.stringify(c));
+        if (c.Distance && c.Distance.style) c.Distance.style.offset = newOffset;
+        else if (c.HorizontalDistance && c.HorizontalDistance.style) c.HorizontalDistance.style.offset = newOffset;
+        else if (c.VerticalDistance && c.VerticalDistance.style) c.VerticalDistance.style.offset = newOffset;
+        else if (c.Angle && c.Angle.style) c.Angle.style.offset = newOffset;
+        else if (c.Radius && c.Radius.style) c.Radius.style.offset = newOffset;
+        else if (c.DistancePointLine && c.DistancePointLine.style) c.DistancePointLine.style.offset = newOffset;
+        else if (c.DistanceParallelLines && c.DistanceParallelLines.style) c.DistanceParallelLines.style.offset = newOffset;
 
-        if (newC.Distance) newC.Distance.style.offset = newOffset;
-        else if (newC.HorizontalDistance) newC.HorizontalDistance.style.offset = newOffset;
-        else if (newC.VerticalDistance) newC.VerticalDistance.style.offset = newOffset;
-        // ...
-
-        constraints[constraintIndex] = newC;
+        constraints[constraintIndex] = newEntry;
         updated.constraints = constraints;
         setCurrentSketch(updated);
-        // Do NOT send update on every drag frame? Or yes?
-        // Original code did NOT send update, just local state? 
-        // Original: setCurrentSketch(updated); NO sendSketchUpdate.
+        // Do NOT send update on every drag frame - only update local state
     };
 
     const handleMeasurementClearPending = () => {
@@ -425,6 +435,8 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
 
     return {
         dimensionProposedAction,
+        setDimensionProposedAction,
+        analyzeDimensionSelection,
         dimensionPlacementMode,
         setDimensionPlacementMode,
         activeMeasurements,

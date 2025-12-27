@@ -9,7 +9,7 @@ export class CircleTool extends BaseTool {
     private centerSnap: SnapPoint | null = null;
     private previewId = "preview_circle";
 
-    onMouseDown(u: number, v: number, e?: MouseEvent): void {
+    onMouseDown(u: number, v: number, __e?: MouseEvent): void {
         const snap = this.context.snapPoint;
         let effectivePoint: [number, number] = [u, v];
 
@@ -28,7 +28,7 @@ export class CircleTool extends BaseTool {
         }
     }
 
-    onMouseMove(u: number, v: number, e?: MouseEvent): void {
+    onMouseMove(u: number, v: number, __e?: MouseEvent): void {
         if (!this.centerPoint) return;
 
         const snap = this.context.snapPoint;

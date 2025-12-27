@@ -6,7 +6,7 @@ import type { SelectionCandidate } from "../types";
 export class DimensionTool extends BaseTool {
     id = "dimension";
 
-    onMouseDown(u: number, v: number, _e?: MouseEvent): void {
+    onMouseDown(u: number, v: number, __e?: MouseEvent): void {
         const rawPoint: [number, number] = [u, v];
         const sketch = this.context.sketch;
 
@@ -63,7 +63,7 @@ export class DimensionTool extends BaseTool {
         }
     }
 
-    onMouseMove(u: number, v: number, _e?: MouseEvent): void {
+    onMouseMove(u: number, v: number, __e?: MouseEvent): void {
         this.context.setDimensionMousePosition?.([u, v]);
     }
 }
