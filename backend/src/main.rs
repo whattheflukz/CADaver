@@ -52,6 +52,7 @@ enum WebSocketCommand {
     ToggleSuppression { id: uuid::Uuid },
     SetRollback { id: Option<uuid::Uuid> },
     ReorderFeature { id: uuid::Uuid, new_index: usize },
+    InsertFeature { feature_type: String, name: String, after_id: Option<uuid::Uuid>, dependencies: Option<Vec<uuid::Uuid>> },
 }
 
 #[derive(Deserialize, Debug)]
@@ -498,6 +499,45 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             let _ = socket.send(Message::Text(format!("ERROR_UPDATE:{}", error))).await;
                         }
                     }
+                }
+
+                WebSocketCommand::InsertFeature { feature_type, name, after_id, dependencies } => {
+                    let ft = match feature_type.as_str() {
+                        "Sketch" => cad_core::features::types::FeatureType::Sketch,
+                        "Extrude" => cad_core::features::types::FeatureType::Extrude,
+                        "Revolve" => cad_core::features::types::FeatureType::Revolve,
+                        "Cut" => cad_core::features::types::FeatureType::Cut,
+                        _ => {
+                            let error = serde_json::json!({
+                                "code": "INSERT_FAILED",
+                                "message": format!("Unknown feature type: {}", feature_type),
+                                "severity": "error"
+                            });
+                            let _ = socket.send(Message::Text(format!("ERROR_UPDATE:{}", error))).await;
+                            continue;
+                        }
+                    };
+                    
+                    let mut feature = cad_core::features::types::Feature::new(&name, ft);
+                    if let Some(deps) = dependencies {
+                        feature.dependencies = deps.iter().map(|u| cad_core::topo::EntityId::from_uuid(*u)).collect();
+                    }
+                    
+                    let after_entity_id = after_id.map(cad_core::topo::EntityId::from_uuid);
+                    
+                    let (json_update, program) = {
+                        let mut graph = state.graph.write().unwrap();
+                        let success = graph.insert_node_at(feature, after_entity_id);
+                        if !success && after_id.is_some() {
+                            // Log warning but continue
+                            tracing::warn!("Insert after ID not found, inserted at end");
+                        }
+                        let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                        let program = graph.regenerate();
+                        (json, program)
+                    };
+                    let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json_update))).await;
+                    process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await;
                 }
             }
         }

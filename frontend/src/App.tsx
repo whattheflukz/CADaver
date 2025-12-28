@@ -433,6 +433,18 @@ const App: Component = () => {
             rollbackPoint={graph().rollback_point ?? null}
             onSetRollback={setRollback}
             onReorderFeature={reorderFeature}
+            onInsertAfter={(afterId, featureType) => {
+              const name = `${featureType} ${Object.keys(graph().nodes).length + 1}`;
+              console.log("Sending InsertFeature command:", { feature_type: featureType, name, after_id: afterId });
+              send({
+                command: 'InsertFeature',
+                payload: {
+                  feature_type: featureType,
+                  name,
+                  after_id: afterId
+                }
+              });
+            }}
           />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>

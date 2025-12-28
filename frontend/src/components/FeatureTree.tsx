@@ -18,6 +18,7 @@ interface FeatureTreeProps {
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
     onReorderFeature?: (id: string, newIndex: number) => void;
+    onInsertAfter?: (afterId: string, featureType: string) => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -111,12 +112,35 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
         setDropTargetIndex(null);
     };
 
+    // Context menu state
+    const [contextMenu, setContextMenu] = createSignal<{ x: number, y: number, featureId: string } | null>(null);
+
+    const handleContextMenu = (e: MouseEvent, id: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({ x: e.clientX, y: e.clientY, featureId: id });
+    };
+
+    const closeContextMenu = () => setContextMenu(null);
+
+    const handleInsertSketch = () => {
+        const menu = contextMenu();
+        if (menu && props.onInsertAfter) {
+            props.onInsertAfter(menu.featureId, 'Sketch');
+        }
+        closeContextMenu();
+    };
+
+    // Close context menu on outside click
+    const handleTreeClick = () => closeContextMenu();
+
     return (
-        <div class="feature-tree">
+        <div class="feature-tree" onClick={handleTreeClick}>
             <div class="feature-tree-header">
                 <h3>Model Tree</h3>
             </div>
             <div class="feature-list">
+
                 {/* Variables Node - Always at top */}
                 <div class="feature-block">
                     <div
@@ -208,9 +232,10 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                     onDragEnd={handleDragEnd}
                                     onClick={() => props.onSelect(id)}
                                     onDblClick={() => props.onSetRollback?.(isRollbackPoint() ? null : id)}
+                                    onContextMenu={(e) => handleContextMenu(e, id)}
                                     onMouseEnter={() => setHoverFeatureId(id)}
                                     onMouseLeave={() => setHoverFeatureId(null)}
-                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Drag to reorder • Double-click to set rollback"}
+                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Right-click for options • Drag to reorder"}
                                 >
                                     {/* Delete button - far left, separated */}
                                     <span
@@ -301,6 +326,34 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                     )
                 }
             </div>
+            {/* Context Menu - Moved to root to avoid overflow/event issues */}
+            <Show when={contextMenu()}>
+                {(menu) => (
+                    <div
+                        class="feature-context-menu"
+                        style={{
+                            position: 'fixed',
+                            left: `${menu().x}px`,
+                            top: `${menu().y}px`,
+                            'z-index': 1000
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                    >
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                console.log("Insert Sketch After clicked, featureId:", menu().featureId);
+                                handleInsertSketch();
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                        >
+                            + Insert Sketch After
+                        </button>
+                    </div>
+                )}
+            </Show>
         </div>
     );
 };
@@ -433,7 +486,9 @@ const ExtrudeControls: Component<{ feature: Feature, onUpdate: (params: Record<s
                     🔄 Flip Direction
                 </button>
             </div>
-        </div>
+
+
+        </div >
     );
 };
 

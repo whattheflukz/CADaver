@@ -514,7 +514,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Rollback & roll-forward preview
 - [x] Feature suppression
 - [x] Feature reordering (with constraints)
-- [ ] Insert/replace features mid-tree
+- [x] Insert/replace features mid-tree
 - [x] Dependency visualization
 
 ---

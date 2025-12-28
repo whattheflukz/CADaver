@@ -439,3 +439,35 @@
 .feature-block.drop-target {
     transform: translateY(2px);
 }
+
+/* Context Menu Styles */
+.feature-context-menu {
+    background: #2d2d2d;
+    border: 1px solid #555;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    padding: 4px;
+    min-width: 180px;
+    z-index: 9999 !important;
+    pointer-events: auto !important;
+}
+
+.feature-context-menu button {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    color: #e0e0e0;
+    text-align: left;
+    cursor: pointer !important;
+    border-radius: 4px;
+    font-size: 13px;
+    pointer-events: auto !important;
+    user-select: none;
+}
+
+.feature-context-menu button:hover {
+    background: #3a3a3a;
+    color: #fff;
+}

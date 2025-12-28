@@ -46,6 +46,39 @@ impl FeatureGraph {
         self.nodes.insert(feature.id, feature);
     }
 
+    /// Insert a node at a specific position (after the specified feature).
+    /// If after_id is None, inserts at the beginning.
+    /// Returns true if insertion succeeded, false if after_id not found.
+    pub fn insert_node_at(&mut self, feature: Feature, after_id: Option<EntityId>) -> bool {
+        let feature_id = feature.id;
+        
+        // Add to nodes map
+        self.nodes.insert(feature_id, feature);
+        
+        // Ensure sort order is computed
+        if self.sort_order.is_empty() {
+            let _ = self.sort();
+        }
+        
+        // Find insertion position
+        let insert_pos = match after_id {
+            Some(aid) => {
+                if let Some(pos) = self.sort_order.iter().position(|&id| id == aid) {
+                    pos + 1  // Insert after the specified feature
+                } else {
+                    // after_id not found - still add the node but at end
+                    self.sort_order.push(feature_id);
+                    return false;
+                }
+            }
+            None => 0  // Insert at beginning
+        };
+        
+        // Insert at position
+        self.sort_order.insert(insert_pos, feature_id);
+        true
+    }
+
     pub fn remove_node(&mut self, id: EntityId) -> Option<Feature> {
         self.sort_order.clear();
         // Also need to check if anything depends on this?
