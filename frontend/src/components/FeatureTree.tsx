@@ -14,11 +14,14 @@ interface FeatureTreeProps {
     onToggleExpand: (id: string) => void;
     onUpdateFeature?: (id: string, params: Record<string, any>) => void;
     onEditSketch?: (id: string) => void;
+    onEditExtrude?: (id: string) => void;
     onOpenVariables?: () => void;
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
     onReorderFeature?: (id: string, newIndex: number) => void;
+    onReorderFeature?: (id: string, newIndex: number) => void;
     onInsertAfter?: (afterId: string, featureType: string) => void;
+    onExtrudeSketch?: (id: string) => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -275,7 +278,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                 if (feature().feature_type === 'Sketch') {
                                                     props.onEditSketch?.(id);
                                                 } else {
-                                                    props.onSelect(id);
+                                                    props.onEditExtrude?.(id);
                                                 }
                                             }}
                                             title="Edit Feature"
@@ -351,6 +354,26 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                         >
                             + Insert Sketch After
                         </button>
+                        {props.graph.nodes[menu().featureId]?.feature_type === 'Sketch' && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    // We need a way to trigger extrude from here. 
+                                    // FeatureTree doesn't have direct access to handleExtrude.
+                                    // We can add a prop `onExtrudeSketch`?
+                                    // Or reuse onUpdateFeature? No.
+                                    // Let's assume we can pass a new prop.
+                                    if (props.onExtrudeSketch) {
+                                        props.onExtrudeSketch(menu().featureId);
+                                    }
+                                    closeContextMenu();
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                            >
+                                ⬆️ Extrude
+                            </button>
+                        )}
                     </div>
                 )}
             </Show>

@@ -46,7 +46,7 @@ export function useSketchLifecycle(props: UseSketchLifecycleProps) {
 
     // --- Local State ---
     const [originalSketch, setOriginalSketch] = createSignal<Sketch | null>(null);
-    const [autostartNextSketch, setAutostartNextSketch] = createSignal(false);
+    const [autostartNextSketch, setAutostartNextSketch] = createSignal<string | null>(null);
 
     // --- Handlers ---
 
@@ -173,27 +173,20 @@ export function useSketchLifecycle(props: UseSketchLifecycleProps) {
     // --- Effects ---
 
     createEffect(() => {
-        // If autostart flag is true, scan for a new sketch that matches naming pattern
-        // or just the latest sketch, and trigger startSketch on it.
-        if (autostartNextSketch()) {
+        // If autostart flag is set (contains target name), scan for a new sketch that matches the name
+        // and trigger startSketch on it.
+        const targetName = autostartNextSketch();
+        if (targetName) {
             const nodes = graph().nodes;
-            // Heuristic: find the sketch with the highest number "Sketch N"
-            let maxN = 0;
-            let targetId: string | null = null;
 
-            Object.values(nodes).forEach((node: Feature) => {
-                if (node.feature_type === "Sketch" && node.name.startsWith("Sketch ")) {
-                    const n = parseInt(node.name.replace("Sketch ", ""));
-                    if (!isNaN(n) && n > maxN) {
-                        maxN = n;
-                        targetId = node.id;
-                    }
-                }
-            });
+            // Find the feature with the matching name
+            const matchingNode = Object.values(nodes).find(
+                (node: Feature) => node.feature_type === "Sketch" && node.name === targetName
+            );
 
-            if (targetId) {
-                setAutostartNextSketch(false); // Reset flag
-                handleStartSketch(targetId);
+            if (matchingNode) {
+                setAutostartNextSketch(null); // Reset flag
+                handleStartSketch(matchingNode.id);
             }
         }
     });

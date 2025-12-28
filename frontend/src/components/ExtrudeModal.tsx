@@ -452,6 +452,36 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
                             </button>
                         </div>
                     </div>
+
+                    {/* Sketch Dependency Warning / Selector */}
+                    {!sketchId() && (
+                        <div class="bg-yellow-900/50 border border-yellow-600 p-2 rounded mb-2">
+                            <div class="text-xs text-yellow-200 mb-1">⚠️ No sketch selected!</div>
+                            <select
+                                class="w-full bg-gray-800 text-white text-xs p-1 rounded border border-gray-600"
+                                onChange={(e) => {
+                                    const val = e.currentTarget.value;
+                                    if (val) {
+                                        // Update dependency
+                                        props.onUpdate(props.featureId, { dependencies: [val] });
+                                        // Trigger region request
+                                        setTimeout(() => {
+                                            if (props.onRequestRegions) props.onRequestRegions(val);
+                                        }, 100);
+                                    }
+                                }}
+                            >
+                                <option value="">-- Select a Sketch --</option>
+                                {Object.values(props.graph?.nodes || {})
+                                    .filter(n => n.feature_type === 'Sketch')
+                                    .map(n => (
+                                        <option value={n.id}>{n.name}</option>
+                                    ))
+                                }
+                            </select>
+                        </div>
+                    )}
+
                     <div
                         class="rounded border border-gray-600 overflow-hidden"
                         style={{ "max-height": "140px", display: "flex", "flex-direction": "column" }}

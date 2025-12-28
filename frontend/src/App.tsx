@@ -40,6 +40,8 @@ const App: Component = () => {
   const [deleteConfirmation, setDeleteConfirmation] = createSignal<{ id: string, name: string } | null>(null);
   const [treeExpanded, setTreeExpanded] = createSignal<Record<string, boolean>>({});
   const [pendingExtrude, setPendingExtrude] = createSignal(false);
+  const [pendingExtrudeName, setPendingExtrudeName] = createSignal<string | null>(null);
+  const [editingExtrudeId, setEditingExtrudeId] = createSignal<string | null>(null);
   // For region click detection in extrude mode
   const [regionClickPoint, setRegionClickPoint] = createSignal<[number, number] | null>(null);
   // Command Palette state
@@ -80,7 +82,7 @@ const App: Component = () => {
     setRollback,
     reorderFeature,
   } = useMicrocadConnection({
-    autostartNextSketch: () => false, // Legacy: Disabled, handled by useSketching
+    autostartNextSketch: () => null, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
     onAutoStartSketch: () => { },
     onSketchSolved: (id: string, sketch: Sketch) => { }
@@ -158,10 +160,57 @@ const App: Component = () => {
   };
 
 
+  // Helper to find relevant sketch ID from selection
+  const findSketchIdFromSelection = (currentSelection: any[]): string | null => {
+    const nodes = graph().nodes;
+    let foundId: string | null = null;
+
+    for (const sel of currentSelection) {
+      // Case A: TopoId (from backend/Solids) -> { feature_id: "...", ... }
+      const fId = sel.feature_id || (typeof sel === 'object' && sel.feature_id ? sel.feature_id : null);
+
+      if (fId) {
+        // Handle potential object wrapper { EntityId: "uuid" } or just string
+        const idStr = typeof fId === 'string' ? fId : (fId.EntityId || String(fId));
+        const feat = nodes[idStr];
+        if (feat) {
+          if (feat.feature_type === 'Sketch') {
+            foundId = idStr;
+            break;
+          } else if (feat.feature_type === 'Extrude') {
+            // If we selected a solid face/vertex, use its base sketch
+            if (feat.dependencies && feat.dependencies.length > 0) {
+              foundId = feat.dependencies[0];
+              break;
+            }
+          }
+        }
+      }
+
+      // Case B: Sketch Entity Selection -> { id: "entity_uuid", type: "entity"|"point" }
+      // We need to find which Sketch Feature contains this entity ID
+      if (sel.id && (sel.type === 'entity' || sel.type === 'point')) {
+        const entId = sel.id;
+        // Search all sketch features
+        for (const node of Object.values(nodes)) {
+          if (node.feature_type === 'Sketch' && node.parameters?.sketch_data?.Sketch?.entities) {
+            const entities = node.parameters.sketch_data.Sketch.entities as SketchEntity[];
+            if (entities.some(e => e.id === entId)) {
+              foundId = node.id;
+              break;
+            }
+          }
+        }
+        if (foundId) break;
+      }
+    }
+    return foundId;
+  };
+
   // Send sketch update to backend to run solver and update geometry live
-  const handleExtrude = () => {
+  const handleExtrude = (targetSketchId?: string) => {
     // If a sketch is selected, use it as dependency
-    let depId: string | null = null;
+    let depId: string | null = targetSketchId || null;
     const selectedId = selectedFeature();
     const currentSelection = selection();
 
@@ -177,46 +226,7 @@ const App: Component = () => {
 
     // 2. Try Viewport Selection (if no tree selection found)
     if (!depId && currentSelection.length > 0) {
-      // Look for any selected entity that belongs to a sketch
-      for (const sel of currentSelection) {
-        // Case A: TopoId (from backend/Solids) -> { feature_id: "...", ... }
-        const fId = sel.feature_id || (typeof sel === 'object' && sel.feature_id ? sel.feature_id : null);
-
-        if (fId) {
-          // Handle potential object wrapper { EntityId: "uuid" } or just string
-          const idStr = typeof fId === 'string' ? fId : (fId.EntityId || String(fId));
-          const feat = nodes[idStr];
-          if (feat) {
-            if (feat.feature_type === 'Sketch') {
-              depId = idStr;
-              break;
-            } else if (feat.feature_type === 'Extrude') {
-              // If we selected a solid face/vertex, use its base sketch
-              if (feat.dependencies && feat.dependencies.length > 0) {
-                depId = feat.dependencies[0];
-                break;
-              }
-            }
-          }
-        }
-
-        // Case B: Sketch Entity Selection -> { id: "entity_uuid", type: "entity"|"point" }
-        // We need to find which Sketch Feature contains this entity ID
-        if (sel.id && (sel.type === 'entity' || sel.type === 'point')) {
-          const entId = sel.id;
-          // Search all sketch features
-          for (const node of Object.values(nodes)) {
-            if (node.feature_type === 'Sketch' && node.parameters?.sketch_data?.Sketch?.entities) {
-              const entities = node.parameters.sketch_data.Sketch.entities as SketchEntity[];
-              if (entities.some(e => e.id === entId)) {
-                depId = node.id;
-                break;
-              }
-            }
-          }
-          if (depId) break;
-        }
-      }
+      depId = findSketchIdFromSelection(currentSelection);
     }
 
     // 3. Last Resort: If we still have no dependency, but only ONE sketch exists, default to it?
@@ -236,6 +246,7 @@ const App: Component = () => {
 
     const existingExtrudes = Object.values(nodes).filter(n => n.feature_type === 'Extrude').length;
     const name = `Extrude ${existingExtrudes + 1}`;
+    console.log("handleExtrude: Creating new feature with name:", name);
 
     const cmd = {
       type: "Extrude",
@@ -243,6 +254,7 @@ const App: Component = () => {
       dependencies: depId ? [depId] : []
     };
 
+    setPendingExtrudeName(name);
     setPendingExtrude(true);
     send({ command: 'CreateFeature', payload: cmd });
   };
@@ -251,32 +263,42 @@ const App: Component = () => {
 
   // Auto-select newly created extrude feature
   createEffect(() => {
-    if (pendingExtrude()) {
+    if (pendingExtrude() && pendingExtrudeName()) {
       const nodes = graph().nodes;
-      // Find the newest Extrude feature
-      // Since we don't have timestamps, we rely on the fact it was just added.
-      // Or we can find the one with the highest index/name suffix?
-      // Simplest: Find Extrude that is NOT selected (if we assume selection was cleared or on sketch)
-      // Better: Check count or look for the one we just named?
-      // Let's just grab the last Extrude in the list (assuming map keys are somewhat ordered or we search)
+      const targetName = pendingExtrudeName()!;
 
       const extrudes = Object.values(nodes).filter(n => n.feature_type === 'Extrude');
-      if (extrudes.length > 0) {
-        // Sort by creation? keys in rust map are UUIDs, random.
-        // We rely on the name we generated? `Extrude N`
-        // Let's try to match the name.
-        const existingExtrudesCount = extrudes.length;
-        // Wait, the count includes the new one.
-        // The name we generated was `Extrude ${existingExtrudes + 1}` BEFORE creation.
-        // So if we had 0, we made "Extrude 1". Now we have 1.
-        // If we had 1 ("Extrude 1"), we made "Extrude 2".
+      const match = extrudes.find(n => n.name === targetName);
 
-        const targetName = `Extrude ${existingExtrudesCount}`; // Approximately
-        const match = extrudes.find(n => n.name === targetName) || extrudes[extrudes.length - 1];
+      if (match) {
+        console.log("Found pending extrude:", match.name);
+        setSelectedFeature(match.id);
+        setEditingExtrudeId(match.id);
+        setPendingExtrude(false);
+        setPendingExtrudeName(null);
+      }
+    }
+  });
 
-        if (match) {
-          setSelectedFeature(match.id);
-          setPendingExtrude(false);
+  // Auto-link sketch to open Extrude modal (Post-selection workflow)
+  createEffect(() => {
+    const extrudeId = editingExtrudeId();
+    if (extrudeId) {
+      const extrudeNode = graph().nodes[extrudeId];
+      // If extrude exists and has NO dependencies
+      if (extrudeNode && (!extrudeNode.dependencies || extrudeNode.dependencies.length === 0)) {
+        const currentSel = selection();
+        if (currentSel.length > 0) {
+          const sketchId = findSketchIdFromSelection(currentSel);
+          if (sketchId) {
+            console.log("Auto-linking sketch to extrude:", sketchId);
+            // Update the extrude feature
+            send({ command: 'UpdateFeature', payload: { id: extrudeId, params: { dependencies: [sketchId] } } });
+            // Trigger region request
+            setTimeout(() => {
+              send({ command: 'GetRegions', payload: { id: sketchId } });
+            }, 50);
+          }
         }
       }
     }
@@ -320,13 +342,27 @@ const App: Component = () => {
         if (sketchMode()) setSketchTool('select');
         break;
       case 'action:extrude':
-        if (!sketchMode()) handleExtrude();
+        // If in sketch mode, we can extrude the current sketch immediately
+        if (sketchMode()) {
+          handleSketchFinish();
+          // We need to wait for state update? 
+          // Better: handleExtrude logic should handle "activeSketchId" if we pass it or set it.
+          // Actually, handleSketchFinish clears activeSketchId.
+          // So we should capture it first.
+          const sketchId = activeSketchId();
+          if (sketchId) {
+            // Use setTimeout to allow finish_sketch to process
+            setTimeout(() => handleExtrude(sketchId), 50);
+          }
+        } else {
+          handleExtrude();
+        }
         break;
       case 'action:new_sketch':
         if (!sketchMode() && !sketchSetupMode()) {
           const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
           const payload = { type: "Sketch", name: name };
-          setAutostartNextSketch(true);
+          setAutostartNextSketch(name);
           send({ command: 'CreateFeature', payload });
         }
         break;
@@ -399,7 +435,7 @@ const App: Component = () => {
               onClick={() => {
                 const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
                 const payload = { type: "Sketch", name: name };
-                setAutostartNextSketch(true); // Flag to auto-enter edit mode
+                setAutostartNextSketch(name); // Flag to auto-enter edit mode
                 send({ command: 'CreateFeature', payload });
               }}
               style={{ width: "100%", padding: "5px", margin: "5px 0", background: "#28a745", color: "white", border: "none", cursor: "pointer" }}
@@ -429,6 +465,7 @@ const App: Component = () => {
                 handleStartSketch(id);
               }
             }}
+            onEditExtrude={(id) => setEditingExtrudeId(id)}
             onOpenVariables={() => setShowVariablesPanel(true)}
             rollbackPoint={graph().rollback_point ?? null}
             onSetRollback={setRollback}
@@ -445,6 +482,7 @@ const App: Component = () => {
                 }
               });
             }}
+            onExtrudeSketch={handleExtrude}
           />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>
@@ -547,9 +585,9 @@ const App: Component = () => {
             clientSketch={
               sketchMode() ? currentSketch() :
                 // When extrude modal is open, pass the sketch data from extrude's dependency
-                (selectedFeature() && graph().nodes[selectedFeature()!]?.feature_type === 'Extrude' &&
-                  graph().nodes[selectedFeature()!]?.dependencies?.[0] ?
-                  graph().nodes[graph().nodes[selectedFeature()!].dependencies[0]]?.parameters?.sketch_data?.Sketch :
+                (editingExtrudeId() &&
+                  graph().nodes[editingExtrudeId()!]?.dependencies?.[0] ?
+                  graph().nodes[graph().nodes[editingExtrudeId()!].dependencies[0]]?.parameters?.sketch_data?.Sketch :
                   null)
             }
             onCanvasClick={sketchMode() ? (type, payload, event) => {
@@ -571,7 +609,7 @@ const App: Component = () => {
             previewGeometry={offsetState().isPanelOpen ? offsetState().previewGeometry : patternPreview()}
             onRegionClick={
               // Only enable region clicks when extrude modal is open
-              selectedFeature() && graph().nodes[selectedFeature()!]?.feature_type === 'Extrude'
+              editingExtrudeId()
                 ? setRegionClickPoint
                 : undefined
             }
@@ -778,14 +816,14 @@ const App: Component = () => {
 
 
         {/* Extrude Modal */}
-        {selectedFeature() && graph().nodes[selectedFeature()!]?.feature_type === 'Extrude' && (
+        {editingExtrudeId() && (
           <ExtrudeModal
-            featureId={selectedFeature()!}
-            initialParams={graph().nodes[selectedFeature()!].parameters}
+            featureId={editingExtrudeId()!}
+            initialParams={graph().nodes[editingExtrudeId()!].parameters}
             onUpdate={(id, params) => {
               send({ command: 'UpdateFeature', payload: { id, params } });
             }}
-            onClose={() => setSelectedFeature(null)}
+            onClose={() => setEditingExtrudeId(null)}
             selection={selection()}
             setSelection={setSelection}
             graph={graph()}
