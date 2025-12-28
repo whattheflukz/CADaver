@@ -41,9 +41,12 @@ impl FeatureGraph {
     }
 
     pub fn add_node(&mut self, feature: Feature) {
-        // Invalidate sort order
-        self.sort_order.clear();
-        self.nodes.insert(feature.id, feature);
+        // Append to sort order instead of clearing
+        let feature_id = feature.id;
+        self.nodes.insert(feature_id, feature);
+        if !self.sort_order.contains(&feature_id) {
+            self.sort_order.push(feature_id);
+        }
     }
 
     /// Insert a node at a specific position (after the specified feature).
@@ -80,9 +83,10 @@ impl FeatureGraph {
     }
 
     pub fn remove_node(&mut self, id: EntityId) -> Option<Feature> {
-        self.sort_order.clear();
-        // Also need to check if anything depends on this?
-        // For Phase 0/1 we will just allow deletion and let regeneration fail if broken.
+        // Remove from sort order
+        if let Some(pos) = self.sort_order.iter().position(|&x| x == id) {
+            self.sort_order.remove(pos);
+        }
         self.nodes.remove(&id)
     }
 
@@ -94,9 +98,36 @@ impl FeatureGraph {
         let mut temp_visited = HashSet::new();
 
         // Check for cycles and build order
-        for id in self.nodes.keys() {
-            if !visited.contains(id) {
-                if let Err(cycle) = self.visit(*id, &mut visited, &mut temp_visited, &mut sorted) {
+        // Stable Sort: Prioritize existing sort_order to preserve user intent for independent nodes
+        let mut keys = Vec::new();
+        let mut seen = HashSet::new();
+        
+        // 1. Add existing sorted keys that still exist
+        for id in &self.sort_order {
+            if self.nodes.contains_key(id) {
+                keys.push(*id);
+                seen.insert(*id);
+            }
+        }
+        
+        // 2. Add any remaining keys (newly added features not in sort_order)
+        let mut remaining: Vec<EntityId> = self.nodes.keys()
+            .filter(|id| !seen.contains(id))
+            .cloned()
+            .collect();
+            
+        // Sort remaining alphabetically for determinism
+        remaining.sort_by(|a, b| {
+            let na = &self.nodes[a].name;
+            let nb = &self.nodes[b].name;
+            na.cmp(nb)
+        });
+        
+        keys.extend(remaining);
+
+        for id in keys {
+            if !visited.contains(&id) {
+                if let Err(cycle) = self.visit(id, &mut visited, &mut temp_visited, &mut sorted) {
                     return Err(cycle);
                 }
             }
