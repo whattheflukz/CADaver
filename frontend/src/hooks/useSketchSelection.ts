@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createSignal, createEffect, untrack } from 'solid-js';
 import { type SelectionCandidate, type ConstraintPoint } from '../types';
 
 export function useSketchSelection(sketchTool: () => string) {
@@ -14,6 +14,38 @@ export function useSketchSelection(sketchTool: () => string) {
     // Measurement Selection
     const [measurementSelection, setMeasurementSelection] = createSignal<SelectionCandidate[]>([]);
     const [measurementPending, setMeasurementPending] = createSignal<SelectionCandidate | null>(null);
+
+    const setupToolSelectionSync = (analyzeDimensionSelection: (candidates: SelectionCandidate[]) => void) => {
+        createEffect(() => {
+            const tool = sketchTool();
+            if (tool === "dimension") {
+                const currentSketchSel = sketchSelection();
+                const currentDimSel = untrack(() => dimensionSelection());
+
+                if (currentDimSel.length === 0 && currentSketchSel.length > 0) {
+                    const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
+                    if (valid.length > 0) {
+                        console.log("Syncing sketch selection to dimension tool:", valid);
+                        setDimensionSelection(valid);
+                        analyzeDimensionSelection(valid);
+                        setSketchSelection([]);
+                    }
+                }
+            } else if (tool === "measure") {
+                const currentSketchSel = sketchSelection();
+                const currentMeasSel = untrack(() => measurementSelection());
+
+                if (currentMeasSel.length === 0 && currentSketchSel.length > 0) {
+                    const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
+                    if (valid.length > 0) {
+                        console.log("Syncing sketch selection to measure tool:", valid);
+                        setMeasurementSelection(valid);
+                        setSketchSelection([]);
+                    }
+                }
+            }
+        });
+    };
 
     const handleSelect = (topoId: any, modifier: "replace" | "add" | "remove" = "replace", send: (msg: any) => void, sketchMode: boolean) => {
         console.log("Selecting:", topoId, modifier);
@@ -98,6 +130,7 @@ export function useSketchSelection(sketchTool: () => string) {
         dimensionSelection, setDimensionSelection,
         measurementSelection, setMeasurementSelection,
         measurementPending, setMeasurementPending,
+        setupToolSelectionSync,
         handleSelect
     };
 }

@@ -39,6 +39,10 @@ export const DimensionEditModal: Component<DimensionEditModalProps> = (props) =>
         const inputExpr = inputValue();
         const newValue = parseValueOrExpression(inputExpr, props.variables);
 
+        if (import.meta.env.DEV) {
+            console.log('[DimensionEditModal] handleApply', { inputExpr, newValue });
+        }
+
         if (newValue !== null) {
             const isExpression = inputExpr.includes('@');
             props.onApply(newValue, isExpression ? inputExpr : undefined);

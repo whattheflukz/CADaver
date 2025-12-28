@@ -194,6 +194,22 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
         return null;
     };
 
+    const getCandidatePosition = (c: SelectionCandidate, sketch: any): [number, number] | null => {
+        if (c.type === "origin") return [0, 0];
+        if (c.type === "point" && c.position) return c.position;
+
+        const ent = sketch.entities.find((e: any) => e.id === c.id);
+        if (!ent) return null;
+
+        if (c.type === "point" && ent.geometry.Point) return ent.geometry.Point.pos;
+        if (c.type === "entity") {
+            if (ent.geometry.Line) return ent.geometry.Line.start;
+            if (ent.geometry.Circle) return ent.geometry.Circle.center;
+            if (ent.geometry.Arc) return ent.geometry.Arc.center;
+        }
+        return null;
+    };
+
     /**
      * Determines dimension mode based on mouse position
      */
@@ -209,27 +225,26 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
         const minY = Math.min(p1[1], p2[1]);
         const maxY = Math.max(p1[1], p2[1]);
 
-        // If mouse is strictly to the left or right of the bounding box
-        if (mousePos[0] < minX || mousePos[0] > maxX) {
-            // If reasonable within Y bounds? Onshape logic is simpler:
-            // If you are 'outside' X bounds but 'inside' Y bounds -> Vertical
-            // But simpler: "Zones". 
-            // Let's stick to the implementation:
-            // To get Vertical dim, we drag Horizontally out? 
-            // To get Horizontal dim, we drag Vertically out?
-            // Actually: Vertical Dimension measures Delta Y. It is placed to the side.
-            // Horizontal Dimension measures Delta X. It is placed above/below.
+        const [mx, my] = mousePos;
+        const outsideHorizontally = mx < minX || mx > maxX;
+        const outsideVertically = my < minY || my > maxY;
 
-            // If mouse is left/right of the box -> Vertical Dimension (showing height)
-            return "VerticalDistance";
-        }
-
-        // If mouse is strictly above or below
-        if (mousePos[1] < minY || mousePos[1] > maxY) {
+        if (outsideHorizontally && !outsideVertically) {
             return "HorizontalDistance";
+        } else if (outsideVertically && !outsideHorizontally) {
+            return "VerticalDistance";
+        } else if (outsideHorizontally && outsideVertically) {
+            const distToVerticalEdge = Math.min(Math.abs(mx - minX), Math.abs(mx - maxX));
+            const distToHorizontalEdge = Math.min(Math.abs(my - minY), Math.abs(my - maxY));
+
+            if (distToVerticalEdge < distToHorizontalEdge) {
+                return "HorizontalDistance";
+            } else {
+                return "VerticalDistance";
+            }
         }
 
-        return "Distance"; // Aligned
+        return "Distance";
     };
 
     /**
@@ -237,75 +252,247 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
      */
     const analyzeDimensionSelection = (candidates: SelectionCandidate[]) => {
         const sketch = currentSketch();
-        // ... (Logic from useSketching lines 970-1251 would go here)
-        // For brevity in this artifact, assume we port the logic fully. 
-        // I'll assume we paste the logic or call a helper. 
-        // Since I need to write the file, I must include the logic.
 
-        let proposed: any = null;
-
-        // Single Entity
         if (candidates.length === 1) {
             const c = candidates[0];
-            const info = getEntityInfo(c, sketch);
-            if (info) {
-                if (info.type === 'line' && info.entity?.geometry.Line) {
-                    // Calculate line length directly
-                    const line = info.entity.geometry.Line;
-                    const length = dist(line.start, line.end);
-                    proposed = { label: "Length", type: "Length", value: length, isValid: true };
-                } else if (info.type === 'circle' && info.entity?.geometry.Circle) {
-                    const radius = info.entity.geometry.Circle.radius;
-                    proposed = { label: "Radius", type: "Radius", value: radius, isValid: true };
-                } else if (info.type === 'arc' && info.entity?.geometry.Arc) {
-                    const radius = info.entity.geometry.Arc.radius;
-                    proposed = { label: "Radius", type: "Radius", value: radius, isValid: true };
-                }
-                // Point alone doesn't create a dimension
-            }
-        }
-        // Two Entities
-        else if (candidates.length === 2) {
-            const m = calculateMeasurement(candidates[0], candidates[1]);
-            if (m && m.result) {
-                if ('Distance' in m.result) {
-                    // Check for Horizontal/Vertical overrides
-                    // We need p1 and p2 for mode detection
-                    let _p1 = m.displayPosition; // Fallback
-                    let _p2 = m.displayPosition;
-
-                    // Try to get actual points for mode detection
-                    const info1 = getEntityInfo(candidates[0], sketch);
-                    const info2 = getEntityInfo(candidates[1], sketch);
-
-                    if (info1?.pos && info2?.pos) {
-                        _p1 = info1.pos;
-                        _p2 = info2.pos;
-                    } else if (info1?.type === 'line' && info2?.type === 'line') {
-                        // Parallel lines?
-                        // ...
+            if (c.type === "entity") {
+                const e = sketch.entities.find(ent => ent.id === c.id);
+                if (e) {
+                    if (e.geometry.Line) {
+                        const { start, end } = e.geometry.Line;
+                        const length = Math.sqrt((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2);
+                        setDimensionProposedAction({
+                            label: `Length (${length.toFixed(2)})`,
+                            type: "Length",
+                            value: length,
+                            isValid: true
+                        });
+                        setDimensionPlacementMode(true);
+                        return;
+                    } else if (e.geometry.Circle) {
+                        setDimensionProposedAction({
+                            label: `Radius (R${e.geometry.Circle.radius.toFixed(2)})`,
+                            type: "Radius",
+                            value: e.geometry.Circle.radius,
+                            isValid: true
+                        });
+                        setDimensionPlacementMode(true);
+                        return;
+                    } else if (e.geometry.Arc) {
+                        setDimensionProposedAction({
+                            label: `Radius (R${e.geometry.Arc.radius.toFixed(2)})`,
+                            type: "Radius",
+                            value: e.geometry.Arc.radius,
+                            isValid: true
+                        });
+                        setDimensionPlacementMode(true);
+                        return;
                     }
-
-                    let type = "Distance";
-                    if (info1?.pos && info2?.pos) {
-                        type = getDimensionModeFromMousePosition(info1.pos, info2.pos, dimensionMousePosition());
-                    }
-
-                    proposed = { label: type, type: type as any, value: m.result.Distance.value, isValid: true };
-                } else if ('Angle' in m.result) {
-                    proposed = { label: "Angle", type: "Angle", value: m.result.Angle.value, isValid: true };
-                } else if ('Radius' in m.result) {
-                    proposed = { label: "Radius", type: "Radius", value: m.result.Radius.value, isValid: true };
                 }
             }
+        } else if (candidates.length === 2) {
+            const [c1, c2] = candidates;
+
+            const isPointLike = (c: SelectionCandidate): boolean => {
+                if (c.type === "point" || c.type === "origin") {
+                    return true;
+                }
+                if (c.type === "entity") {
+                    const e = sketch.entities.find(ent => ent.id === c.id);
+                    return !!e?.geometry.Point;
+                }
+                return false;
+            };
+
+            if (isPointLike(c1) && isPointLike(c2)) {
+                const p1 = getCandidatePosition(c1, sketch);
+                const p2 = getCandidatePosition(c2, sketch);
+
+                if (p1 && p2) {
+                    const mousePos = dimensionMousePosition();
+                    const mode = getDimensionModeFromMousePosition(p1, p2, mousePos);
+
+                    let value = 0;
+                    let label = "";
+
+                    if (mode === "HorizontalDistance") {
+                        value = Math.abs(p2[0] - p1[0]);
+                        label = `Horizontal (${value.toFixed(2)})`;
+                    } else if (mode === "VerticalDistance") {
+                        value = Math.abs(p2[1] - p1[1]);
+                        label = `Vertical (${value.toFixed(2)})`;
+                    } else {
+                        value = Math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2);
+                        label = `Distance (${value.toFixed(2)})`;
+                    }
+
+                    setDimensionProposedAction({
+                        label,
+                        type: mode,
+                        value,
+                        isValid: true
+                    });
+                    setDimensionPlacementMode(true);
+                    return;
+                }
+            }
+
+            if ((isPointLike(c1) && c2.type === "entity") || (isPointLike(c2) && c1.type === "entity")) {
+                const pointC = isPointLike(c1) ? c1 : c2;
+                const lineC = isPointLike(c1) ? c2 : c1;
+
+                const lineEnt = sketch.entities.find(e => e.id === lineC.id);
+                if (lineEnt && lineEnt.geometry.Line) {
+                    const p = getCandidatePosition(pointC, sketch);
+                    const line = lineEnt.geometry.Line;
+
+                    if (p) {
+                        const dx = line.end[0] - line.start[0];
+                        const dy = line.end[1] - line.start[1];
+                        const len = Math.sqrt(dx * dx + dy * dy);
+
+                        if (len > 0.0001) {
+                            const nx = -dy / len;
+                            const ny = dx / len;
+
+                            const vx = p[0] - line.start[0];
+                            const vy = p[1] - line.start[1];
+
+                            const dist = Math.abs(vx * nx + vy * ny);
+
+                            setDimensionProposedAction({
+                                label: `Distance (${dist.toFixed(2)})`,
+                                type: "DistancePointLine",
+                                value: dist,
+                                isValid: true,
+                            });
+                            setDimensionPlacementMode(true);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (c1.type === "entity" && c2.type === "entity") {
+                const e1 = sketch.entities.find(e => e.id === c1.id);
+                const e2 = sketch.entities.find(e => e.id === c2.id);
+                if (e1?.geometry.Line && e2?.geometry.Line) {
+                    const l1 = e1.geometry.Line;
+                    const l2 = e2.geometry.Line;
+
+                    const dx1 = l1.end[0] - l1.start[0];
+                    const dy1 = l1.end[1] - l1.start[1];
+                    const dx2 = l2.end[0] - l2.start[0];
+                    const dy2 = l2.end[1] - l2.start[1];
+
+                    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+                    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+                    if (len1 > 0.0001 && len2 > 0.0001) {
+                        const n1x = dx1 / len1, n1y = dy1 / len1;
+                        const n2x = dx2 / len2, n2y = dy2 / len2;
+
+                        const cross = n1x * n2y - n1y * n2x;
+                        let isParallel = Math.abs(cross) < 0.1;
+
+                        const hasParallelConstraint = sketch.constraints.some(entry => {
+                            if ((entry as any).suppressed) return false;
+                            const c = (entry as any).constraint;
+                            if (c.Parallel) {
+                                const [l1id, l2id] = c.Parallel.lines;
+                                return (l1id === e1.id && l2id === e2.id) || (l1id === e2.id && l2id === e1.id);
+                            }
+                            if (c.Angle) {
+                                const [l1id, l2id] = c.Angle.lines;
+                                const sameLines = (l1id === e1.id && l2id === e2.id) || (l1id === e2.id && l2id === e1.id);
+                                const angleValue = c.Angle.value;
+                                const isZeroOrPi = Math.abs(angleValue) < 0.01 || Math.abs(angleValue - Math.PI) < 0.01;
+                                return sameLines && isZeroOrPi;
+                            }
+                            return false;
+                        });
+
+                        if (hasParallelConstraint) {
+                            isParallel = true;
+                        }
+
+                        if (isParallel) {
+                            const l2MidX = (l2.start[0] + l2.end[0]) / 2;
+                            const l2MidY = (l2.start[1] + l2.end[1]) / 2;
+
+                            const nx = -n1y;
+                            const ny = n1x;
+
+                            const vx = l2MidX - l1.start[0];
+                            const vy = l2MidY - l1.start[1];
+
+                            const dist = Math.abs(vx * nx + vy * ny);
+
+                            setDimensionProposedAction({
+                                label: `Distance (${dist.toFixed(2)})`,
+                                type: "DistanceParallelLines",
+                                value: dist,
+                                isValid: true
+                            });
+                            setDimensionPlacementMode(true);
+                            return;
+                        } else {
+                            const dot = n1x * n2x + n1y * n2y;
+                            const angle = Math.acos(Math.min(1, Math.max(-1, Math.abs(dot))));
+
+                            setDimensionProposedAction({
+                                label: `Angle (${(angle * 180 / Math.PI).toFixed(1)}°)`,
+                                type: "Angle",
+                                value: angle,
+                                isValid: true
+                            });
+                            setDimensionPlacementMode(true);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if ((c1.type === "entity" && (c2.type === "point" || c2.type === "origin")) ||
+                ((c1.type === "point" || c1.type === "origin") && c2.type === "entity")) {
+                const lineCand = c1.type === "entity" ? c1 : c2;
+                const pointCand = c1.type === "entity" ? c2 : c1;
+
+                const e = sketch.entities.find(ent => ent.id === lineCand.id);
+                if (e && e.geometry.Line) {
+                    const p = getCandidatePosition(pointCand, sketch);
+                    const { start, end } = e.geometry.Line;
+                    let dist = 0;
+
+                    if (p) {
+                        const lx = end[0] - start[0];
+                        const ly = end[1] - start[1];
+                        const len = Math.sqrt(lx * lx + ly * ly);
+                        if (len > 1e-9) {
+                            const nx = -ly / len;
+                            const ny = lx / len;
+                            const vx = p[0] - start[0];
+                            const vy = p[1] - start[1];
+                            dist = Math.abs(vx * nx + vy * ny);
+                        } else {
+                            dist = Math.sqrt((start[0] - p[0]) ** 2 + (start[1] - p[1]) ** 2);
+                        }
+                    }
+
+                    setDimensionProposedAction({
+                        label: `Distance (Point to Line) (${dist.toFixed(2)})`,
+                        type: "DistancePointLine",
+                        value: dist,
+                        isValid: true
+                    });
+                    setDimensionPlacementMode(true);
+                    return;
+                }
+            }
         }
 
-        setDimensionProposedAction(proposed);
-        if (proposed && proposed.isValid) {
-            setDimensionPlacementMode(true);
-        } else {
-            setDimensionPlacementMode(false);
-        }
+        setDimensionProposedAction(null);
+        setDimensionPlacementMode(false);
     };
 
 
@@ -333,37 +520,110 @@ export function useDimensionSystem(props: UseDimensionSystemProps) {
         const sketch = currentSketch();
         let constraint: SketchConstraint | null = null;
 
-        // ... (Logic from useSketching lines 259-368)
-        // Implementing simplified version for this artifact write, in reality I'd copy the block.
-        // Assuming the logic is copied.
-
-        // Logic copy for "Length"
         if (action.type === "Length") {
             const c = selections[0];
+            if (c && c.type === "entity") {
+                constraint = {
+                    Distance: {
+                        points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
+                        value: action.value!,
+                        style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                    }
+                };
+            }
+        } else if (action.type === "Radius") {
+            const c = selections[0];
+            if (c && c.type === "entity") {
+                constraint = {
+                    Radius: {
+                        entity: c.id,
+                        value: action.value!,
+                        style: { driven: false, offset: offsetOverride || [0.7, 0.7] }
+                    }
+                };
+            }
+        } else if (action.type === "Angle") {
+            const [c1, c2] = selections;
             constraint = {
-                Distance: {
-                    points: [{ id: c.id, index: 0 }, { id: c.id, index: 1 }],
+                Angle: {
+                    lines: [c1.id, c2.id],
                     value: action.value!,
-                    style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                    style: { driven: false, offset: [0, 1.0] }
                 }
             };
-        }
-        // ... (Other types)
-        else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
-            // Assuming point-point for simplicity of this snippet
+        } else if (action.type === "DistancePointLine") {
             const c1 = selections[0];
             const c2 = selections[1];
-            // needs robust getPoint...
-            const getPointId = (c: SelectionCandidate) => {
+            const lineCand = c1.type === "entity" ? c1 : c2;
+            const pointCand = c1.type === "entity" ? c2 : c1;
+
+            const getConstraintPoint = (c: SelectionCandidate): { id: string, index: number } => {
+                if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
                 return { id: c.id, index: c.index || 0 };
             };
 
-            if (action.type === "VerticalDistance") {
-                constraint = { VerticalDistance: { points: [getPointId(c1), getPointId(c2)], value: action.value!, style: { driven: false, offset: offsetOverride || [0, 1] } } };
-            } else if (action.type === "HorizontalDistance") {
-                constraint = { HorizontalDistance: { points: [getPointId(c1), getPointId(c2)], value: action.value!, style: { driven: false, offset: offsetOverride || [0, 1] } } };
-            } else {
-                constraint = { Distance: { points: [getPointId(c1), getPointId(c2)], value: action.value!, style: { driven: false, offset: offsetOverride || [0, 1] } } };
+            constraint = {
+                DistancePointLine: {
+                    point: getConstraintPoint(pointCand),
+                    line: lineCand.id,
+                    value: action.value!,
+                }
+            };
+        } else if (action.type === "Distance" || action.type === "HorizontalDistance" || action.type === "VerticalDistance") {
+            let p1: { id: string, index: number } | null = null;
+            let p2: { id: string, index: number } | null = null;
+
+            if (selections.length === 2) {
+                const getPoint = (c: SelectionCandidate): { id: string, index: number } | null => {
+                    if (c.type === "origin") return { id: "00000000-0000-0000-0000-000000000000", index: 0 };
+                    if (c.type === "point") return { id: c.id, index: c.index || 0 };
+                    if (c.type === "entity") return { id: c.id, index: c.index || 0 };
+                    return null;
+                };
+                p1 = getPoint(selections[0]);
+                p2 = getPoint(selections[1]);
+            } else if (selections.length === 1 && selections[0].type === 'entity') {
+                p1 = { id: selections[0].id, index: 0 };
+                p2 = { id: selections[0].id, index: 1 };
+            }
+
+            if (p1 && p2) {
+                if (action.type === "HorizontalDistance") {
+                    constraint = {
+                        HorizontalDistance: {
+                            points: [p1, p2],
+                            value: action.value!,
+                            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                        }
+                    };
+                } else if (action.type === "VerticalDistance") {
+                    constraint = {
+                        VerticalDistance: {
+                            points: [p1, p2],
+                            value: action.value!,
+                            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                        }
+                    };
+                } else {
+                    constraint = {
+                        Distance: {
+                            points: [p1, p2],
+                            value: action.value!,
+                            style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                        }
+                    };
+                }
+            }
+        } else if (action.type === "DistanceParallelLines") {
+            const [c1, c2] = selections;
+            if (c1.type === "entity" && c2.type === "entity") {
+                constraint = {
+                    DistanceParallelLines: {
+                        lines: [c1.id, c2.id],
+                        value: action.value!,
+                        style: { driven: false, offset: offsetOverride || [0, 1.0] }
+                    }
+                };
             }
         }
 

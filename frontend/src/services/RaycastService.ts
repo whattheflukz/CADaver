@@ -25,6 +25,53 @@ export interface SketchPlaneContext {
     plane: SketchPlane | null;
 }
 
+export function intersectObjectsFromClient(
+    clientX: number,
+    clientY: number,
+    ctx: RaycastingContext,
+    targets: THREE.Object3D[],
+    recursive: boolean
+): THREE.Intersection[] {
+    if (!ctx.containerRef || !ctx.camera) return [];
+
+    const rect = ctx.containerRef.getBoundingClientRect();
+    ctx.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ctx.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    ctx.raycaster.setFromCamera(ctx.mouse, ctx.camera);
+
+    return ctx.raycaster.intersectObjects(targets, recursive);
+}
+
+export function getPointerPos2D(
+    clientX: number,
+    clientY: number,
+    ctx: RaycastingContext,
+    sketchCtx: SketchPlaneContext
+): { x: number; y: number } | null {
+    if (!ctx.containerRef || !ctx.camera) return null;
+
+    if (sketchCtx.plane) {
+        const hit = getSketchPlaneIntersection(clientX, clientY, ctx, sketchCtx);
+        if (!hit) return null;
+        return { x: hit[0], y: hit[1] };
+    }
+
+    const rect = ctx.containerRef.getBoundingClientRect();
+    ctx.mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ctx.mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    ctx.raycaster.setFromCamera(ctx.mouse, ctx.camera);
+
+    const ray = ctx.raycaster.ray;
+    const denom = ray.direction.z;
+    if (Math.abs(denom) < 1e-9) return null;
+
+    const t = -ray.origin.z / denom;
+    return {
+        x: ray.origin.x + ray.direction.x * t,
+        y: ray.origin.y + ray.direction.y * t
+    };
+}
+
 /**
  * Calculate intersection point with sketch plane in local coordinates.
  */
@@ -192,6 +239,18 @@ export function worldToSketchLocal(
         x: diff.dot(xAxis),
         y: diff.dot(yAxis)
     };
+}
+
+export function getSketchPlaneMatrix(plane: SketchPlane): THREE.Matrix4 {
+    const origin = new THREE.Vector3().fromArray(plane.origin);
+    const xAxis = new THREE.Vector3().fromArray(plane.x_axis);
+    const yAxis = new THREE.Vector3().fromArray(plane.y_axis);
+    const zAxis = new THREE.Vector3().fromArray(plane.normal || [0, 0, 1]);
+
+    const matrix = new THREE.Matrix4();
+    matrix.makeBasis(xAxis, yAxis, zAxis);
+    matrix.setPosition(origin);
+    return matrix;
 }
 
 /**

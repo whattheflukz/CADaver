@@ -73,12 +73,12 @@ export async function startNewSketch(page: Page): Promise<void> {
     if (setupMode) {
         // Click at center to select the default XY plane helper
         // Using page.mouse for direct interaction with the canvas center
-        await page.mouse.click(640, 360);
+        await clickAtViewportCenter(page);
         await page.waitForTimeout(500);
 
         // Retry once if still in setup mode
         if (await getSketchSetupMode(page)) {
-            await page.mouse.click(650, 370);
+            await clickAtViewport(page, VIEWPORT.centerX + 10, VIEWPORT.centerY + 10);
             await page.waitForTimeout(500);
         }
     }

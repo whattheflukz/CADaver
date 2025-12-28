@@ -140,7 +140,8 @@ export function findSnapPoints(
     if (config.enable_origin) {
         const origin: [number, number] = [0, 0];
         const d = distance(cursor, origin);
-        if (d <= config.snap_radius) {
+        const originSnapRadius = Math.max(config.snap_radius, config.snap_radius * 4);
+        if (d <= originSnapRadius) {
             snaps.push({ position: origin, snap_type: "Origin", entity_id: null, distance: d });
         }
     }

@@ -12,6 +12,9 @@ import {
     getIntersects as doRaycastIntersects,
     getSketchPlaneIntersection as doSketchPlaneIntersection,
     getIntersectsWithPlanes as doIntersectsWithPlanes,
+    intersectObjectsFromClient as doIntersectObjectsFromClient,
+    getPointerPos2D as doGetPointerPos2D,
+    getSketchPlaneMatrix as doGetSketchPlaneMatrix,
     worldToSketchLocal,
     topoIdMatches
 } from "../services/RaycastService";
@@ -49,7 +52,6 @@ interface ViewportProps {
     // Inferred constraints for live preview during drawing
     inferredConstraints?: any[];
 }
-
 
 const Viewport: Component<ViewportProps> = (props) => {
     let containerRef: HTMLDivElement | undefined;
@@ -693,11 +695,6 @@ const Viewport: Component<ViewportProps> = (props) => {
 
         const onPointerDown = (e: PointerEvent) => {
             if (!containerRef || !props.clientSketch) return;
-            const rect = containerRef.getBoundingClientRect();
-            const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-            raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
 
             // Raycast against indicator group children (hitboxes)
             const CONSTRAINT_INDICATOR_NAME = "constraint_indicators";
@@ -714,7 +711,13 @@ const Viewport: Component<ViewportProps> = (props) => {
             if (targets.length === 0) return;
 
             // Enable recursive raycasting to catch nested hitboxes
-            const hits = raycaster.intersectObjects(targets, true);
+            const hits = doIntersectObjectsFromClient(
+                e.clientX,
+                e.clientY,
+                getRaycastContext(),
+                targets,
+                true
+            );
             console.log('[Viewport] Raycast hits:', hits.length, hits.map(h => h.object.userData));
 
             for (const hit of hits) {
@@ -763,41 +766,13 @@ const Viewport: Component<ViewportProps> = (props) => {
         const onPointerMove = (e: PointerEvent) => {
             if (!isDragging || !containerRef) return;
 
-            const rect = containerRef.getBoundingClientRect();
-            const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-            // Project mouse to world plane Z=0 (technically Camera plane, then pushed to Z=0 if we assume standard Viewport)
-            // Ideally we should intersect with the Sketch Plane itself, but Unproject+Raycast is safer generic approach.
-            // For now, unprojecting to "some point in front of camera" is sufficient if we then map relative motion?
-            // "worldPos" calculation below projects to Z=0. If sketch is at Z=100, this is wrong.
-            // BETTER: Intersect the actual sketch plane logic.
-
-            const vec = new THREE.Vector3(x, y, 0.5);
-            vec.unproject(camera);
-            const dir = vec.sub(camera.position).normalize();
-
-            // Intersect with the Sketch Plane properly
-            let worldPos: THREE.Vector3;
-            if (props.clientSketch && props.clientSketch.plane) {
-                const p = props.clientSketch.plane;
-                const planeNormal = new THREE.Vector3().fromArray(p.normal);
-                const planeOrigin = new THREE.Vector3().fromArray(p.origin);
-
-                // Ray-Plane Intersection: dist = (planeOrigin - rayOrigin) . planeNormal / (rayDir . planeNormal)
-                const rayOrigin = camera.position;
-                const denom = dir.dot(planeNormal);
-                if (Math.abs(denom) < 1e-6) return; // Parallel, no hit
-
-                const t = planeOrigin.clone().sub(rayOrigin).dot(planeNormal) / denom;
-                worldPos = rayOrigin.clone().add(dir.multiplyScalar(t));
-            } else {
-                // Fallback to Z=0
-                const distance = -camera.position.z / dir.z;
-                worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
-            }
-
-            const currentLocal = getLocalPos(worldPos);
+            const currentLocal = doGetPointerPos2D(
+                e.clientX,
+                e.clientY,
+                getRaycastContext(),
+                getSketchContext()
+            );
+            if (!currentLocal) return;
 
             if (dragType === "Distance") {
                 const dx = currentLocal.x - dragStartLocal.x;
@@ -952,40 +927,17 @@ const Viewport: Component<ViewportProps> = (props) => {
         // if (!props.tessellation || !mainMesh) return; // Moved check down
 
 
-        // Project mouse to world for preview
-        const rect = containerRef!.getBoundingClientRect();
-        const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-        const vec = new THREE.Vector3(x, y, 0.5);
-        vec.unproject(camera);
-        const dir = vec.sub(camera.position).normalize();
+        const pointerPos = doGetPointerPos2D(
+            event.clientX,
+            event.clientY,
+            getRaycastContext(),
+            getSketchContext()
+        );
+        if (!pointerPos) return;
 
-        // Calculate intersection with sketch plane or default z=0
-        let worldPos = new THREE.Vector3();
-        const matrix = new THREE.Matrix4();
-
-        if (props.clientSketch && props.clientSketch.plane) {
-            const plane = props.clientSketch.plane;
-            const origin = new THREE.Vector3().fromArray(plane.origin);
-            const xAxis = new THREE.Vector3().fromArray(plane.x_axis);
-            const yAxis = new THREE.Vector3().fromArray(plane.y_axis);
-            const zAxis = new THREE.Vector3().fromArray(plane.normal);
-
-            matrix.makeBasis(xAxis, yAxis, zAxis);
-            matrix.setPosition(origin);
-
-            const normal = zAxis.clone();
-            const denom = dir.dot(normal);
-            if (Math.abs(denom) > 0.0001) {
-                const t = origin.clone().sub(camera.position).dot(normal) / denom;
-                const hit = camera.position.clone().add(dir.clone().multiplyScalar(t));
-                // Transform Hit to Local Sketch Space
-                worldPos = hit.clone().applyMatrix4(matrix.clone().invert());
-            }
-        } else {
-            const distance = -camera.position.z / dir.z;
-            worldPos = camera.position.clone().add(dir.multiplyScalar(distance));
-        }
+        const matrix = (props.clientSketch && props.clientSketch.plane)
+            ? doGetSketchPlaneMatrix(props.clientSketch.plane)
+            : null;
 
         // Update Preview Dimension
         const PREVIEW_DIMENSION_NAME = "preview_dimension";
@@ -1004,7 +956,7 @@ const Viewport: Component<ViewportProps> = (props) => {
         // Always report when callback exists, not just when previewDimension exists,
         // so the mode can be calculated correctly based on current mouse position
         if (props.onDimensionMouseMove) {
-            props.onDimensionMouseMove([worldPos.x, worldPos.y]);
+            props.onDimensionMouseMove([pointerPos.x, pointerPos.y]);
         }
 
         if (props.previewDimension && props.previewDimension.selections.length > 0) {
@@ -1016,7 +968,7 @@ const Viewport: Component<ViewportProps> = (props) => {
             // Apply Sketch Plane Transform
             if (props.clientSketch && props.clientSketch.plane) {
                 previewGroup.matrixAutoUpdate = false;
-                previewGroup.matrix.copy(matrix);
+                previewGroup.matrix.copy(matrix!);
             }
 
             const selections = props.previewDimension.selections;
@@ -1082,7 +1034,7 @@ const Viewport: Component<ViewportProps> = (props) => {
 
                     if (type === "HorizontalDistance") {
                         // Horizontal Dimension: Extension lines vertical, Dim line horizontal
-                        const y = worldPos.y;
+                        const y = pointerPos.y;
                         // Ext lines: (p1.x, p1.y) -> (p1.x, y)
                         const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1[0], y, 0)]);
                         const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2[0], y, 0)]);
@@ -1099,7 +1051,7 @@ const Viewport: Component<ViewportProps> = (props) => {
 
                     } else if (type === "VerticalDistance") {
                         // Vertical Dimension: Extension lines horizontal, Dim line vertical
-                        const x = worldPos.x;
+                        const x = pointerPos.x;
                         // Ext lines: (p1.x, p1.y) -> (x, p1.y)
                         const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(x, p1[1], 0)]);
                         const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(x, p2[1], 0)]);
@@ -1124,8 +1076,8 @@ const Viewport: Component<ViewportProps> = (props) => {
                         const ny = dy / len;
 
                         // Project mouse to find offset
-                        const vx = worldPos.x - p1[0];
-                        const vy = worldPos.y - p1[1];
+                        const vx = pointerPos.x - p1[0];
+                        const vy = pointerPos.y - p1[1];
                         const perp = vx * -ny + vy * nx; // Perpendicular distance
 
                         const p1_ext = [p1[0] - ny * perp, p1[1] + nx * perp];
@@ -1239,24 +1191,20 @@ const Viewport: Component<ViewportProps> = (props) => {
                 if (center) {
                     const radius = props.previewDimension.value;
 
-
-
-
-
                     const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
 
-                    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(center[0], center[1], 0), new THREE.Vector3(worldPos.x, worldPos.y, 0)]);
+                    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(center[0], center[1], 0), new THREE.Vector3(pointerPos.x, pointerPos.y, 0)]);
                     previewGroup.add(new THREE.Line(lineGeo, dimMat));
 
                     const textSprite = createTextSprite("R " + radius.toFixed(2), "#00dddd", 0.03);
-                    textSprite.position.set(worldPos.x, worldPos.y, 0.02);
+                    textSprite.position.set(pointerPos.x, pointerPos.y, 0.02);
                     previewGroup.add(textSprite);
                 }
             } else if (type === "Angle") {
                 // Simplified angle preview 
                 // TODO: fully implement
                 const textSprite = createTextSprite("Angle " + (props.previewDimension.value * 180 / Math.PI).toFixed(1), "#00dddd", 0.03);
-                textSprite.position.set(worldPos.x, worldPos.y, 0.02);
+                textSprite.position.set(pointerPos.x, pointerPos.y, 0.02);
                 previewGroup.add(textSprite);
             }
 

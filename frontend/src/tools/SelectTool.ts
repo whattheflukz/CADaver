@@ -114,7 +114,46 @@ export class SelectTool extends BaseTool {
 
         const snap = this.context.snapPoint;
         if (snap && snap.entity_id) {
-            candidate = { id: snap.entity_id, type: "entity" };
+            const ent = sketch.entities.find(en => en.id === snap.entity_id);
+            if (ent && ent.geometry.Point) {
+                candidate = { id: snap.entity_id, type: "point", index: 0, position: ent.geometry.Point.pos };
+            } else if (ent && ent.geometry.Line) {
+                if (snap.snap_type === "Endpoint") {
+                    const distStart = Math.sqrt(
+                        (snap.position[0] - ent.geometry.Line.start[0]) ** 2 +
+                        (snap.position[1] - ent.geometry.Line.start[1]) ** 2
+                    );
+                    const distEnd = Math.sqrt(
+                        (snap.position[0] - ent.geometry.Line.end[0]) ** 2 +
+                        (snap.position[1] - ent.geometry.Line.end[1]) ** 2
+                    );
+                    const index = distStart < distEnd ? 0 : 1;
+                    candidate = {
+                        id: snap.entity_id,
+                        type: "point",
+                        index,
+                        position: index === 0 ? ent.geometry.Line.start : ent.geometry.Line.end
+                    };
+                } else {
+                    candidate = { id: snap.entity_id, type: "entity" };
+                }
+            } else if (ent && ent.geometry.Circle) {
+                if (snap.snap_type === "Center") {
+                    candidate = { id: snap.entity_id, type: "point", index: 0, position: ent.geometry.Circle.center };
+                } else {
+                    candidate = { id: snap.entity_id, type: "entity" };
+                }
+            } else if (ent && ent.geometry.Arc) {
+                if (snap.snap_type === "Center") {
+                    candidate = { id: snap.entity_id, type: "point", index: 0, position: ent.geometry.Arc.center };
+                } else {
+                    candidate = { id: snap.entity_id, type: "entity" };
+                }
+            } else {
+                candidate = { id: snap.entity_id, type: "entity" };
+            }
+        } else if (snap && snap.snap_type === "Origin") {
+            candidate = { id: "origin", type: "origin", position: [0, 0] };
         } else if (match) {
             candidate = { id: match.id, type: match.type };
         }

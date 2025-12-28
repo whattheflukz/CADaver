@@ -322,57 +322,7 @@ export function useSketching(props: UseSketchingProps) {
   const handleSelect = (topoId: string | null, modifier: "replace" | "add" | "remove" = "replace") => {
     sel.handleSelect(topoId, modifier, send, sketchMode());
   };
-  /* ===== SYNC SKETCH SELECTION TO TOOL SELECTION ===== */
-  createEffect(() => {
-    const tool = sketchTool();
-    if (tool === "dimension") {
-      // When entering dimension mode, if there is an existing sketch selection, adopt it.
-      // But only if dimensionSelection is empty to avoid overwriting ongoing work.
-      const currentSketchSel = sketchSelection();
-      const currentDimSel = untrack(() => dimensionSelection());
-
-      if (currentDimSel.length === 0 && currentSketchSel.length > 0) {
-        // Filter to valid candidates for dimensioning
-        const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
-        if (valid.length > 0) {
-          console.log("Syncing sketch selection to dimension tool:", valid);
-          setDimensionSelection(valid);
-          analyzeDimensionSelection(valid);
-          // Clear sketch selection after adopting
-          setSketchSelection([]);
-        }
-      }
-    } else if (tool === "measure") {
-      // Similar logic for measure tool
-      const currentSketchSel = sketchSelection();
-      const currentMeasSel = untrack(() => measurementSelection());
-
-      if (currentMeasSel.length === 0 && currentSketchSel.length > 0) {
-        const valid = currentSketchSel.filter(s => s.type === 'entity' || s.type === 'point' || s.type === 'origin');
-        if (valid.length > 0) {
-          console.log("Syncing sketch selection to measure tool:", valid);
-          setMeasurementSelection(valid);
-          setSketchSelection([]);
-        }
-      }
-    }
-  });
-  /* ===== DIMENSION PREVIEW EFFECT ===== */
-  createEffect(() => {
-    // When dimension selection OR mouse position changes, update the proposed action (preview)
-    const sel = dimensionSelection();
-    dimensionMousePosition(); // Track mouse position for reactivity
-    // console.log("[DimPreview Effect] Selection changed:", sel.length, "items, mouse:", mousePos);
-    if (sel.length > 0) {
-      analyzeDimensionSelection(sel);
-      // console.log("[DimPreview Effect] After analyze:", {
-      //   proposedAction: dimensionProposedAction(),
-      //   placementMode: dimensionPlacementMode()
-      // });
-    } else {
-      setDimensionProposedAction(null);
-    }
-  });
+  sel.setupToolSelectionSync(analyzeDimensionSelection);
   // Handle dimension text drag to update offset
   const handleSketchDelete = () => {
     const selection = sketchSelection();
@@ -426,21 +376,114 @@ export function useSketching(props: UseSketchingProps) {
       setConstructionMode(!constructionMode());
     }
   };
-  // ===== UNIFIED DIMENSION TOOL (Multi-step) =====
-  const _getCandidatePosition = (c: SelectionCandidate, sketch: any): [number, number] | null => {
-    if (c.type === "origin") return [0, 0];
-    if (c.type === "point" && c.position) return c.position;
-    // Look up in sketch
-    const ent = sketch.entities.find((e: any) => e.id === c.id);
-    if (!ent) return null;
-    if (c.type === "point" && ent.geometry.Point) return ent.geometry.Point.pos;
-    if (c.type === "entity") {
-      if (ent.geometry.Line) return ent.geometry.Line.start; // Default
-      if (ent.geometry.Circle) return ent.geometry.Circle.center;
-      if (ent.geometry.Arc) return ent.geometry.Arc.center;
-    }
+
+  const ORIGIN_ENTITY_ID = "00000000-0000-0000-0000-000000000000";
+
+  const getConstraintPointFromCandidate = (c: SelectionCandidate): { id: string; index: number } | null => {
+    if (c.type === 'origin') return { id: ORIGIN_ENTITY_ID, index: 0 };
+    if (c.type === 'point') return { id: c.id, index: c.index ?? 0 };
+    if (c.type === 'entity') return { id: c.id, index: c.index ?? 0 };
     return null;
   };
+
+  const getCandidatePosition2D = (c: SelectionCandidate, sketch: Sketch): [number, number] | null => {
+    if (c.type === 'origin') return [0, 0];
+    if (c.type === 'point' && c.position) return c.position;
+
+    const ent = sketch.entities.find(e => e.id === c.id);
+    if (!ent) return null;
+
+    if (ent.geometry.Point) return ent.geometry.Point.pos;
+    if (ent.geometry.Line) {
+      const idx = c.index ?? 0;
+      return idx === 1 ? ent.geometry.Line.end : ent.geometry.Line.start;
+    }
+    if (ent.geometry.Circle) return ent.geometry.Circle.center;
+    if (ent.geometry.Arc) return ent.geometry.Arc.center;
+    if (ent.geometry.Ellipse) return ent.geometry.Ellipse.center;
+    return null;
+  };
+
+  const resolveEntityIdFromSelectionCandidate = (c: SelectionCandidate): string | null => {
+    if (c.type === 'entity') return c.id;
+    if (c.type === 'point') return c.id;
+    return null;
+  };
+
+  createEffect(() => {
+    const tool = sketchTool();
+    if (!tool.startsWith('constraint_')) return;
+
+    const sk = currentSketch();
+    const selNow = sketchSelection();
+
+    const selectedEntityIds = Array.from(
+      new Set(
+        selNow
+          .map(resolveEntityIdFromSelectionCandidate)
+          .filter((id): id is string => !!id)
+      )
+    );
+
+    let constraint: SketchConstraint | null = null;
+
+    if (tool === 'constraint_horizontal' || tool === 'constraint_vertical') {
+      if (selectedEntityIds.length === 1) {
+        const ent = sk.entities.find(e => e.id === selectedEntityIds[0]);
+        if (ent?.geometry.Line) {
+          constraint = tool === 'constraint_horizontal'
+            ? { Horizontal: { entity: ent.id } }
+            : { Vertical: { entity: ent.id } };
+        }
+      }
+    } else if (tool === 'constraint_parallel' || tool === 'constraint_perpendicular') {
+      if (selectedEntityIds.length === 2) {
+        const e1 = sk.entities.find(e => e.id === selectedEntityIds[0]);
+        const e2 = sk.entities.find(e => e.id === selectedEntityIds[1]);
+        if (e1?.geometry.Line && e2?.geometry.Line && e1.id !== e2.id) {
+          constraint = tool === 'constraint_parallel'
+            ? { Parallel: { lines: [e1.id, e2.id] } }
+            : { Perpendicular: { lines: [e1.id, e2.id] } };
+        }
+      }
+    } else if (tool === 'constraint_equal') {
+      if (selectedEntityIds.length === 2) {
+        const e1 = sk.entities.find(e => e.id === selectedEntityIds[0]);
+        const e2 = sk.entities.find(e => e.id === selectedEntityIds[1]);
+        if (e1 && e2 && e1.id !== e2.id) {
+          constraint = { Equal: { entities: [e1.id, e2.id] } };
+        }
+      }
+    } else if (tool === 'constraint_coincident') {
+      if (selNow.length === 2) {
+        const p1 = getConstraintPointFromCandidate(selNow[0]);
+        const p2 = getConstraintPointFromCandidate(selNow[1]);
+        if (p1 && p2 && (p1.id !== p2.id || p1.index !== p2.index)) {
+          constraint = { Coincident: { points: [p1, p2] } };
+        }
+      }
+    } else if (tool === 'constraint_fix') {
+      if (selNow.length === 1) {
+        const p = getConstraintPointFromCandidate(selNow[0]);
+        const pos = getCandidatePosition2D(selNow[0], sk);
+        if (p && pos) {
+          constraint = { Fix: { point: p, position: pos } };
+        }
+      }
+    }
+
+    if (!constraint) return;
+
+    const updated = { ...sk };
+    updated.constraints = [...(updated.constraints || []), wrapConstraint(constraint)];
+    updated.history = [...(updated.history || []), { AddConstraint: { constraint } }];
+    setCurrentSketch(updated);
+    sendSketchUpdate(updated);
+    setConstraintSelection([]);
+    setSketchSelection([]);
+    setSketchTool('select');
+  });
+  // ===== UNIFIED DIMENSION TOOL (Multi-step) =====
   /**
    * Determines dimension mode based on mouse position relative to two points.
    * - Mouse outside bounding box horizontally (left/right): HorizontalDistance
@@ -466,6 +509,9 @@ export function useSketching(props: UseSketchingProps) {
       setCursorPosition(snappedPos);
       // Track shift key for inference suppression
       setInferenceSuppress(event?.shiftKey ?? false);
+    }
+    if (type === "click") {
+      setActiveSnap(snap);
     }
     // DEBUG: Log tool state on click
     if (type === "click") {
@@ -977,6 +1023,9 @@ export function useSketching(props: UseSketchingProps) {
     if (typeof window !== 'undefined') {
       (window as any).sketchState = {
         sketchMode: sketchMode(),
+        sketchSetupMode: sketchSetupMode(),
+        activeSketchId: activeSketchId(),
+        pendingSketchId: pendingSketchId(),
         sketchTool: sketchTool(),
         currentSketch: currentSketch(),
         sketchSelection: sketchSelection(),

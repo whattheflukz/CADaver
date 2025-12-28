@@ -556,7 +556,25 @@ const App: Component = () => {
             const editing = editingDimension()!;
             const sketch = currentSketch();
             const entry = sketch.constraints[editing.constraintIndex];
-            const constraint = entry.constraint;
+            if (!entry) {
+              setEditingDimension(null);
+              return;
+            }
+
+            // Clone the constraint entry to avoid mutating existing state in-place
+            const newEntry = JSON.parse(JSON.stringify(entry));
+            const constraint = (newEntry as any).constraint ?? newEntry;
+
+            if (import.meta.env.DEV) {
+              console.log('[DimensionEdit] apply', {
+                index: editing.constraintIndex,
+                editingType: editing.type,
+                inputValue: val,
+                expr,
+                constraintKeys: constraint ? Object.keys(constraint) : null,
+                before: JSON.parse(JSON.stringify(constraint))
+              });
+            }
 
             let finalValue = val;
             if (editing.type === 'Angle') {
@@ -566,10 +584,27 @@ const App: Component = () => {
             if (editing.type === 'Distance' && constraint.Distance) {
               constraint.Distance.value = finalValue;
               if (constraint.Distance.style) {
-                // If the user typed an expression, save it. Otherwise keep it undefined (or clear it if it was there?)
-                // The previous logic was: if (isExpression) set it, else undefined.
-                // We receive expr from onApply if it was an expression.
                 constraint.Distance.style.expression = expr;
+              }
+            } else if (editing.type === 'Distance' && constraint.HorizontalDistance) {
+              constraint.HorizontalDistance.value = finalValue;
+              if (constraint.HorizontalDistance.style) {
+                constraint.HorizontalDistance.style.expression = expr;
+              }
+            } else if (editing.type === 'Distance' && constraint.VerticalDistance) {
+              constraint.VerticalDistance.value = finalValue;
+              if (constraint.VerticalDistance.style) {
+                constraint.VerticalDistance.style.expression = expr;
+              }
+            } else if (editing.type === 'Distance' && constraint.DistancePointLine) {
+              constraint.DistancePointLine.value = finalValue;
+              if (constraint.DistancePointLine.style) {
+                constraint.DistancePointLine.style.expression = expr;
+              }
+            } else if (editing.type === 'Distance' && constraint.DistanceParallelLines) {
+              constraint.DistanceParallelLines.value = finalValue;
+              if (constraint.DistanceParallelLines.style) {
+                constraint.DistanceParallelLines.style.expression = expr;
               }
             } else if (editing.type === 'Angle' && constraint.Angle) {
               constraint.Angle.value = finalValue;
@@ -581,15 +616,36 @@ const App: Component = () => {
               if (constraint.Radius.style) {
                 constraint.Radius.style.expression = expr;
               }
-            } else if (editing.type === 'Distance' && constraint.DistanceParallelLines) {
-              // DistanceParallelLines uses 'Distance' type for the modal
-              constraint.DistanceParallelLines.value = finalValue;
-              if (constraint.DistanceParallelLines.style) {
-                constraint.DistanceParallelLines.style.expression = expr;
+            } else {
+              if (import.meta.env.DEV) {
+                console.warn('[DimensionEdit] apply: no matching constraint type found', {
+                  index: editing.constraintIndex,
+                  editingType: editing.type,
+                  constraintKeys: constraint ? Object.keys(constraint) : null,
+                  constraint
+                });
               }
             }
 
-            const updatedSketch = { ...sketch };
+            if (import.meta.env.DEV) {
+              console.log('[DimensionEdit] after', {
+                index: editing.constraintIndex,
+                after: JSON.parse(JSON.stringify(constraint))
+              });
+            }
+
+            const updatedConstraints = sketch.constraints.map((c, i) =>
+              i === editing.constraintIndex ? newEntry : c
+            );
+            const updatedSketch = { ...sketch, constraints: updatedConstraints };
+
+            if (import.meta.env.DEV) {
+              console.log('[DimensionEdit] sending updated constraint entry', {
+                index: editing.constraintIndex,
+                sentEntry: updatedSketch.constraints[editing.constraintIndex]
+              });
+            }
+
             setCurrentSketch(updatedSketch);
             sendSketchUpdate(updatedSketch);
             setEditingDimension(null);
