@@ -1,5 +1,6 @@
 import { type Component } from 'solid-js';
 import { BaseModal } from './BaseModal';
+import { SelectionField } from './SelectionField';
 
 interface CircularPatternModalProps {
     centerType: 'origin' | 'point' | null;
@@ -31,20 +32,12 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
             cancelTestId="pattern-cancel"
         >
             {/* Center Selection */}
-            <div
-                onClick={() => props.onFieldFocus('center')}
-                style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
-                data-testid="pattern-center-select"
-            >
-                <div style={{
-                    "font-size": '12px',
-                    color: props.activeField === 'center' ? '#4a90e2' : '#aaa',
-                    "font-weight": props.activeField === 'center' ? 'bold' : 'normal'
-                }}>
+            <div style={{ display: 'flex', "flex-direction": 'column', gap: '4px' }}>
+                <div style={{ "font-size": '12px', color: '#aaa' }}>
                     Center Point
                 </div>
 
-                {/* Quick Origin Selection */}
+                {/* Quick Origin Selection Toggle */}
                 <div style={{ display: 'flex', gap: '8px', "margin-bottom": '4px' }}>
                     <button
                         onClick={(e) => { e.stopPropagation(); props.onCenterTypeChange('origin'); }}
@@ -81,47 +74,26 @@ export const CircularPatternModal: Component<CircularPatternModalProps> = (props
                 </div>
 
                 {props.centerType === 'point' && (
-                    <div style={{
-                        "font-size": '14px',
-                        padding: '8px',
-                        background: '#3a3a3a',
-                        "border-radius": '4px',
-                        border: props.activeField === 'center'
-                            ? '2px solid #4a90e2'
-                            : (props.selectedCenterId ? '1px solid #666' : '1px dashed #666'),
-                        color: props.selectedCenterId ? 'white' : '#888',
-                        "box-sizing": 'border-box'
-                    }}>
-                        {props.selectedCenterId ? "Point Selected" : "Select a point..."}
-                    </div>
+                    <SelectionField
+                        label="Selected Point"
+                        value={props.selectedCenterId}
+                        displayText={props.selectedCenterId ? "Point Selected" : "Select a point..."}
+                        placeholder="Select a point..."
+                        active={props.activeField === 'center'}
+                        onClick={() => props.onFieldFocus('center')}
+                        testId="pattern-center-select"
+                    />
                 )}
             </div>
 
             {/* Entities Selection */}
-            <div
+            <SelectionField
+                label="Entities to Pattern"
+                count={props.selectedEntityCount}
+                active={props.activeField === 'entities'}
                 onClick={() => props.onFieldFocus('entities')}
-                style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
-                data-testid="pattern-entities-select"
-            >
-                <div style={{
-                    "font-size": '12px',
-                    color: props.activeField === 'entities' ? '#4a90e2' : '#aaa',
-                    "font-weight": props.activeField === 'entities' ? 'bold' : 'normal'
-                }}>
-                    Entities to Pattern
-                </div>
-                <div style={{
-                    "font-size": '14px',
-                    padding: '8px',
-                    background: '#3a3a3a',
-                    "border-radius": '4px',
-                    border: props.activeField === 'entities' ? '2px solid #4a90e2' : '1px solid #666',
-                    color: 'white',
-                    "box-sizing": 'border-box'
-                }}>
-                    {props.selectedEntityCount} selected
-                </div>
-            </div>
+                testId="pattern-entities-select"
+            />
 
             {/* Count Input */}
             <div style={{ display: 'flex', "flex-direction": 'column', gap: '4px' }}>

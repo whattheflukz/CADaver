@@ -302,8 +302,8 @@ export function executeLinearPattern(
             const translated = translateEntity(targetEnt, direction, dist);
             if (translated) {
                 newEntities.push(translated);
-                // Add Equal constraint for circles
-                if (targetEnt.geometry.Circle) {
+                // Add Equal constraint for lines, circles, and arcs
+                if (targetEnt.geometry.Line || targetEnt.geometry.Circle || targetEnt.geometry.Arc) {
                     newConstraints.push({ Equal: { entities: [targetId, translated.id] } });
                 }
             }
@@ -362,8 +362,8 @@ export function executeCircularPattern(
             const rotated = rotateEntity(targetEnt, center, rotAngle);
             if (rotated) {
                 newEntities.push(rotated);
-                // Add Equal constraint for circles
-                if (targetEnt.geometry.Circle) {
+                // Add Equal constraint for lines, circles, and arcs
+                if (targetEnt.geometry.Line || targetEnt.geometry.Circle || targetEnt.geometry.Arc) {
                     newConstraints.push({ Equal: { entities: [targetId, rotated.id] } });
                 }
             }
@@ -381,3 +381,139 @@ export function executeCircularPattern(
 
     return updated;
 }
+
+// ===== PATTERN PREVIEW GENERATION =====
+// Extracted from useSketching.ts patternPreview memo
+
+/**
+ * Extended state interface for circular pattern (as used in useSketching.ts)
+ */
+export interface CircularPatternStateExtended {
+    centerId: string | null;
+    entities: string[];
+    count: number;
+    totalAngle: number;
+    activeField: 'center' | 'entities';
+    centerType: 'point' | 'origin';
+    flipDirection: boolean;
+    previewGeometry: SketchEntity[];
+}
+
+/**
+ * Generate preview entities for linear pattern without committing to sketch
+ */
+export function generateLinearPatternPreview(
+    sketch: Sketch,
+    state: LinearPatternState
+): SketchEntity[] {
+    const { direction: directionId, entities: entitiesToPattern, count, spacing, flipDirection } = state;
+    if (!directionId || entitiesToPattern.length === 0 || count < 2) return [];
+
+    const dirEnt = sketch.entities.find(e => e.id === directionId);
+    if (!dirEnt || !dirEnt.geometry.Line) return [];
+
+    const de = dirEnt.geometry.Line;
+    const dx = de.end[0] - de.start[0];
+    const dy = de.end[1] - de.start[1];
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.001) return [];
+
+    let nx = dx / len;
+    let ny = dy / len;
+    if (flipDirection) {
+        nx = -nx;
+        ny = -ny;
+    }
+    const direction: [number, number] = [nx, ny];
+
+    const newEntities: SketchEntity[] = [];
+
+    for (let copyIdx = 1; copyIdx < count; copyIdx++) {
+        const dist = spacing * copyIdx;
+        for (const targetId of entitiesToPattern) {
+            const targetEnt = sketch.entities.find(e => e.id === targetId);
+            if (!targetEnt) continue;
+
+            let newGeo: any = null;
+            if (targetEnt.geometry.Point) {
+                newGeo = { Point: { pos: translatePoint(targetEnt.geometry.Point.pos, direction, dist) } };
+            } else if (targetEnt.geometry.Line) {
+                const l = targetEnt.geometry.Line;
+                newGeo = { Line: { start: translatePoint(l.start, direction, dist), end: translatePoint(l.end, direction, dist) } };
+            } else if (targetEnt.geometry.Circle) {
+                const c = targetEnt.geometry.Circle;
+                newGeo = { Circle: { center: translatePoint(c.center, direction, dist), radius: c.radius } };
+            } else if (targetEnt.geometry.Arc) {
+                const arc = targetEnt.geometry.Arc;
+                newGeo = { Arc: { center: translatePoint(arc.center, direction, dist), radius: arc.radius, start_angle: arc.start_angle, end_angle: arc.end_angle } };
+            }
+
+            if (newGeo) {
+                newEntities.push({ id: crypto.randomUUID(), geometry: newGeo, is_construction: false });
+            }
+        }
+    }
+
+    return newEntities;
+}
+
+/**
+ * Generate preview entities for circular pattern without committing to sketch
+ */
+export function generateCircularPatternPreview(
+    sketch: Sketch,
+    state: CircularPatternStateExtended
+): SketchEntity[] {
+    const { entities: entitiesToPattern, count, flipDirection, totalAngle, centerType, centerId } = state;
+    const totalAngleRad = (flipDirection ? -1 : 1) * totalAngle * Math.PI / 180;
+    if (entitiesToPattern.length === 0 || count < 2) return [];
+
+    // Get center point
+    let center: [number, number] = [0, 0];
+    if (centerType === 'point' && centerId) {
+        const centerEnt = sketch.entities.find(e => e.id === centerId);
+        if (centerEnt?.geometry.Point) {
+            center = centerEnt.geometry.Point.pos;
+        } else if (centerEnt?.geometry.Circle) {
+            center = centerEnt.geometry.Circle.center;
+        } else if (centerEnt?.geometry.Arc) {
+            center = centerEnt.geometry.Arc.center;
+        } else {
+            if (!centerEnt) return [];
+        }
+    } else if (centerType === 'point' && !centerId) {
+        return [];
+    }
+    // If centerType === 'origin', center stays [0,0]
+
+    const newEntities: SketchEntity[] = [];
+
+    for (let copyIdx = 1; copyIdx < count; copyIdx++) {
+        const angle = totalAngleRad * copyIdx / count;
+        for (const targetId of entitiesToPattern) {
+            const targetEnt = sketch.entities.find(e => e.id === targetId);
+            if (!targetEnt) continue;
+
+            let newGeo: any = null;
+            if (targetEnt.geometry.Point) {
+                newGeo = { Point: { pos: rotatePoint(targetEnt.geometry.Point.pos, center, angle) } };
+            } else if (targetEnt.geometry.Line) {
+                const l = targetEnt.geometry.Line;
+                newGeo = { Line: { start: rotatePoint(l.start, center, angle), end: rotatePoint(l.end, center, angle) } };
+            } else if (targetEnt.geometry.Circle) {
+                const c = targetEnt.geometry.Circle;
+                newGeo = { Circle: { center: rotatePoint(c.center, center, angle), radius: c.radius } };
+            } else if (targetEnt.geometry.Arc) {
+                const arc = targetEnt.geometry.Arc;
+                newGeo = { Arc: { center: rotatePoint(arc.center, center, angle), radius: arc.radius, start_angle: arc.start_angle + angle, end_angle: arc.end_angle + angle } };
+            }
+
+            if (newGeo) {
+                newEntities.push({ id: crypto.randomUUID(), geometry: newGeo, is_construction: false });
+            }
+        }
+    }
+
+    return newEntities;
+}
+

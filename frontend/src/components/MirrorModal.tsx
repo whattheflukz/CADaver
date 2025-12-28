@@ -1,5 +1,6 @@
 import { type Component } from 'solid-js';
 import { BaseModal } from './BaseModal';
+import { SelectionField } from './SelectionField';
 
 interface MirrorModalProps {
     selectedAxis: string | null;
@@ -27,58 +28,24 @@ export const MirrorModal: Component<MirrorModalProps> = (props) => {
             cancelTestId="mirror-cancel"
         >
             {/* Mirror Axis Selection */}
-            <div
+            <SelectionField
+                label="Mirror Line"
+                value={props.selectedAxis}
+                displayText={props.selectedAxis ? "Line Selected" : "Select a line..."}
+                placeholder="Select a line..."
+                active={props.activeField === 'axis'}
                 onClick={() => props.onFieldFocus('axis')}
-                style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
-                data-testid="mirror-axis-select"
-            >
-                <div style={{
-                    "font-size": '12px',
-                    color: props.activeField === 'axis' ? '#4a90e2' : '#aaa',
-                    "font-weight": props.activeField === 'axis' ? 'bold' : 'normal'
-                }}>
-                    Mirror Line
-                </div>
-                <div style={{
-                    "font-size": '14px',
-                    padding: '8px',
-                    background: '#3a3a3a',
-                    "border-radius": '4px',
-                    border: props.activeField === 'axis'
-                        ? '2px solid #4a90e2'
-                        : (props.selectedAxis ? '1px solid #666' : '1px dashed #666'),
-                    color: props.selectedAxis ? 'white' : '#888',
-                    "box-sizing": 'border-box'
-                }}>
-                    {props.selectedAxis ? "Line Selected" : "Select a line..."}
-                </div>
-            </div>
+                testId="mirror-axis-select"
+            />
 
             {/* Entities Selection */}
-            <div
+            <SelectionField
+                label="Entities to Mirror"
+                count={props.selectedEntityCount}
+                active={props.activeField === 'entities'}
                 onClick={() => props.onFieldFocus('entities')}
-                style={{ display: 'flex', "flex-direction": 'column', gap: '4px', cursor: 'pointer' }}
-                data-testid="mirror-entities-select"
-            >
-                <div style={{
-                    "font-size": '12px',
-                    color: props.activeField === 'entities' ? '#4a90e2' : '#aaa',
-                    "font-weight": props.activeField === 'entities' ? 'bold' : 'normal'
-                }}>
-                    Entities to Mirror
-                </div>
-                <div style={{
-                    "font-size": '14px',
-                    padding: '8px',
-                    background: '#3a3a3a',
-                    "border-radius": '4px',
-                    border: props.activeField === 'entities' ? '2px solid #4a90e2' : '1px solid #666',
-                    color: 'white',
-                    "box-sizing": 'border-box'
-                }}>
-                    {props.selectedEntityCount} selected
-                </div>
-            </div>
+                testId="mirror-entities-select"
+            />
         </BaseModal>
     );
 };

@@ -7,7 +7,7 @@ export class CircleTool extends BaseTool {
     id = "circle";
     private centerPoint: [number, number] | null = null;
     private centerSnap: SnapPoint | null = null;
-    private previewId = "preview_circle";
+    private previewId: string | null = null;
 
     onMouseDown(u: number, v: number, __e?: MouseEvent): void {
         const snap = this.context.snapPoint;
@@ -21,6 +21,7 @@ export class CircleTool extends BaseTool {
             // Click 1: Center
             this.centerPoint = effectivePoint;
             this.centerSnap = snap;
+            this.previewId = crypto.randomUUID(); // Generate stable ID
         } else {
             // Click 2: Radius
             this.createCircle(this.centerPoint, effectivePoint, this.centerSnap);
@@ -45,15 +46,19 @@ export class CircleTool extends BaseTool {
         this.reset();
         // Remove preview if exists
         const sketch = this.context.sketch;
-        const entities = sketch.entities.filter(e => e.id !== this.previewId);
-        if (entities.length !== sketch.entities.length) {
-            this.context.setSketch({ ...sketch, entities });
+        if (this.previewId) {
+            const entities = sketch.entities.filter(e => e.id !== this.previewId);
+            if (entities.length !== sketch.entities.length) {
+                this.context.setSketch({ ...sketch, entities });
+            }
         }
+        this.reset();
     }
 
     private reset() {
         this.centerPoint = null;
         this.centerSnap = null;
+        this.previewId = null;
     }
 
     private createCircle(center: [number, number], pointOnRadius: [number, number], centerSnap: SnapPoint | null) {
@@ -76,7 +81,9 @@ export class CircleTool extends BaseTool {
         const sketch = { ...this.context.sketch };
 
         // Remove preview
-        sketch.entities = sketch.entities.filter(e => e.id !== this.previewId);
+        if (this.previewId) {
+            sketch.entities = sketch.entities.filter(e => e.id !== this.previewId);
+        }
 
         // Add new entity
         sketch.entities = [...sketch.entities, newEntity];
@@ -92,6 +99,8 @@ export class CircleTool extends BaseTool {
     }
 
     private updatePreview(center: [number, number], pointOnRadius: [number, number]) {
+        if (!this.previewId) return;
+
         const dx = pointOnRadius[0] - center[0];
         const dy = pointOnRadius[1] - center[1];
         const radius = Math.sqrt(dx * dx + dy * dy);

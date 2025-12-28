@@ -4,7 +4,10 @@ import { applySnapping } from '../snapUtils';
 import { useSketchUI } from './useSketchUI';
 import { useSketchSelection } from './useSketchSelection';
 import { useSketchLifecycle } from './useSketchLifecycle';
-import { executeMirror, executeLinearPattern, executeCircularPattern } from './usePatternTools';
+import { executeMirror, executeLinearPattern, executeCircularPattern, translatePoint, rotatePoint, generateLinearPatternPreview, generateCircularPatternPreview } from './usePatternTools';
+import { calculateOffsetGeometry } from '../utils/offsetGeometry';
+import { handleMirrorInput, handleLinearPatternInput, handleCircularPatternInput } from './PatternToolInput';
+import { useConstraintApplication } from './useConstraintApplication';
 interface UseSketchingProps {
   send: (msg: WebSocketCommand) => void;
   graph: Accessor<FeatureGraphState>;
@@ -87,7 +90,6 @@ export function useSketching(props: UseSketchingProps) {
         }
       };
       send({ command: 'UpdateFeature', payload: { id: payload.id, params: payload.params } });
-      console.log("Sent sketch update to backend for solving");
     }
   };
   const dim = useDimensionSystem({
@@ -151,112 +153,13 @@ export function useSketching(props: UseSketchingProps) {
     toolRegistry,
     inferredConstraints,
   } = toolHook;
-  // Pattern Preview
+  // Pattern Preview - logic extracted to usePatternTools.ts
   const patternPreview = createMemo<SketchEntity[]>(() => {
     const tool = sketchTool();
     if (tool === 'linear_pattern') {
-      const state = linearPatternState();
-      const directionId = state.direction;
-      const entitiesToPattern = state.entities;
-      const count = state.count;
-      const spacing = state.spacing;
-      const flip = state.flipDirection;
-      if (!directionId || entitiesToPattern.length === 0 || count < 2) return [];
-      const sketch = currentSketch();
-      const dirEnt = sketch.entities.find(e => e.id === directionId);
-      if (!dirEnt || !dirEnt.geometry.Line) return [];
-      const line = dirEnt.geometry.Line;
-      const dx = line.end[0] - line.start[0];
-      const dy = line.end[1] - line.start[1];
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 0.001) return [];
-      let nx = dx / len;
-      let ny = dy / len;
-      if (flip) {
-        nx = -nx;
-        ny = -ny;
-      }
-      const newEntities: SketchEntity[] = [];
-      for (let copyIdx = 1; copyIdx < count; copyIdx++) {
-        const offset = spacing * copyIdx;
-        const translate = (p: [number, number]): [number, number] => [p[0] + nx * offset, p[1] + ny * offset];
-        entitiesToPattern.forEach(targetId => {
-          const targetEnt = sketch.entities.find(e => e.id === targetId);
-          if (!targetEnt) return;
-          let newGeo: any = null;
-          if (targetEnt.geometry.Point) {
-            newGeo = { Point: { pos: translate(targetEnt.geometry.Point.pos) } };
-          } else if (targetEnt.geometry.Line) {
-            const l = targetEnt.geometry.Line;
-            newGeo = { Line: { start: translate(l.start), end: translate(l.end) } };
-          } else if (targetEnt.geometry.Circle) {
-            const c = targetEnt.geometry.Circle;
-            newGeo = { Circle: { center: translate(c.center), radius: c.radius } };
-          } else if (targetEnt.geometry.Arc) {
-            const arc = targetEnt.geometry.Arc;
-            newGeo = { Arc: { center: translate(arc.center), radius: arc.radius, start_angle: arc.start_angle, end_angle: arc.end_angle } };
-          }
-          if (newGeo) {
-            newEntities.push({ id: crypto.randomUUID(), geometry: newGeo, is_construction: false });
-          }
-        });
-      }
-      return newEntities;
+      return generateLinearPatternPreview(currentSketch(), linearPatternState());
     } else if (tool === 'circular_pattern') {
-      const state = circularPatternState();
-      const entitiesToPattern = state.entities;
-      const count = state.count;
-      const flip = state.flipDirection;
-      const totalAngleRad = (flip ? -1 : 1) * state.totalAngle * Math.PI / 180;
-      if (entitiesToPattern.length === 0 || count < 2) return [];
-      const sketch = currentSketch();
-      let center: [number, number] = [0, 0];
-      if (state.centerType === 'point' && state.centerId) {
-        const centerEnt = sketch.entities.find(e => e.id === state.centerId);
-        if (centerEnt?.geometry.Point) {
-          center = centerEnt.geometry.Point.pos;
-        } else if (centerEnt?.geometry.Circle) {
-          center = centerEnt.geometry.Circle.center;
-        } else if (centerEnt?.geometry.Arc) {
-          center = centerEnt.geometry.Arc.center;
-        } else {
-          if (!centerEnt) return [];
-        }
-      } else if (state.centerType === 'point' && !state.centerId) {
-        return [];
-      }
-      const rotate = (p: [number, number], angle: number): [number, number] => {
-        const cos = Math.cos(angle);
-        const sin = Math.sin(angle);
-        const dx = p[0] - center[0];
-        const dy = p[1] - center[1];
-        return [center[0] + dx * cos - dy * sin, center[1] + dx * sin + dy * cos];
-      };
-      const newEntities: SketchEntity[] = [];
-      for (let copyIdx = 1; copyIdx < count; copyIdx++) {
-        const angle = totalAngleRad * copyIdx / count;
-        entitiesToPattern.forEach(targetId => {
-          const targetEnt = sketch.entities.find(e => e.id === targetId);
-          if (!targetEnt) return;
-          let newGeo: any = null;
-          if (targetEnt.geometry.Point) {
-            newGeo = { Point: { pos: rotate(targetEnt.geometry.Point.pos, angle) } };
-          } else if (targetEnt.geometry.Line) {
-            const l = targetEnt.geometry.Line;
-            newGeo = { Line: { start: rotate(l.start, angle), end: rotate(l.end, angle) } };
-          } else if (targetEnt.geometry.Circle) {
-            const c = targetEnt.geometry.Circle;
-            newGeo = { Circle: { center: rotate(c.center, angle), radius: c.radius } };
-          } else if (targetEnt.geometry.Arc) {
-            const arc = targetEnt.geometry.Arc;
-            newGeo = { Arc: { center: rotate(arc.center, angle), radius: arc.radius, start_angle: arc.start_angle + angle, end_angle: arc.end_angle + angle } };
-          }
-          if (newGeo) {
-            newEntities.push({ id: crypto.randomUUID(), geometry: newGeo, is_construction: false });
-          }
-        });
-      }
-      return newEntities;
+      return generateCircularPatternPreview(currentSketch(), circularPatternState());
     }
     return [];
   });
@@ -377,112 +280,18 @@ export function useSketching(props: UseSketchingProps) {
     }
   };
 
-  const ORIGIN_ENTITY_ID = "00000000-0000-0000-0000-000000000000";
-
-  const getConstraintPointFromCandidate = (c: SelectionCandidate): { id: string; index: number } | null => {
-    if (c.type === 'origin') return { id: ORIGIN_ENTITY_ID, index: 0 };
-    if (c.type === 'point') return { id: c.id, index: c.index ?? 0 };
-    if (c.type === 'entity') return { id: c.id, index: c.index ?? 0 };
-    return null;
-  };
-
-  const getCandidatePosition2D = (c: SelectionCandidate, sketch: Sketch): [number, number] | null => {
-    if (c.type === 'origin') return [0, 0];
-    if (c.type === 'point' && c.position) return c.position;
-
-    const ent = sketch.entities.find(e => e.id === c.id);
-    if (!ent) return null;
-
-    if (ent.geometry.Point) return ent.geometry.Point.pos;
-    if (ent.geometry.Line) {
-      const idx = c.index ?? 0;
-      return idx === 1 ? ent.geometry.Line.end : ent.geometry.Line.start;
-    }
-    if (ent.geometry.Circle) return ent.geometry.Circle.center;
-    if (ent.geometry.Arc) return ent.geometry.Arc.center;
-    if (ent.geometry.Ellipse) return ent.geometry.Ellipse.center;
-    return null;
-  };
-
-  const resolveEntityIdFromSelectionCandidate = (c: SelectionCandidate): string | null => {
-    if (c.type === 'entity') return c.id;
-    if (c.type === 'point') return c.id;
-    return null;
-  };
-
-  createEffect(() => {
-    const tool = sketchTool();
-    if (!tool.startsWith('constraint_')) return;
-
-    const sk = currentSketch();
-    const selNow = sketchSelection();
-
-    const selectedEntityIds = Array.from(
-      new Set(
-        selNow
-          .map(resolveEntityIdFromSelectionCandidate)
-          .filter((id): id is string => !!id)
-      )
-    );
-
-    let constraint: SketchConstraint | null = null;
-
-    if (tool === 'constraint_horizontal' || tool === 'constraint_vertical') {
-      if (selectedEntityIds.length === 1) {
-        const ent = sk.entities.find(e => e.id === selectedEntityIds[0]);
-        if (ent?.geometry.Line) {
-          constraint = tool === 'constraint_horizontal'
-            ? { Horizontal: { entity: ent.id } }
-            : { Vertical: { entity: ent.id } };
-        }
-      }
-    } else if (tool === 'constraint_parallel' || tool === 'constraint_perpendicular') {
-      if (selectedEntityIds.length === 2) {
-        const e1 = sk.entities.find(e => e.id === selectedEntityIds[0]);
-        const e2 = sk.entities.find(e => e.id === selectedEntityIds[1]);
-        if (e1?.geometry.Line && e2?.geometry.Line && e1.id !== e2.id) {
-          constraint = tool === 'constraint_parallel'
-            ? { Parallel: { lines: [e1.id, e2.id] } }
-            : { Perpendicular: { lines: [e1.id, e2.id] } };
-        }
-      }
-    } else if (tool === 'constraint_equal') {
-      if (selectedEntityIds.length === 2) {
-        const e1 = sk.entities.find(e => e.id === selectedEntityIds[0]);
-        const e2 = sk.entities.find(e => e.id === selectedEntityIds[1]);
-        if (e1 && e2 && e1.id !== e2.id) {
-          constraint = { Equal: { entities: [e1.id, e2.id] } };
-        }
-      }
-    } else if (tool === 'constraint_coincident') {
-      if (selNow.length === 2) {
-        const p1 = getConstraintPointFromCandidate(selNow[0]);
-        const p2 = getConstraintPointFromCandidate(selNow[1]);
-        if (p1 && p2 && (p1.id !== p2.id || p1.index !== p2.index)) {
-          constraint = { Coincident: { points: [p1, p2] } };
-        }
-      }
-    } else if (tool === 'constraint_fix') {
-      if (selNow.length === 1) {
-        const p = getConstraintPointFromCandidate(selNow[0]);
-        const pos = getCandidatePosition2D(selNow[0], sk);
-        if (p && pos) {
-          constraint = { Fix: { point: p, position: pos } };
-        }
-      }
-    }
-
-    if (!constraint) return;
-
-    const updated = { ...sk };
-    updated.constraints = [...(updated.constraints || []), wrapConstraint(constraint)];
-    updated.history = [...(updated.history || []), { AddConstraint: { constraint } }];
-    setCurrentSketch(updated);
-    sendSketchUpdate(updated);
-    setConstraintSelection([]);
-    setSketchSelection([]);
-    setSketchTool('select');
+  // Constraint auto-application - extracted to useConstraintApplication.ts
+  useConstraintApplication({
+    sketchTool,
+    currentSketch,
+    sketchSelection,
+    setCurrentSketch,
+    sendSketchUpdate,
+    setConstraintSelection,
+    setSketchSelection,
+    setSketchTool
   });
+
   // ===== UNIFIED DIMENSION TOOL (Multi-step) =====
   /**
    * Determines dimension mode based on mouse position relative to two points.
@@ -538,233 +347,15 @@ export function useSketching(props: UseSketchingProps) {
       console.log("[DEBUG handleSketchInput] NOT delegating - tool is offset");
     }
     // Use snapped position for all geometry operations
-    // Apply angular snapping for line tool when we have a start point
     let effectivePoint: [number, number] = snappedPos;
-    const _tool = sketchTool();
-    const _startPt = tempPoint();
-    if (sketchTool() === "line") {
-    } else if (sketchTool() === "circle") {
-    } else if (sketchTool() === "arc") {
-    } else if (sketchTool() === "point") {
-    } else if (sketchTool() === "rectangle") {
-    } else if (sketchTool() === "mirror") {
-      if (type === "click") {
-        if (mirrorState().activeField === 'axis') {
-          // Select Axis
-          let targetId: string | null = null;
-          // Priority to snap
-          if (snap && snap.entity_id) {
-            targetId = snap.entity_id;
-          } else {
-            // Fallback to geometry hit test
-            // Simple distance check to lines
-            const p = effectivePoint;
-            let minDist = 0.5; // Threshold
-            const sketch = currentSketch();
-            for (const ent of sketch.entities) {
-              if (ent.geometry.Line) {
-                // Point to line segment distance
-                const l = ent.geometry.Line;
-                const v = [l.end[0] - l.start[0], l.end[1] - l.start[1]];
-                const w = [p[0] - l.start[0], p[1] - l.start[1]];
-                const c1 = w[0] * v[0] + w[1] * v[1];
-                const c2 = v[0] * v[0] + v[1] * v[1];
-                let b = c1 / c2;
-                if (b < 0) b = 0;
-                if (b > 1) b = 1;
-                const pb = [l.start[0] + b * v[0], l.start[1] + b * v[1]];
-                const dist = Math.sqrt((p[0] - pb[0]) ** 2 + (p[1] - pb[1]) ** 2);
-                if (dist < minDist) {
-                  minDist = dist;
-                  targetId = ent.id;
-                }
-              }
-            }
-          }
-          if (targetId) {
-            const ent = currentSketch().entities.find(e => e.id === targetId);
-            if (ent && ent.geometry.Line) {
-              setMirrorState({ ...mirrorState(), axis: ent.id, activeField: 'entities' });
-            }
-          }
-        } else {
-          // Toggle entity selection
-          let targetId: string | null = null;
-          if (snap && snap.entity_id) {
-            targetId = snap.entity_id;
-          } else {
-            // Fallback hit test for all types
-            const p = effectivePoint;
-            let minDist = 0.5;
-            const sketch = currentSketch();
-            for (const ent of sketch.entities) {
-              let dist = Infinity;
-              if (ent.geometry.Point) {
-                const ep = ent.geometry.Point.pos;
-                dist = Math.sqrt((p[0] - ep[0]) ** 2 + (p[1] - ep[1]) ** 2);
-              } else if (ent.geometry.Line) {
-                const l = ent.geometry.Line;
-                const v = [l.end[0] - l.start[0], l.end[1] - l.start[1]];
-                const w = [p[0] - l.start[0], p[1] - l.start[1]];
-                const c1 = w[0] * v[0] + w[1] * v[1];
-                const c2 = v[0] * v[0] + v[1] * v[1];
-                let b = c1 / c2;
-                if (b < 0) b = 0;
-                if (b > 1) b = 1;
-                const pb = [l.start[0] + b * v[0], l.start[1] + b * v[1]];
-                dist = Math.sqrt((p[0] - pb[0]) ** 2 + (p[1] - pb[1]) ** 2);
-              } else if (ent.geometry.Circle) {
-                const c = ent.geometry.Circle;
-                const dCenter = Math.sqrt((p[0] - c.center[0]) ** 2 + (p[1] - c.center[1]) ** 2);
-                dist = Math.abs(dCenter - c.radius);
-              } else if (ent.geometry.Arc) {
-                const a = ent.geometry.Arc;
-                const dCenter = Math.sqrt((p[0] - a.center[0]) ** 2 + (p[1] - a.center[1]) ** 2);
-                // Check angle range roughly? Or just circle distance for ease
-                dist = Math.abs(dCenter - a.radius);
-              }
-              if (dist < minDist) {
-                minDist = dist;
-                targetId = ent.id;
-              }
-            }
-          }
 
-          if (targetId && targetId !== mirrorState().axis) {
-            const current = mirrorState().entities;
-            if (current.includes(targetId)) {
-              setMirrorState({ ...mirrorState(), entities: current.filter(id => id !== targetId) });
-            } else {
-              setMirrorState({ ...mirrorState(), entities: [...current, targetId] });
-            }
-          }
-        }
-      }
-    } else if (sketchTool() === "linear_pattern") {
-      if (type === "click") {
-        const state = linearPatternState();
-        const p = effectivePoint;
-        const sketch = currentSketch();
-
-        const findHitEntity = (): string | null => {
-          if (snap && snap.entity_id) return snap.entity_id;
-          let minDist = 0.5;
-          let foundId: string | null = null;
-          for (const ent of sketch.entities) {
-            let dist = Infinity;
-            if (ent.geometry.Line) {
-              const l = ent.geometry.Line;
-              const v = [l.end[0] - l.start[0], l.end[1] - l.start[1]];
-              const w = [p[0] - l.start[0], p[1] - l.start[1]];
-              const c1 = w[0] * v[0] + w[1] * v[1];
-              const c2 = v[0] * v[0] + v[1] * v[1];
-              let b = c2 > 0 ? c1 / c2 : 0;
-              if (b < 0) b = 0; if (b > 1) b = 1;
-              const pb = [l.start[0] + b * v[0], l.start[1] + b * v[1]];
-              dist = Math.sqrt((p[0] - pb[0]) ** 2 + (p[1] - pb[1]) ** 2);
-            } else if (ent.geometry.Circle) {
-              const c = ent.geometry.Circle;
-              const dCenter = Math.sqrt((p[0] - c.center[0]) ** 2 + (p[1] - c.center[1]) ** 2);
-              dist = Math.abs(dCenter - c.radius);
-            } else if (ent.geometry.Arc) {
-              const a = ent.geometry.Arc;
-              const dCenter = Math.sqrt((p[0] - a.center[0]) ** 2 + (p[1] - a.center[1]) ** 2);
-              dist = Math.abs(dCenter - a.radius);
-            } else if (ent.geometry.Point) {
-              const ep = ent.geometry.Point.pos;
-              dist = Math.sqrt((p[0] - ep[0]) ** 2 + (p[1] - ep[1]) ** 2);
-            }
-            if (dist < minDist) {
-              minDist = dist;
-              foundId = ent.id;
-            }
-          }
-          return foundId;
-        };
-
-        if (state.activeField === 'direction') {
-          const targetId = findHitEntity();
-          if (targetId) {
-            const ent = sketch.entities.find(e => e.id === targetId);
-            if (ent && ent.geometry.Line) {
-              setLinearPatternState({ ...state, direction: ent.id, activeField: 'entities' });
-            }
-          }
-        } else {
-          const targetId = findHitEntity();
-          if (targetId && targetId !== state.direction) {
-            const current = state.entities;
-            if (current.includes(targetId)) {
-              setLinearPatternState({ ...state, entities: current.filter(id => id !== targetId) });
-            } else {
-              setLinearPatternState({ ...state, entities: [...current, targetId] });
-            }
-          }
-        }
-      }
-    } else if (sketchTool() === "circular_pattern") {
-      // Circular Pattern tool: select center point then entities
-      if (type === "click") {
-        const state = circularPatternState();
-        const p = effectivePoint;
-        const sketch = currentSketch();
-        // Hit test helper
-        const findHitEntity = (): string | null => {
-          if (snap && snap.entity_id) return snap.entity_id;
-          let minDist = 0.5;
-          let foundId: string | null = null;
-          for (const ent of sketch.entities) {
-            let dist = Infinity;
-            if (ent.geometry.Line) {
-              const l = ent.geometry.Line;
-              const v = [l.end[0] - l.start[0], l.end[1] - l.start[1]];
-              const w = [p[0] - l.start[0], p[1] - l.start[1]];
-              const c1 = w[0] * v[0] + w[1] * v[1];
-              const c2 = v[0] * v[0] + v[1] * v[1];
-              let b = c2 > 0 ? c1 / c2 : 0;
-              if (b < 0) b = 0;
-              if (b > 1) b = 1;
-              const pb = [l.start[0] + b * v[0], l.start[1] + b * v[1]];
-              dist = Math.sqrt((p[0] - pb[0]) ** 2 + (p[1] - pb[1]) ** 2);
-            } else if (ent.geometry.Circle) {
-              const c = ent.geometry.Circle;
-              const dCenter = Math.sqrt((p[0] - c.center[0]) ** 2 + (p[1] - c.center[1]) ** 2);
-              dist = Math.abs(dCenter - c.radius);
-            } else if (ent.geometry.Arc) {
-              const a = ent.geometry.Arc;
-              const dCenter = Math.sqrt((p[0] - a.center[0]) ** 2 + (p[1] - a.center[1]) ** 2);
-              dist = Math.abs(dCenter - a.radius);
-            } else if (ent.geometry.Point) {
-              const ep = ent.geometry.Point.pos;
-              dist = Math.sqrt((p[0] - ep[0]) ** 2 + (p[1] - ep[1]) ** 2);
-            }
-            if (dist < minDist) {
-              minDist = dist;
-              foundId = ent.id;
-            }
-          }
-          return foundId;
-        };
-        if (state.activeField === 'center' && state.centerType === 'point') {
-          // Select center point (any entity with a center/position)
-          const targetId = findHitEntity();
-          if (targetId) {
-            setCircularPatternState({ ...state, centerId: targetId, activeField: 'entities' });
-          }
-        } else if (state.activeField === 'entities' || state.centerType === 'origin') {
-          // For origin mode, auto-advance to entity selection
-          // Toggle entity selection (any entity type)
-          const targetId = findHitEntity();
-          if (targetId && targetId !== state.centerId) {
-            const currentEntities = state.entities;
-            if (currentEntities.includes(targetId)) {
-              setCircularPatternState({ ...state, entities: currentEntities.filter(id => id !== targetId), activeField: 'entities' });
-            } else {
-              setCircularPatternState({ ...state, entities: [...currentEntities, targetId], activeField: 'entities' });
-            }
-          }
-        }
-      }
+    // Pattern tools with extracted input handlers
+    if (sketchTool() === "mirror" && type === "click") {
+      handleMirrorInput(effectivePoint, snap, currentSketch(), mirrorState(), setMirrorState);
+    } else if (sketchTool() === "linear_pattern" && type === "click") {
+      handleLinearPatternInput(effectivePoint, snap, currentSketch(), linearPatternState(), setLinearPatternState);
+    } else if (sketchTool() === "circular_pattern" && type === "click") {
+      handleCircularPatternInput(effectivePoint, snap, currentSketch(), circularPatternState(), setCircularPatternState);
     }
   };
   function setOffsetDist(d: number) {
@@ -859,70 +450,11 @@ export function useSketching(props: UseSketchingProps) {
     setSketchTool("select");
   };
   const confirmLinearPattern = () => {
-    const directionId = linearPatternState().direction;
-    const entitiesToPattern = linearPatternState().entities;
-    const count = linearPatternState().count;
-    const spacing = linearPatternState().spacing;
-    const flip = linearPatternState().flipDirection;
-    if (!directionId || entitiesToPattern.length === 0 || count < 2) return;
-    const sketch = currentSketch();
-    const dirEnt = sketch.entities.find(e => e.id === directionId);
-    if (!dirEnt || !dirEnt.geometry.Line) return;
-    // Calculate direction vector
-    const line = dirEnt.geometry.Line;
-    const dx = line.end[0] - line.start[0];
-    const dy = line.end[1] - line.start[1];
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len < 0.001) return;
-    let nx = dx / len;
-    let ny = dy / len;
-    if (flip) {
-      nx = -nx;
-      ny = -ny;
-    }
-    const newEntities: SketchEntity[] = [];
-    const newConstraints: SketchConstraint[] = [];
-    // For each copy (starting from 1 since original is copy 0)
-    for (let copyIdx = 1; copyIdx < count; copyIdx++) {
-      const offset = spacing * copyIdx;
-      const translate = (p: [number, number]): [number, number] => [p[0] + nx * offset, p[1] + ny * offset];
-      entitiesToPattern.forEach(targetId => {
-        const targetEnt = sketch.entities.find(e => e.id === targetId);
-        if (!targetEnt) return;
-        const newId = crypto.randomUUID();
-        let newGeo: any = null;
-        if (targetEnt.geometry.Point) {
-          newGeo = { Point: { pos: translate(targetEnt.geometry.Point.pos) } };
-        } else if (targetEnt.geometry.Line) {
-          const l = targetEnt.geometry.Line;
-          newGeo = { Line: { start: translate(l.start), end: translate(l.end) } };
-          // Add Equal constraint for length
-          newConstraints.push({ Equal: { entities: [targetId, newId] } });
-        } else if (targetEnt.geometry.Circle) {
-          const c = targetEnt.geometry.Circle;
-          newGeo = { Circle: { center: translate(c.center), radius: c.radius } };
-          newConstraints.push({ Equal: { entities: [targetId, newId] } });
-        } else if (targetEnt.geometry.Arc) {
-          const arc = targetEnt.geometry.Arc;
-          newGeo = { Arc: { center: translate(arc.center), radius: arc.radius, start_angle: arc.start_angle, end_angle: arc.end_angle } };
-          newConstraints.push({ Equal: { entities: [targetId, newId] } });
-        }
-        if (newGeo) {
-          newEntities.push({ id: newId, geometry: newGeo, is_construction: false });
-        }
-      });
-    }
-    const updated = { ...currentSketch() };
-    updated.entities = [...updated.entities, ...newEntities];
-    updated.constraints = [...updated.constraints, ...newConstraints.map(c => wrapConstraint(c))];
-    updated.history = [
-      ...(updated.history || []),
-      ...newEntities.map(e => ({ AddGeometry: { id: e.id, geometry: e.geometry } })),
-      ...newConstraints.map(c => ({ AddConstraint: { constraint: c } }))
-    ];
+    const state = linearPatternState();
+    const updated = executeLinearPattern(currentSketch(), state);
+    if (!updated) return;
     setCurrentSketch(updated);
     sendSketchUpdate(updated);
-
     setLinearPatternState({ direction: null, entities: [], count: 3, spacing: 2.0, activeField: 'direction', flipDirection: false, previewGeometry: [] });
     setSketchTool("select");
   };
@@ -949,14 +481,6 @@ export function useSketching(props: UseSketchingProps) {
       }
     }
 
-    const rotate = (p: [number, number], angle: number): [number, number] => {
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      const dx = p[0] - center[0];
-      const dy = p[1] - center[1];
-      return [center[0] + dx * cos - dy * sin, center[1] + dx * sin + dy * cos];
-    };
-
     const sketch = currentSketch();
     const newEntities: SketchEntity[] = [];
     const newConstraints: SketchConstraint[] = [];
@@ -973,23 +497,23 @@ export function useSketching(props: UseSketchingProps) {
         let newGeo: any = null;
 
         if (targetEnt.geometry.Point) {
-          newGeo = { Point: { pos: rotate(targetEnt.geometry.Point.pos, angle) } };
+          newGeo = { Point: { pos: rotatePoint(targetEnt.geometry.Point.pos, center, angle) } };
         } else if (targetEnt.geometry.Line) {
           const l = targetEnt.geometry.Line;
-          newGeo = { Line: { start: rotate(l.start, angle), end: rotate(l.end, angle) } };
+          newGeo = { Line: { start: rotatePoint(l.start, center, angle), end: rotatePoint(l.end, center, angle) } };
           newConstraints.push({ Equal: { entities: [targetId, newId] } });
         } else if (targetEnt.geometry.Circle) {
           const c = targetEnt.geometry.Circle;
-          newGeo = { Circle: { center: rotate(c.center, angle), radius: c.radius } };
+          newGeo = { Circle: { center: rotatePoint(c.center, center, angle), radius: c.radius } };
           newConstraints.push({ Equal: { entities: [targetId, newId] } });
         } else if (targetEnt.geometry.Arc) {
           const arc = targetEnt.geometry.Arc;
           const startP: [number, number] = [arc.center[0] + arc.radius * Math.cos(arc.start_angle), arc.center[1] + arc.radius * Math.sin(arc.start_angle)];
           const endP: [number, number] = [arc.center[0] + arc.radius * Math.cos(arc.end_angle), arc.center[1] + arc.radius * Math.sin(arc.end_angle)];
 
-          const newC = rotate(arc.center, angle);
-          const newStart = rotate(startP, angle);
-          const newEnd = rotate(endP, angle);
+          const newC = rotatePoint(arc.center, center, angle);
+          const newStart = rotatePoint(startP, center, angle);
+          const newEnd = rotatePoint(endP, center, angle);
 
           const newStartAngle = Math.atan2(newStart[1] - newC[1], newStart[0] - newC[0]);
           const newEndAngle = Math.atan2(newEnd[1] - newC[1], newEnd[0] - newC[0]);
@@ -1036,79 +560,7 @@ export function useSketching(props: UseSketchingProps) {
       };
     }
   });
-  // Offset Geometry Calculation (for offset tool preview and confirmation)
-  function calculateOffsetGeometry(
-    sketch: Sketch,
-    selection: string[],
-    distance: number,
-    flip: boolean
-  ): { entities: SketchEntity[], constraints: SketchConstraint[] } | null {
-    const lines = selection.map(id => sketch.entities.find(e => e.id === id))
-      .filter(e => e && e.geometry.Line)
-      .map(e => ({ id: e!.id, geometry: e!.geometry.Line! }));
-    if (lines.length === 0) return null;
-    const newEntities: SketchEntity[] = [];
-    const newConstraints: SketchConstraint[] = [];
-    const createdLines: { originalId: string, newId: string, start: [number, number], end: [number, number] }[] = [];
-    const d = flip ? -distance : distance;
-    lines.forEach(line => {
-      const dx = line.geometry.end[0] - line.geometry.start[0];
-      const dy = line.geometry.end[1] - line.geometry.start[1];
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 1e-9) return;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const ox = nx * d;
-      const oy = ny * d;
-      const newStart: [number, number] = [line.geometry.start[0] + ox, line.geometry.start[1] + oy];
-      const newEnd: [number, number] = [line.geometry.end[0] + ox, line.geometry.end[1] + oy];
-      const newId = crypto.randomUUID();
-      newEntities.push({
-        id: newId,
-        geometry: { Line: { start: newStart, end: newEnd } },
-        is_construction: false
-      });
-      createdLines.push({ originalId: line.id, newId, start: newStart, end: newEnd });
-      newConstraints.push({ Parallel: { lines: [line.id, newId] } });
-      newConstraints.push({
-        DistancePointLine: {
-          point: { id: newId, index: 0 },
-          line: line.id,
-          value: Math.abs(distance),
-          style: { driven: false, offset: [0, 0] }
-        }
-      });
-    });
-    const tol = 1e-6;
-    for (let i = 0; i < lines.length; i++) {
-      for (let j = i + 1; j < lines.length; j++) {
-        const l1 = lines[i];
-        const l2 = lines[j];
-        const startDiffStart = Math.hypot(l1.geometry.start[0] - l2.geometry.start[0], l1.geometry.start[1] - l2.geometry.start[1]);
-        const startDiffEnd = Math.hypot(l1.geometry.start[0] - l2.geometry.end[0], l1.geometry.start[1] - l2.geometry.end[1]);
-        const endDiffStart = Math.hypot(l1.geometry.end[0] - l2.geometry.start[0], l1.geometry.end[1] - l2.geometry.start[1]);
-        const endDiffEnd = Math.hypot(l1.geometry.end[0] - l2.geometry.end[0], l1.geometry.end[1] - l2.geometry.end[1]);
-        if (startDiffStart < tol) {
-          const newL1 = createdLines[i];
-          const newL2 = createdLines[j];
-          newConstraints.push({ Coincident: { points: [{ id: newL1.newId, index: 0 }, { id: newL2.newId, index: 0 }] } });
-        } else if (startDiffEnd < tol) {
-          const newL1 = createdLines[i];
-          const newL2 = createdLines[j];
-          newConstraints.push({ Coincident: { points: [{ id: newL1.newId, index: 0 }, { id: newL2.newId, index: 1 }] } });
-        } else if (endDiffStart < tol) {
-          const newL1 = createdLines[i];
-          const newL2 = createdLines[j];
-          newConstraints.push({ Coincident: { points: [{ id: newL1.newId, index: 1 }, { id: newL2.newId, index: 0 }] } });
-        } else if (endDiffEnd < tol) {
-          const newL1 = createdLines[i];
-          const newL2 = createdLines[j];
-          newConstraints.push({ Coincident: { points: [{ id: newL1.newId, index: 1 }, { id: newL2.newId, index: 1 }] } });
-        }
-      }
-    }
-    return { entities: newEntities, constraints: newConstraints };
-  }
+  // Offset Geometry Calculation - now imported from utils/offsetGeometry.ts
   const handleDimensionEdit = (index: number, type: string) => {
     const sketch = currentSketch();
     const entry = sketch.constraints[index];

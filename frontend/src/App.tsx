@@ -161,15 +161,75 @@ const App: Component = () => {
     // If a sketch is selected, use it as dependency
     let depId: string | null = null;
     const selectedId = selectedFeature();
+    const currentSelection = selection();
 
     const nodes = graph().nodes;
 
-    // Check if we have a valid selection that is a Sketch
+    // 1. Try Tree Selection
     if (selectedId) {
       const feat = nodes[selectedId];
       if (feat && feat.feature_type === 'Sketch') {
         depId = selectedId;
       }
+    }
+
+    // 2. Try Viewport Selection (if no tree selection found)
+    if (!depId && currentSelection.length > 0) {
+      // Look for any selected entity that belongs to a sketch
+      for (const sel of currentSelection) {
+        // Case A: TopoId (from backend/Solids) -> { feature_id: "...", ... }
+        const fId = sel.feature_id || (typeof sel === 'object' && sel.feature_id ? sel.feature_id : null);
+
+        if (fId) {
+          // Handle potential object wrapper { EntityId: "uuid" } or just string
+          const idStr = typeof fId === 'string' ? fId : (fId.EntityId || String(fId));
+          const feat = nodes[idStr];
+          if (feat) {
+            if (feat.feature_type === 'Sketch') {
+              depId = idStr;
+              break;
+            } else if (feat.feature_type === 'Extrude') {
+              // If we selected a solid face/vertex, use its base sketch
+              if (feat.dependencies && feat.dependencies.length > 0) {
+                depId = feat.dependencies[0];
+                break;
+              }
+            }
+          }
+        }
+
+        // Case B: Sketch Entity Selection -> { id: "entity_uuid", type: "entity"|"point" }
+        // We need to find which Sketch Feature contains this entity ID
+        if (sel.id && (sel.type === 'entity' || sel.type === 'point')) {
+          const entId = sel.id;
+          // Search all sketch features
+          for (const node of Object.values(nodes)) {
+            if (node.feature_type === 'Sketch' && node.parameters?.sketch_data?.Sketch?.entities) {
+              const entities = node.parameters.sketch_data.Sketch.entities as SketchEntity[];
+              if (entities.some(e => e.id === entId)) {
+                depId = node.id;
+                break;
+              }
+            }
+          }
+          if (depId) break;
+        }
+      }
+    }
+
+    // 3. Last Resort: If we still have no dependency, but only ONE sketch exists, default to it?
+    // This is helpful for new users with 1 sketch.
+    if (!depId) {
+      const sketches = Object.values(nodes).filter(n => n.feature_type === 'Sketch');
+      if (sketches.length === 1) {
+        console.log("handleExtrude: Auto-selecting single available sketch:", sketches[0].name);
+        depId = sketches[0].id;
+      }
+    }
+
+    if (!depId) {
+      // TODO: Show toast "Please select a sketch or sketch region first"
+      console.warn("handleExtrude: No sketch selected to extrude");
     }
 
     const existingExtrudes = Object.values(nodes).filter(n => n.feature_type === 'Extrude').length;
@@ -184,6 +244,8 @@ const App: Component = () => {
     setPendingExtrude(true);
     send({ command: 'CreateFeature', payload: cmd });
   };
+
+
 
   // Auto-select newly created extrude feature
   createEffect(() => {

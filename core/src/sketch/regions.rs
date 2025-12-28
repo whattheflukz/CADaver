@@ -533,7 +533,70 @@ fn build_planar_graph(
         }
     }
     
+    // Prune filaments (degree-1 vertices)
+    prune_filaments(&mut vertices, &mut edges);
+
     (vertices, edges)
+}
+
+/// Iteratively remove degree-1 vertices (dead ends) and their incident edges
+fn prune_filaments(vertices: &mut [GraphVertex], edges: &mut Vec<HalfEdge>) {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        
+        // Count active edges per vertex
+        let mut degree = vec![0; vertices.len()];
+        let mut active_edge_indices = vec![Vec::new(); vertices.len()];
+
+        for (i, edge) in edges.iter().enumerate() {
+            if !edge.used { // reusing 'used' flag to mark deleted edges for now? No, 'used' is for face extraction
+                 // We should add a 'deleted' flag or just modify the edges list? 
+                 // Modifying edges list is hard because indices. 
+                 // Let's assume edges not marked 'deleted' contribute to degree.
+            }
+        }
+        // Wait, 'used' is cleared before face extraction anyway. Let's use it as 'deleted' here and reset it after.
+        
+        fill_degrees(vertices, edges, &mut degree, &mut active_edge_indices);
+        
+        for v_idx in 0..vertices.len() {
+            if degree[v_idx] == 1 {
+                // This is a dead end. Remove the edge connected to it.
+                if let Some(&e_idx) = active_edge_indices[v_idx].first() {
+                    edges[e_idx].used = true; // Mark as deleted
+                    if let Some(twin) = edges[e_idx].twin {
+                        edges[twin].used = true; // Mark twin as deleted
+                    }
+                    changed = true;
+                }
+            }
+        }
+    }
+    
+    // Actually remove deleted edges from vertex lists to clean up graph structure?
+    // Or just filter them out during linking.
+    // The current linking logic iterates `vertex.edges`. We need to remove deleted edges from there.
+    for vertex in vertices.iter_mut() {
+        vertex.edges.retain(|&e_idx| !edges[e_idx].used);
+    }
+    
+    // Reset 'used' flag for face extraction
+    for edge in edges.iter_mut() {
+        edge.used = false;
+    }
+}
+
+fn fill_degrees(vertices: &[GraphVertex], edges: &[HalfEdge], degree: &mut [usize], active_edge_indices: &mut [Vec<usize>]) {
+    for d in degree.iter_mut() { *d = 0; }
+    for l in active_edge_indices.iter_mut() { l.clear(); }
+    
+    for (i, edge) in edges.iter().enumerate() {
+        if !edge.used {
+            degree[edge.start] += 1;
+            active_edge_indices[edge.start].push(i);
+        }
+    }
 }
 
 /// Link half-edges by sorting edges around each vertex by angle
@@ -822,5 +885,186 @@ mod tests {
     fn test_circle_circle_intersection() {
         let pts = circle_circle_intersect([0.0, 0.0], 5.0, [6.0, 0.0], 5.0);
         assert_eq!(pts.len(), 2, "Overlapping circles should have 2 intersection points");
+    }
+    #[test]
+    fn test_square_intersected_by_circle() {
+        let square_lines = vec![
+            // Bottom
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, -10.0], end: [10.0, -10.0] }, is_construction: false },
+            // Right
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, -10.0], end: [10.0, 10.0] }, is_construction: false },
+            // Top
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, 10.0], end: [-10.0, 10.0] }, is_construction: false },
+            // Left
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, 10.0], end: [-10.0, -10.0] }, is_construction: false },
+        ];
+        
+        let circle = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Circle { center: [10.0, 0.0], radius: 5.0 },
+            is_construction: false,
+        };
+        
+        let mut entities = square_lines;
+        entities.push(circle);
+        
+        let regions = find_regions(&entities);
+        
+        // Debug output
+        println!("Found regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("Region {}: Area={}, Centroid={:?}", i, r.area, r.centroid);
+        }
+
+        assert_eq!(regions.len(), 3, "Square intersected by circle should produce 3 regions");
+    }
+
+    #[test]
+    fn test_square_crossed_by_line() {
+        // Square from -10 to 10
+        let square_lines = vec![
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, -10.0], end: [10.0, -10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, -10.0], end: [10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, 10.0], end: [-10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, 10.0], end: [-10.0, -10.0] }, is_construction: false },
+        ];
+        
+        // Line crossing from left (-15, 0) to right (15, 0)
+        let crossing_line = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [-15.0, 0.0], end: [15.0, 0.0] },
+            is_construction: false,
+        };
+        
+        let mut entities = square_lines;
+        entities.push(crossing_line);
+        
+        let regions = find_regions(&entities);
+        
+        // Should have 2 regions (top rectangular, bottom rectangular)
+        println!("Found regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("Region {}: Area={}", i, r.area);
+        }
+
+        assert_eq!(regions.len(), 2, "Square bisected by line should produce 2 regions");
+    }
+
+    #[test]
+    fn test_square_two_vertical_lines() {
+        // Square from -10 to 10. Area = 400.
+        let square_lines = vec![
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, -10.0], end: [10.0, -10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, -10.0], end: [10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, 10.0], end: [-10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, 10.0], end: [-10.0, -10.0] }, is_construction: false },
+        ];
+        
+        // Line x = -2
+        let line1 = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [-2.0, -15.0], end: [-2.0, 15.0] },
+            is_construction: false,
+        };
+        // Line x = 2
+        let line2 = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [2.0, -15.0], end: [2.0, 15.0] },
+            is_construction: false,
+        };
+        
+        let mut entities = square_lines;
+        entities.push(line1);
+        entities.push(line2);
+        
+        let regions = find_regions(&entities);
+        
+        // Should have 3 regions: Left, Middle, Right
+        println!("Found regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("Region {}: Area={}", i, r.area);
+        }
+
+        assert_eq!(regions.len(), 3, "Square cut by two parallel lines should produce 3 regions");
+    }
+
+    #[test]
+    fn test_user_scenario_exact() {
+        let rect = vec![
+            // Top
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-3.427366411755626, 5.128495017868517], end: [8.188989683086833, 5.128495017868517] }, is_construction: false },
+            // Right
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [8.188989683086833, 5.128495017868517], end: [8.188989683086833, -6.730505441649946] }, is_construction: false },
+            // Bottom
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [8.188989683086833, -6.730505441649946], end: [-3.427366411755626, -6.730505441649946] }, is_construction: false },
+            // Left
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-3.427366411755626, -6.730505441649946], end: [-3.427366411755626, 5.128495017868517] }, is_construction: false },
+        ];
+        
+        // 08d8e4ca-0328-4461-93c8-f64607604196
+        let line1 = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [2.5947459039737835, 6.200382959225407], end: [-4.952031485437824, -5.9013985762803935] },
+            is_construction: false,
+        };
+        // fee6a609-aea6-497a-8ace-6d2d6fb07c23
+        let line2 = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [0.0, 6.380964821606707], end: [-5.3890639322594875, -2.260773369926582] },
+            is_construction: false,
+        };
+        
+        let circle = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Circle { center: [8.981862600577657, -9.740999883411394], radius: 8.503277250188482 },
+            is_construction: false,
+        };
+        
+        let mut entities = rect;
+        entities.push(line1);
+        entities.push(line2);
+        entities.push(circle);
+        
+        let regions = find_regions(&entities);
+        
+        println!("Found regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("Region {}: Area={}", i, r.area);
+        }
+
+        // We expect more than 2.
+        assert!(regions.len() > 2, "Complex scenario should produce multiple regions");
+    }
+
+    #[test]
+    fn test_square_with_filament() {
+        // Square from -10 to 10
+        let square_lines = vec![
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, -10.0], end: [10.0, -10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, -10.0], end: [10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [10.0, 10.0], end: [-10.0, 10.0] }, is_construction: false },
+            SketchEntity { id: EntityId::new(), geometry: SketchGeometry::Line { start: [-10.0, 10.0], end: [-10.0, -10.0] }, is_construction: false },
+        ];
+        
+        // Line crossing top edge (-5, 10) and stopping inside (-5, 0)
+        let filament = SketchEntity {
+            id: EntityId::new(),
+            geometry: SketchGeometry::Line { start: [-5.0, 15.0], end: [-5.0, 0.0] },
+            is_construction: false,
+        };
+        
+        let mut entities = square_lines;
+        entities.push(filament);
+        
+        let regions = find_regions(&entities);
+        
+        // Should have at least 1 region (the square itself, area 400)
+        println!("Found regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("Region {}: Area={}", i, r.area);
+        }
+
+        assert_eq!(regions.len(), 1, "Square with filament should still be 1 region");
+        assert!((regions[0].area - 400.0).abs() < 1.0, "Area should be approx 400");
     }
 }

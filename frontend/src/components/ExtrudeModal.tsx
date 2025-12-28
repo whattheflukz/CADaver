@@ -48,9 +48,9 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
             // Verify voids
             props.backendRegions.forEach((r: SketchRegion, i: number) => {
                 if (r.voids && r.voids.length > 0) {
-                    console.log(`  Region ${i} has ${r.voids.length} voids. ID: ${r.id}`);
+                    console.log(`  [Backend] Region ${i} (${r.id}): ${r.boundary_points.length} pts, ${r.voids.length} voids, Area: ${r.area.toFixed(2)}`);
                 } else {
-                    console.log(`  Region ${i} has NO voids. ID: ${r.id}`);
+                    console.log(`  [Backend] Region ${i} (${r.id}): ${r.boundary_points.length} pts, NO voids, Area: ${r.area.toFixed(2)}`);
                 }
             });
             return props.backendRegions;
@@ -58,17 +58,36 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
 
         const nodes = props.graph?.nodes;
         const extrudeFeature = nodes?.[props.featureId];
-        if (!extrudeFeature?.dependencies?.[0]) return [];
+        if (!extrudeFeature?.dependencies?.[0]) {
+            console.warn("ExtrudeModal: No dependency found for feature", props.featureId);
+            return [];
+        }
 
         const skId = extrudeFeature.dependencies[0];
         const sketchFeature = nodes?.[skId];
+        // console.log("ExtrudeModal: Dependency Sketch Feature:", sketchFeature);
+
         const sketchData = sketchFeature?.parameters?.sketch_data?.Sketch as Sketch | undefined;
 
-        if (!sketchData?.entities) return [];
+        if (!sketchData) {
+            console.warn("ExtrudeModal: No sketch_data found in feature parameters");
+            return [];
+        }
+
+        if (!sketchData.entities) {
+            console.warn("ExtrudeModal: Sketch has no entities");
+            return [];
+        }
 
         const nonConstruction = sketchData.entities.filter((e: SketchEntity) => !e.is_construction);
-        console.log("ExtrudeModal: Computing LOCAL regions fallback");
-        return computeRegionsFromEntities(nonConstruction);
+
+        const computed = computeRegionsFromEntities(nonConstruction);
+        console.log(`ExtrudeModal: Computed ${computed.length} local regions from ${nonConstruction.length} entities`);
+        // Debug: Print boundary points count for each region
+        computed.forEach((r, i) => {
+            console.log(`  Local Region ${i}: ${r.boundary_points.length} points, Area: ${r.area.toFixed(2)}`);
+        });
+        return computed;
     });
 
     // Helper to sync selected regions to backend - MUST be defined before onMount
@@ -310,38 +329,33 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
         }
     });
 
-    // Handle viewport region clicks
+    // Listen for viewport clicks to toggle regions
     createEffect(() => {
+        // Use the explicit region click point passed freely from App -> Viewport -> ExtrudeModal
         const clickPoint = props.regionClickPoint;
         if (!clickPoint) return;
 
         const regions = availableRegions();
-        console.log("Viewport click - availableRegions IDs:", regions.map(r => r.id));
-        if (regions.length === 0) return;
 
         // Find ALL regions containing the click point
-        const containingRegions = regions.filter(r => pointInRegion(clickPoint, r));
-        console.log("Containing regions:", containingRegions.length, "IDs:", containingRegions.map(r => r.id));
+        const containingRegions = regions.filter((r) => pointInRegion(clickPoint, r));
 
-        if (containingRegions.length > 0) {
-            // Pick the SMALLEST region (most specific - the actual intersection, not the full circles)
-            const targetRegion = containingRegions.reduce((smallest, r) =>
-                r.area < smallest.area ? r : smallest
-            );
-            console.log("Target region:", targetRegion.id, "area:", targetRegion.area);
+        if (containingRegions.length === 0) return;
 
-            // Toggle only this specific region
-            const current = selectedRegions();
-            let newSelection: string[];
-            if (current.includes(targetRegion.id)) {
-                newSelection = current.filter(id => id !== targetRegion.id);
-            } else {
-                newSelection = [...current, targetRegion.id];
-            }
-            console.log("New selection:", newSelection);
-            setSelectedRegions(newSelection);
-            syncProfilesToBackend(newSelection, regions); // Pass regions directly!
+        // Select the SMALLEST region by area (most specific)
+        const targetRegion = containingRegions.sort((a, b) => a.area - b.area)[0];
+
+        // Toggle only this specific region
+        const current = selectedRegions();
+        let newSelection: string[];
+        if (current.includes(targetRegion.id)) {
+            newSelection = current.filter(id => id !== targetRegion.id);
+        } else {
+            newSelection = [...current, targetRegion.id];
         }
+
+        setSelectedRegions(newSelection);
+        syncProfilesToBackend(newSelection, regions);
 
         // Consume the click
         props.onConsumeRegionClick?.();
@@ -415,6 +429,19 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
                                 title="Select all profiles"
                             >
                                 All
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const skId = sketchId();
+                                    if (skId && props.onRequestRegions) {
+                                        console.log("Manually requesting regions for sketch:", skId);
+                                        props.onRequestRegions(skId);
+                                    }
+                                }}
+                                class="text-[10px] text-blue-400 hover:text-blue-300"
+                                title="Refresh profiles from backend"
+                            >
+                                ↻
                             </button>
                             <button
                                 onClick={clearAllRegions}
@@ -541,6 +568,17 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
                 </div>
 
             </div>
+
+            {/* Debug Info */}
+            <div class="mt-4 p-2 bg-gray-900 rounded text-[10px] font-mono text-gray-400 overflow-x-auto">
+                <div class="font-bold text-gray-200 mb-1">Debug Regions ({availableRegions().length}):</div>
+                {availableRegions().map((r, i) => (
+                    <div class="whitespace-nowrap">
+                        #{i} {r.id.substring(0, 8)} | Pts: {r.boundary_points.length} | Area: {r.area.toFixed(1)} | Voids: {r.voids?.length || 0}
+                    </div>
+                ))}
+            </div>
+
         </BaseModal>
     );
 };

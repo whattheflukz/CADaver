@@ -1,11 +1,12 @@
 import { onCleanup, onMount, createEffect, createSignal, type Component } from "solid-js";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineMaterial, LineSegmentsGeometry, LineSegments2 } from 'three-stdlib';
 import type { Tessellation, SnapPoint, SketchPlane, SolveResult, SketchEntity } from "../types";
 import { SketchRenderer } from "../rendering/SketchRenderer";
 import { DimensionRenderer } from "../rendering/DimensionRenderer";
 import { SnapMarkers } from "../rendering/SnapMarkers";
+import { SceneManager } from "../rendering/SceneManager";
 import { sketchToWorld } from "../utils/sketchGeometry";
 import { createPointMarkerTexture } from "../utils/threeHelpers";
 import {
@@ -18,7 +19,11 @@ import {
     worldToSketchLocal,
     topoIdMatches
 } from "../services/RaycastService";
-import { updateHighlightMesh as doUpdateHighlightMesh } from "../hooks/useSelectionHighlight";
+import { updateHighlightMesh as doUpdateHighlightMesh, applySelectionHighlights } from "../hooks/useSelectionHighlight";
+import { renderDimensionPreview, cleanupPreviewDimension } from "../rendering/DimensionPreviewRenderer";
+import { useDimensionDrag } from "../hooks/useDimensionDrag";
+import { handleCanvasClick } from "../services/ViewportClickHandler";
+import { updatePlaneHelpers } from "../rendering/PlaneHelperManager";
 
 interface ViewportProps {
     tessellation: Tessellation | null;
@@ -55,11 +60,16 @@ interface ViewportProps {
 
 const Viewport: Component<ViewportProps> = (props) => {
     let containerRef: HTMLDivElement | undefined;
+
+    // SceneManager handles scene, camera, renderer, controls, lights, helpers, resize, and animation
+    let sceneManager: SceneManager | null = null;
+
+    // Local references to SceneManager internals for compatibility with existing code
     let renderer: THREE.WebGLRenderer;
     let camera: THREE.PerspectiveCamera;
     let scene: THREE.Scene;
     let controls: OrbitControls;
-    let animationId: number;
+
     let mainMesh: THREE.Mesh | null = null;
     let _selectionMesh: THREE.Mesh | null = null; // Highlighting for selected items
     let hoverMesh: THREE.Mesh | null = null; // Highlighting for hovered items
@@ -70,7 +80,7 @@ const Viewport: Component<ViewportProps> = (props) => {
     let dimensionRenderer: DimensionRenderer;
     let snapMarkers: SnapMarkers;
 
-    // Raycaster reused
+    // Raycaster reused (kept separate from SceneManager for custom thresholds)
     const raycaster = new THREE.Raycaster();
     // Increase threshold for easier line/point selection
     raycaster.params.Line = { threshold: 4.0 };  // Large hitbox for edges
@@ -79,77 +89,32 @@ const Viewport: Component<ViewportProps> = (props) => {
 
     const [ready, setReady] = createSignal(false);
 
-    let resizeObserver: ResizeObserver;
-
     const init = () => {
         if (!containerRef) return;
 
-        // SCENE
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1e1e1e);
+        // Create SceneManager - handles scene, camera, renderer, controls, lights, helpers, resize, animation
+        sceneManager = new SceneManager({
+            container: containerRef,
+            backgroundColor: 0x1e1e1e,
+            cameraPosition: [20, 20, 20],
+            gridSize: 50,
+            gridDivisions: 50
+        });
 
-        // Resolution for LineMaterial
-        const width = containerRef.clientWidth;
-        const height = containerRef.clientHeight;
-        const resolution = new THREE.Vector2(width, height);
-        (window as any).viewportLineResolution = resolution; // Hack/Store to access in resize
+        // Extract references for compatibility with existing code
+        const ctx = sceneManager.getContext();
+        scene = ctx.scene;
+        camera = ctx.camera;
+        renderer = ctx.renderer;
+        controls = ctx.controls;
 
-        camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-        camera.position.set(20, 20, 20);
-        camera.lookAt(0, 0, 0);
-
-        // RENDERER
-        renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(width, height);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        containerRef.appendChild(renderer.domElement);
-
-        // CONTROLS
-        controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-
-        // HELPERS
-        const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
-        scene.add(gridHelper);
-
-        const axesHelper = new THREE.AxesHelper(5);
-        scene.add(axesHelper);
-
-        // LIGHTS
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
-
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(10, 20, 10);
-        scene.add(dirLight);
-
-        // Initialize Renderers
+        // Initialize Renderers (these need the scene)
         sketchRenderer = new SketchRenderer(scene);
         dimensionRenderer = new DimensionRenderer(scene);
         snapMarkers = new SnapMarkers(scene);
 
-        // RESIZE OBSERVER
-        resizeObserver = new ResizeObserver(() => {
-            if (!containerRef) return;
-            const newWidth = containerRef.clientWidth;
-            const newHeight = containerRef.clientHeight;
-            camera.aspect = newWidth / newHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(newWidth, newHeight);
-            if ((window as any).viewportLineResolution) {
-                (window as any).viewportLineResolution.set(newWidth, newHeight);
-            }
-        });
-        resizeObserver.observe(containerRef);
-
-        // ANIMATION LOOP
-        const animate = () => {
-            animationId = requestAnimationFrame(animate);
-            controls.update();
-            renderer.render(scene, camera);
-        };
-        animate();
+        // Start the animation loop
+        sceneManager.start();
 
         setReady(true);
     };
@@ -186,17 +151,15 @@ const Viewport: Component<ViewportProps> = (props) => {
     });
 
     onCleanup(() => {
-        if (animationId) cancelAnimationFrame(animationId);
-        if (resizeObserver) resizeObserver.disconnect();
+        // SceneManager handles animation, resize observer, renderer disposal
+        if (sceneManager) {
+            sceneManager.dispose();
+        }
         if (containerRef) {
             containerRef.removeEventListener('click', onCanvasClick);
             containerRef.removeEventListener('dblclick', () => { }); // specific handler ref lost, but bounded functional won't matter for GC usually
             containerRef.removeEventListener('pointermove', onCanvasMouseMove);
             containerRef.removeEventListener('mousedown', onCanvasMouseDown);
-            if (renderer) {
-                // containerRef.removeChild(renderer.domElement); // SolidJS might have cleared it
-                renderer.dispose();
-            }
         }
     });
 
@@ -357,83 +320,10 @@ const Viewport: Component<ViewportProps> = (props) => {
         doUpdateHighlightMesh(mainMesh, { indices, color, opacity, name });
     };
 
-    // Plane Selection Helpers (Visuals)
+    // Plane Selection Helpers - logic extracted to PlaneHelperManager.ts
     createEffect(() => {
         if (!ready() || !scene) return;
-
-        console.log("Viewport Effect: sketchSetupMode changed to:", props.sketchSetupMode);
-
-        const PLANE_HELPER_NAME = "plane_selection_helpers";
-        let group = scene.getObjectByName(PLANE_HELPER_NAME);
-        if (group) {
-            scene.remove(group);
-            // Dispose children
-            group.traverse((child) => {
-                if ((child as any).geometry) (child as any).geometry.dispose();
-                if ((child as any).material) (child as any).material.dispose();
-            });
-        }
-
-        if (props.sketchSetupMode) {
-            group = new THREE.Group();
-            group.name = PLANE_HELPER_NAME;
-
-            const planeSize = 10;
-            const planeOpacity = 0.2;
-            // const planeColor = 0xffff00; // unused
-
-            // XY Plane
-            const xyGeo = new THREE.PlaneGeometry(planeSize, planeSize);
-            const xyMat = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: planeOpacity, side: THREE.DoubleSide });
-            const xyMesh = new THREE.Mesh(xyGeo, xyMat);
-            xyMesh.name = "XY Plane";
-            xyMesh.userData = {
-                isPlaneHelper: true,
-                plane: {
-                    origin: [0, 0, 0],
-                    normal: [0, 0, 1],
-                    x_axis: [1, 0, 0],
-                    y_axis: [0, 1, 0]
-                }
-            };
-            group.add(xyMesh);
-
-            // XZ Plane
-            const xzGeo = new THREE.PlaneGeometry(planeSize, planeSize);
-            const xzMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: planeOpacity, side: THREE.DoubleSide });
-            const xzMesh = new THREE.Mesh(xzGeo, xzMat);
-            xzMesh.rotateX(-Math.PI / 2);
-            xzMesh.name = "XZ Plane";
-            xzMesh.userData = {
-                isPlaneHelper: true,
-                plane: {
-                    origin: [0, 0, 0],
-                    normal: [0, 1, 0],
-                    x_axis: [1, 0, 0],
-                    y_axis: [0, 0, -1]
-                }
-            };
-            group.add(xzMesh);
-
-            // YZ Plane
-            const yzGeo = new THREE.PlaneGeometry(planeSize, planeSize);
-            const yzMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: planeOpacity, side: THREE.DoubleSide });
-            const yzMesh = new THREE.Mesh(yzGeo, yzMat);
-            yzMesh.rotateY(Math.PI / 2);
-            yzMesh.name = "YZ Plane";
-            yzMesh.userData = {
-                isPlaneHelper: true,
-                plane: {
-                    origin: [0, 0, 0],
-                    normal: [1, 0, 0],
-                    x_axis: [0, 1, 0],
-                    y_axis: [0, 0, 1]
-                }
-            };
-            group.add(yzMesh);
-
-            scene.add(group);
-        }
+        updatePlaneHelpers(scene, !!props.sketchSetupMode);
     });
 
     // Helper: Raycast including Plane Helpers
@@ -441,141 +331,20 @@ const Viewport: Component<ViewportProps> = (props) => {
         return doIntersectsWithPlanes(clientX, clientY, getRaycastContext());
     };
 
+    // Click handling extracted to ViewportClickHandler.ts for cleaner architecture
     const onCanvasClick = (event: MouseEvent) => {
-        // If in sketch setup mode, prioritize plane selection
-        if (props.sketchSetupMode && props.onSelectPlane) {
-            const intersects = getIntersectsWithPlanes(event.clientX, event.clientY);
-
-            if (intersects.length > 0) {
-                // Check for Plane Helper first
-                const planeHelperHit = intersects.find(i => i.object.userData.isPlaneHelper);
-                if (planeHelperHit) {
-                    props.onSelectPlane(planeHelperHit.object.userData.plane);
-                    return;
-                }
-
-                // Fallback to Face selection
-                const faceHit = intersects.find(i => i.faceIndex !== undefined && i.object === mainMesh);
-                if (faceHit && faceHit.faceIndex !== undefined) {
-                    const normal = faceHit.face!.normal.clone();
-                    // Simple axis alignment for now
-                    let xAxis = new THREE.Vector3(0, 1, 0).cross(normal);
-                    if (xAxis.lengthSq() < 0.001) xAxis = new THREE.Vector3(1, 0, 0).cross(normal);
-                    xAxis.normalize();
-                    const yAxis = new THREE.Vector3().crossVectors(normal, xAxis).normalize();
-
-                    props.onSelectPlane({
-                        origin: [faceHit.point.x, faceHit.point.y, faceHit.point.z],
-                        normal: [normal.x, normal.y, normal.z],
-                        x_axis: [xAxis.x, xAxis.y, xAxis.z],
-                        y_axis: [yAxis.x, yAxis.y, yAxis.z]
-                    });
-                    return;
-                }
-            }
-        }
-
-        if (!props.onSelect) return;
-
-        // Normal Selection Logic
-        const intersects = getIntersects(event.clientX, event.clientY);
-
-        let modifier: "replace" | "add" | "remove" = "replace";
-        if (event.ctrlKey || event.metaKey) {
-            modifier = "add";
-        } else if (event.shiftKey) {
-            modifier = "add";
-        }
-
-        if (intersects.length > 0) {
-            let topoId = null;
-
-            // Iterate through intersections to find the right one based on filter
-            for (const hit of intersects) {
-
-                // Skip highlight meshes
-                if (hit.object.name.includes('highlight') || hit.object.name.includes('selection')) {
-                    continue;
-                }
-
-                // 1. SKETCH ENTITY SELECTION (has userData.idMap) - highest priority
-                if (hit.object.userData && hit.object.userData.idMap) {
-                    let idx = hit.index ?? hit.faceIndex;
-                    if (idx !== undefined && idx !== null && hit.object.userData.idMap[idx]) {
-                        const entId = hit.object.userData.idMap[idx];
-                        let type: "entity" | "point" | "origin" = "entity";
-
-                        // Check if it's a point entity
-                        if (props.clientSketch) {
-                            const ent = props.clientSketch.entities.find((e: any) => e.id === entId);
-                            if (ent && ent.geometry.Point) {
-                                type = "point";
-                            }
-                        }
-
-                        topoId = { id: entId, type: type };
-                        break;
-                    }
-                    continue;
-                }
-
-                // 2. FACE SELECTION (mainMesh with faceIndex) - most common 3D selection
-                if (hit.object === mainMesh && hit.faceIndex != null && props.tessellation?.triangle_ids) {
-                    const idx = hit.faceIndex;
-                    if (idx != null && idx >= 0 && idx < props.tessellation.triangle_ids.length) {
-                        topoId = props.tessellation.triangle_ids[idx];
-                        break;
-                    }
-                    continue;
-                }
-
-                // 3. EDGE SELECTION (LineSegments2 named "sketch_lines")
-                if (hit.object.name === 'sketch_lines' && hit.faceIndex != null && props.tessellation?.line_ids) {
-                    // LineSegments2 uses faceIndex as segment index
-                    const idx = hit.faceIndex;
-                    if (idx != null && idx >= 0 && idx < props.tessellation.line_ids.length) {
-                        topoId = props.tessellation.line_ids[idx];
-                        break;
-                    }
-                    continue;
-                }
-
-                // 4. VERTEX SELECTION (Points geometry named "vertices") - last priority
-                if (hit.object.name === 'vertices' && hit.index != null && props.tessellation?.point_ids) {
-                    const idx = hit.index;
-                    if (idx != null && idx >= 0 && idx < props.tessellation.point_ids.length) {
-                        topoId = props.tessellation.point_ids[idx];
-                        break;
-                    }
-                    continue;
-                }
-            }
-
-            if (topoId) {
-                props.onSelect(topoId, modifier);
-            } else {
-                // No specific geometry clicked, try region click for extrude mode
-                if (props.onRegionClick && props.clientSketch?.plane) {
-                    const target = getSketchPlaneIntersection(event.clientX, event.clientY);
-                    if (target) {
-                        props.onRegionClick([target[0], target[1]]);
-                        return;
-                    }
-                }
-            }
-        } else {
-            // Clicked empty space
-            if (props.onRegionClick && props.clientSketch?.plane) {
-                const target = getSketchPlaneIntersection(event.clientX, event.clientY);
-                if (target) {
-                    props.onRegionClick([target[0], target[1]]);
-                    return;
-                }
-            }
-            if (props.onSelect) {
-                props.onSelect(null, "replace");
-            }
-        }
+        handleCanvasClick(event, {
+            getRaycastContext,
+            getSketchContext,
+            mainMesh
+        }, {
+            sketchSetupMode: props.sketchSetupMode,
+            onSelectPlane: props.onSelectPlane,
+            onSelect: props.onSelect,
+            onRegionClick: props.onRegionClick,
+            tessellation: props.tessellation,
+            clientSketch: props.clientSketch
+        });
     };
 
     // Sketch Drawing Input
@@ -672,261 +441,20 @@ const Viewport: Component<ViewportProps> = (props) => {
     });
     // Log every time the effect runs
 
-
-
-    // State must be outside effect to persist across sketch updates
-    let isDragging = false;
-    let dragIndex = -1;
-    let dragType: "Distance" | "Angle" | "Radius" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "DistancePointLine" | null = null;
-    let startOffset = [0, 0];
-    let dragUserData: any = null;
-    let dragStartPoint = new THREE.Vector3(); // World
-    let dragStartLocal = { x: 0, y: 0 }; // Local
-
-    createEffect(() => {
-        // Setup listeners ONLY when ready. Dependencies: container, scene, camera.
-        if (!ready() || !containerRef || !scene || !camera) return;
-
-        // Helper: Transform World Point to Local Sketch Space
-        // This is CRITICAL for correct dragging on rotated planes
-        const getLocalPos = (worldPos: THREE.Vector3) => {
-            return worldToSketchLocal(worldPos, getSketchContext());
-        };
-
-        const onPointerDown = (e: PointerEvent) => {
-            if (!containerRef || !props.clientSketch) return;
-
-            // Raycast against indicator group children (hitboxes)
-            const CONSTRAINT_INDICATOR_NAME = "constraint_indicators";
-            const DIMENSION_RENDERER_NAME = "dimension_renderer_group";
-
-            const indicatorGroup = scene.getObjectByName(CONSTRAINT_INDICATOR_NAME);
-            const dimensionGroup = scene.getObjectByName(DIMENSION_RENDERER_NAME);
-
-            let targets: THREE.Object3D[] = [];
-            if (indicatorGroup) targets = targets.concat(indicatorGroup.children);
-            if (dimensionGroup) targets = targets.concat(dimensionGroup.children);
-
-            console.log('[Viewport] Raycast targets:', targets.length, 'from dimension group:', dimensionGroup?.children.length);
-            if (targets.length === 0) return;
-
-            // Enable recursive raycasting to catch nested hitboxes
-            const hits = doIntersectObjectsFromClient(
-                e.clientX,
-                e.clientY,
-                getRaycastContext(),
-                targets,
-                true
-            );
-            console.log('[Viewport] Raycast hits:', hits.length, hits.map(h => h.object.userData));
-
-            for (const hit of hits) {
-                if (hit.object.userData && hit.object.userData.isDimensionHitbox) {
-                    // Start dragging
-                    console.log('[Viewport] Dimension hitbox clicked:', hit.object.userData);
-                    e.stopPropagation(); // Prevent orbit controls or other clicks
-                    isDragging = true;
-                    dragIndex = hit.object.userData.index;
-                    dragType = hit.object.userData.type;
-                    dragUserData = hit.object.userData;
-                    dragStartPoint.copy(hit.point);
-                    dragStartLocal = getLocalPos(hit.point); // Cache start in local space
-
-                    const entry = props.clientSketch.constraints[dragIndex];
-                    console.log('[Viewport] Constraint at index', dragIndex, ':', entry);
-                    // Unwrap SketchConstraintEntry to get the actual constraint (same as rendering code)
-                    const constraint = (entry as any).constraint || entry;
-                    console.log('[Viewport] Unwrapped constraint:', constraint, 'dragType:', dragType);
-                    if (dragType === "Distance" && constraint.Distance && constraint.Distance.style) {
-                        startOffset = [...constraint.Distance.style.offset];
-                    } else if (dragType === "Angle" && constraint.Angle && constraint.Angle.style) {
-                        startOffset = [...constraint.Angle.style.offset];
-                    } else if (dragType === "Radius" && constraint.Radius && constraint.Radius.style) {
-                        startOffset = [...constraint.Radius.style.offset];
-                    } else if (dragType === "DistanceParallelLines" && constraint.DistanceParallelLines && constraint.DistanceParallelLines.style) {
-                        startOffset = [...constraint.DistanceParallelLines.style.offset];
-                    } else if (dragType === "HorizontalDistance" && constraint.HorizontalDistance && constraint.HorizontalDistance.style) {
-                        startOffset = [...constraint.HorizontalDistance.style.offset];
-                    } else if (dragType === "VerticalDistance" && constraint.VerticalDistance && constraint.VerticalDistance.style) {
-                        startOffset = [...constraint.VerticalDistance.style.offset];
-                    } else if (dragType === "DistancePointLine" && constraint.DistancePointLine) {
-                        // style may be absent; default to [0, 0]
-                        startOffset = constraint.DistancePointLine.style?.offset
-                            ? [...constraint.DistancePointLine.style.offset]
-                            : [0, 0];
-                    }
-
-                    // Disable orbit controls
-                    if (controls) controls.enabled = false;
-                    return;
-                }
-            }
-        };
-
-        const onPointerMove = (e: PointerEvent) => {
-            if (!isDragging || !containerRef) return;
-
-            const currentLocal = doGetPointerPos2D(
-                e.clientX,
-                e.clientY,
-                getRaycastContext(),
-                getSketchContext()
-            );
-            if (!currentLocal) return;
-
-            if (dragType === "Distance") {
-                const dx = currentLocal.x - dragStartLocal.x;
-                const dy = currentLocal.y - dragStartLocal.y;
-
-                // Project delta onto direction (for slide) and normal (for dist)
-                const { dirX, dirY } = dragUserData; // dirX, dirY are Local
-                const normalX = -dirY;
-                const normalY = dirX;
-
-                const deltaPara = dx * dirX + dy * dirY;
-                const deltaPerp = dx * normalX + dy * normalY;
-
-                const newOffset: [number, number] = [
-                    startOffset[0] + deltaPara,
-                    startOffset[1] + deltaPerp
-                ];
-
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "Angle") {
-                // For Angle, offset[1] is radius change
-                // Center is in LOCAL coordinates (it comes from geometry)
-                const center = dragUserData.center;
-
-                // Calculate distances in LOCAL space
-                const currentDist = Math.sqrt((currentLocal.x - center[0]) ** 2 + (currentLocal.y - center[1]) ** 2);
-                const startDistLocal = Math.sqrt((dragStartLocal.x - center[0]) ** 2 + (dragStartLocal.y - center[1]) ** 2);
-
-                const deltaRadius = currentDist - startDistLocal;
-
-                const newOffset: [number, number] = [
-                    startOffset[0],
-                    startOffset[1] + deltaRadius
-                ];
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "Radius") {
-                // For Radius, offset[1] is angle
-                const center = dragUserData.center;
-                const startAngle = Math.atan2(dragStartLocal.y - center[1], dragStartLocal.x - center[0]);
-                const currentAngle = Math.atan2(currentLocal.y - center[1], currentLocal.x - center[0]);
-
-                let deltaAngle = currentAngle - startAngle;
-
-                const newOffset: [number, number] = [
-                    startOffset[0],
-                    startOffset[1] + deltaAngle
-                ];
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "DistanceParallelLines") {
-                // For DistanceParallelLines, use similar logic to Distance
-                // The offset controls perpendicular position of the dimension line
-                const dx = currentLocal.x - dragStartLocal.x;
-                const dy = currentLocal.y - dragStartLocal.y;
-
-                // Use dirX, dirY if available, otherwise use delta directly for offset[1]
-                const { dirX, dirY } = dragUserData || { dirX: 1, dirY: 0 };
-                const normalX = -dirY;
-                const normalY = dirX;
-
-                const deltaPara = dx * dirX + dy * dirY;
-                const deltaPerp = dx * normalX + dy * normalY;
-
-                const newOffset: [number, number] = [
-                    startOffset[0] + deltaPara,
-                    startOffset[1] + deltaPerp
-                ];
-
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "HorizontalDistance") {
-                // For HorizontalDistance, only Y movement affects offset[1] (vertical position of horizontal dim line)
-                const dy = currentLocal.y - dragStartLocal.y;
-
-                const newOffset: [number, number] = [
-                    startOffset[0],
-                    startOffset[1] + dy
-                ];
-
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "VerticalDistance") {
-                // For VerticalDistance, only X movement affects offset[0] (horizontal position of vertical dim line)
-                const dx = currentLocal.x - dragStartLocal.x;
-
-                const newOffset: [number, number] = [
-                    startOffset[0] + dx,
-                    startOffset[1]
-                ];
-
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            } else if (dragType === "DistancePointLine") {
-                // Reuse DistanceParallelLines logic (same vector math)
-                const dx = currentLocal.x - dragStartLocal.x;
-                const dy = currentLocal.y - dragStartLocal.y;
-
-                const { dirX, dirY } = dragUserData || { dirX: 1, dirY: 0 };
-                const normalX = -dirY;
-                const normalY = dirX;
-
-                const deltaPara = dx * dirX + dy * dirY;
-                const deltaPerp = dx * normalX + dy * normalY;
-
-                const newOffset: [number, number] = [
-                    startOffset[0] + deltaPara,
-                    startOffset[1] + deltaPerp
-                ];
-
-                if (props.onDimensionDrag) props.onDimensionDrag(dragIndex, newOffset);
-            }
-        };
-
-        const onPointerUp = () => {
-            isDragging = false;
-            dragIndex = -1;
-            dragType = null;
-            if (controls) controls.enabled = true;
-        };
-
-        containerRef.addEventListener("pointerdown", onPointerDown);
-        window.addEventListener("pointermove", onPointerMove); // Listen on window for smooth drag
-        window.addEventListener("pointerup", onPointerUp);
-
-        onCleanup(() => {
-            containerRef.removeEventListener("pointerdown", onPointerDown);
-            window.removeEventListener("pointermove", onPointerMove);
-            window.removeEventListener("pointerup", onPointerUp);
-        });
+    // Dimension drag handling - extracted to useDimensionDrag hook
+    useDimensionDrag({
+        scene: () => scene,
+        camera: () => camera,
+        containerRef: () => containerRef || null,
+        controls: () => controls,
+        ready,
+        clientSketch: () => props.clientSketch,
+        raycaster,
+        mouse,
+        onDimensionDrag: props.onDimensionDrag
     });
 
     const onPointerMove = (event: MouseEvent) => {
-        // Define helper locally
-        const createTextSprite = (text: string, color: string, size: number): THREE.Sprite => {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d')!;
-            const fontSize = 32;
-            ctx.font = `bold ${fontSize}px Arial`;
-            const textWidth = ctx.measureText(text).width;
-            canvas.width = Math.max(128, Math.ceil(textWidth + 20));
-            canvas.height = 48;
-            ctx.font = `bold ${fontSize}px Arial`;
-            ctx.fillStyle = color;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-            const tex = new THREE.CanvasTexture(canvas);
-            const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
-            const sprite = new THREE.Sprite(mat);
-            sprite.scale.set(canvas.width / 100 * size, canvas.height / 100 * size, 1);
-            return sprite;
-        };
-
-        // Hover logic
-        // Hover logic
-        // if (!props.tessellation || !mainMesh) return; // Moved check down
-
-
         const pointerPos = doGetPointerPos2D(
             event.clientX,
             event.clientY,
@@ -939,280 +467,22 @@ const Viewport: Component<ViewportProps> = (props) => {
             ? doGetSketchPlaneMatrix(props.clientSketch.plane)
             : null;
 
-        // Update Preview Dimension
-        const PREVIEW_DIMENSION_NAME = "preview_dimension";
-        let previewGroup = scene.getObjectByName(PREVIEW_DIMENSION_NAME) as THREE.Group;
-        if (previewGroup) {
-            scene.remove(previewGroup);
-            previewGroup.traverse((child) => {
-                if ((child as any).geometry) (child as any).geometry.dispose();
-                if ((child as any).material) (child as any).material.dispose();
-            });
-        }
-
-        console.log("[Viewport onPointerMove] previewDimension:", props.previewDimension);
-
         // Report mouse position for dynamic dimension mode switching (Onshape-style)
-        // Always report when callback exists, not just when previewDimension exists,
-        // so the mode can be calculated correctly based on current mouse position
         if (props.onDimensionMouseMove) {
             props.onDimensionMouseMove([pointerPos.x, pointerPos.y]);
         }
 
-        if (props.previewDimension && props.previewDimension.selections.length > 0) {
-            console.log("[Viewport] Rendering preview dimension:", props.previewDimension);
-            let textPos: [number, number] | null = null;
-            previewGroup = new THREE.Group();
-            previewGroup.name = PREVIEW_DIMENSION_NAME;
-
-            // Apply Sketch Plane Transform
-            if (props.clientSketch && props.clientSketch.plane) {
-                previewGroup.matrixAutoUpdate = false;
-                previewGroup.matrix.copy(matrix!);
-            }
-
-            const selections = props.previewDimension.selections;
-
-            // Simplified Helper to get positions
-            const getPos = (c: any): [number, number] | null => {
-                console.log("[getPos] Input:", c);
-                if (c.type === "origin") return [0, 0];
-                if (c.type === "point") {
-                    // First check if position is directly on the candidate
-                    if (c.position) {
-                        console.log("[getPos] point with position:", c.position);
-                        return c.position;
-                    }
-                    // Otherwise, look up by entity ID (for Point entities selected as "point" type)
-                    if (c.id) {
-                        const sk = props.clientSketch;
-                        if (sk) {
-                            const ent = sk.entities.find((e: any) => e.id === c.id);
-                            if (ent?.geometry.Point) {
-                                console.log("[getPos] point entity lookup:", ent.geometry.Point.pos);
-                                return ent.geometry.Point.pos;
-                            }
-                        }
-                    }
-                }
-                if (c.type === "entity") {
-                    const sk = props.clientSketch;
-                    if (!sk) return null;
-                    const ent = sk.entities.find((e: any) => e.id === c.id);
-                    if (ent?.geometry.Point) return ent.geometry.Point.pos;
-                    if (ent?.geometry.Line) return ent.geometry.Line.start;
-                    if (ent?.geometry.Circle) return ent.geometry.Circle.center;
-                    if (ent?.geometry.Arc) return ent.geometry.Arc.center;
-                }
-                console.log("[getPos] returning null for:", c);
-                return null;
-            };
-
-            const type = props.previewDimension.type;
-
-            if ((type === "Distance" || type === "HorizontalDistance" || type === "VerticalDistance" || type === "Length") && selections.length >= 1) {
-                let p1 = getPos(selections[0]);
-                let p2 = selections.length > 1 ? getPos(selections[1]) : null;
-
-                // Handle Line-Point case where we only have 2 points internally
-                if (selections.length === 2 && !p2 && selections[1].type === "point") {
-                    p2 = selections[1].position;
-                }
-
-                // If only 1 entity (Length), start/end
-                if (selections.length === 1 && selections[0].type === "entity") {
-                    const sk = props.clientSketch;
-                    const ent = sk?.entities.find((e: any) => e.id === selections[0].id);
-                    if (ent?.geometry.Line) {
-                        p1 = ent.geometry.Line.start;
-                        p2 = ent.geometry.Line.end;
-                    }
-                }
-
-                if (p1 && p2) {
-                    const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
-
-                    if (type === "HorizontalDistance") {
-                        // Horizontal Dimension: Extension lines vertical, Dim line horizontal
-                        const y = pointerPos.y;
-                        // Ext lines: (p1.x, p1.y) -> (p1.x, y)
-                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1[0], y, 0)]);
-                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2[0], y, 0)]);
-                        // Dim Line: (p1.x, y) -> (p2.x, y)
-                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], y, 0), new THREE.Vector3(p2[0], y, 0)]);
-
-                        previewGroup.add(new THREE.Line(ext1, dimMat));
-                        previewGroup.add(new THREE.Line(ext2, dimMat));
-                        previewGroup.add(new THREE.Line(dimLine, dimMat));
-
-                        // Text Position
-                        const midX = (p1[0] + p2[0]) / 2;
-                        textPos = [midX, y];
-
-                    } else if (type === "VerticalDistance") {
-                        // Vertical Dimension: Extension lines horizontal, Dim line vertical
-                        const x = pointerPos.x;
-                        // Ext lines: (p1.x, p1.y) -> (x, p1.y)
-                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(x, p1[1], 0)]);
-                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(x, p2[1], 0)]);
-                        // Dim Line: (x, p1.y) -> (x, p2.y)
-                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, p1[1], 0), new THREE.Vector3(x, p2[1], 0)]);
-
-                        previewGroup.add(new THREE.Line(ext1, dimMat));
-                        previewGroup.add(new THREE.Line(ext2, dimMat));
-                        previewGroup.add(new THREE.Line(dimLine, dimMat));
-
-                        // Text Position
-                        const midY = (p1[1] + p2[1]) / 2;
-                        textPos = [x, midY];
-
-                    } else {
-                        // Aligned Distance
-                        let dx = p2[0] - p1[0];
-                        let dy = p2[1] - p1[1];
-                        let len = Math.sqrt(dx * dx + dy * dy);
-                        if (len < 0.001) { dx = 1; dy = 0; len = 1; }
-                        const nx = dx / len;
-                        const ny = dy / len;
-
-                        // Project mouse to find offset
-                        const vx = pointerPos.x - p1[0];
-                        const vy = pointerPos.y - p1[1];
-                        const perp = vx * -ny + vy * nx; // Perpendicular distance
-
-                        const p1_ext = [p1[0] - ny * perp, p1[1] + nx * perp];
-                        const p2_ext = [p2[0] - ny * perp, p2[1] + nx * perp];
-
-                        // Extension lines
-                        const ext1 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1[0], p1[1], 0), new THREE.Vector3(p1_ext[0], p1_ext[1], 0)]);
-                        previewGroup.add(new THREE.Line(ext1, dimMat));
-                        const ext2 = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p2[0], p2[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
-                        previewGroup.add(new THREE.Line(ext2, dimMat)); // Fixed typo here (was ext1)
-
-                        // Dimension Line
-                        const dimLine = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p1_ext[0], p1_ext[1], 0), new THREE.Vector3(p2_ext[0], p2_ext[1], 0)]);
-                        previewGroup.add(new THREE.Line(dimLine, dimMat));
-
-                        // Text Position
-                        textPos = [(p1_ext[0] + p2_ext[0]) / 2, (p1_ext[1] + p2_ext[1]) / 2];
-                    }
-                }
-                if (textPos) {
-                    const textSprite = createTextSprite(props.previewDimension.value.toFixed(2), "#00dddd", 0.03);
-                    textSprite.position.set(textPos[0], textPos[1], 0.02);
-                    previewGroup.add(textSprite);
-                }
-
-
-            } else if (type === "DistancePointLine" && selections.length === 2 && props.clientSketch) {
-                const sk = props.clientSketch;
-                const c1 = selections[0];
-                const c2 = selections[1];
-
-                const isLine = (c: any) => c.type === "entity" && sk.entities.find((e: any) => e.id === c.id)?.geometry.Line;
-                const getLine = (c: any) => sk.entities.find((e: any) => e.id === c.id)?.geometry.Line;
-
-                const lineC = isLine(c1) ? c1 : c2;
-                const pointC = isLine(c1) ? c2 : c1;
-
-                const line = getLine(lineC);
-                // getPos logic helper is inside updating loop, but we can reuse it if captured? 
-                // It is defined in scope above at line 1113.
-                const p = getPos(pointC);
-
-                if (line && p) {
-                    const dx = line.end[0] - line.start[0];
-                    const dy = line.end[1] - line.start[1];
-                    const len = Math.sqrt(dx * dx + dy * dy);
-
-                    if (len > 0.0001) {
-                        const nx = dx / len;
-                        const ny = dy / len;
-
-                        // Project point onto line
-                        const vx = p[0] - line.start[0];
-                        const vy = p[1] - line.start[1];
-                        const t = vx * nx + vy * ny;
-
-                        const projX = line.start[0] + nx * t;
-                        const projY = line.start[1] + ny * t;
-
-                        const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
-
-                        // Draw dimension line in World Space
-                        const pWorld = sketchToWorld(p[0], p[1], props.clientSketch.plane);
-                        const projWorld = sketchToWorld(projX, projY, props.clientSketch.plane);
-
-                        const dimLine = new THREE.BufferGeometry().setFromPoints([
-                            pWorld,
-                            projWorld
-                        ]);
-                        previewGroup.add(new THREE.Line(dimLine, dimMat));
-
-                        // Text
-                        const midX = (p[0] + projX) / 2;
-                        const midY = (p[1] + projY) / 2;
-
-                        // direction for perpendicular offset
-                        const distDx = p[0] - projX;
-                        const distDy = p[1] - projY;
-                        const distLen = Math.sqrt(distDx * distDx + distDy * distDy);
-                        const nDx = distLen > 0.001 ? distDx / distLen : -ny;
-                        const nDy = distLen > 0.001 ? distDy / distLen : nx;
-
-                        // Perpendicular offset in sketch space
-                        const offsetX = nDy * 0.1;
-                        const offsetY = -nDx * 0.1;
-
-                        const textSketchX = midX + offsetX;
-                        const textSketchY = midY + offsetY;
-
-                        // Transform to world space for sprite position
-                        // NOTE: using getLocalPos inverse logic or assuming Z-up world matches logic?
-                        // Viewport lines are drawn with (x, y, 0).
-                        // If viewport camera is looking at this plane, then Z=0.02 is correct relative to the lines.
-                        // BUT if sketch plane is rotated, (x, y, 0) is wrong for lines too. 
-                        // However, solving ONE problem: the TEXT visibility.
-
-                        const val = (props.previewDimension.value !== undefined && props.previewDimension.value !== null && !isNaN(props.previewDimension.value))
-                            ? props.previewDimension.value
-                            : 0;
-
-                        const textSprite = createTextSprite(val.toFixed(2), "#00dddd", 0.03);
-
-                        // Ensure sprite is slightly above lines
-                        textSprite.position.set(textSketchX, textSketchY, 0.02);
-                        previewGroup.add(textSprite);
-                    }
-                }
-
-            } else if (type === "Radius" && selections.length === 1) {
-                const center = getPos(selections[0]);
-                if (center) {
-                    const radius = props.previewDimension.value;
-
-                    const dimMat = new THREE.LineBasicMaterial({ color: 0x00dddd, depthTest: false });
-
-                    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(center[0], center[1], 0), new THREE.Vector3(pointerPos.x, pointerPos.y, 0)]);
-                    previewGroup.add(new THREE.Line(lineGeo, dimMat));
-
-                    const textSprite = createTextSprite("R " + radius.toFixed(2), "#00dddd", 0.03);
-                    textSprite.position.set(pointerPos.x, pointerPos.y, 0.02);
-                    previewGroup.add(textSprite);
-                }
-            } else if (type === "Angle") {
-                // Simplified angle preview 
-                // TODO: fully implement
-                const textSprite = createTextSprite("Angle " + (props.previewDimension.value * 180 / Math.PI).toFixed(1), "#00dddd", 0.03);
-                textSprite.position.set(pointerPos.x, pointerPos.y, 0.02);
-                previewGroup.add(textSprite);
-            }
-
-            scene.add(previewGroup);
+        // Render dimension preview using extracted function
+        if (props.previewDimension) {
+            renderDimensionPreview(
+                scene,
+                props.previewDimension,
+                pointerPos,
+                props.clientSketch || null,
+                matrix
+            );
         } else {
-            // Cleanup if no valid preview
-            const existing = scene.getObjectByName(PREVIEW_DIMENSION_NAME);
-            if (existing) scene.remove(existing);
+            cleanupPreviewDimension(scene);
         }
 
         const intersects = getIntersects(event.clientX, event.clientY);
@@ -1241,173 +511,14 @@ const Viewport: Component<ViewportProps> = (props) => {
 
 
     // React to selection updates - highlight faces, edges, and vertices
+    // Logic extracted to useSelectionHighlight.ts for cleaner architecture
     createEffect(() => {
         // CRITICAL: Access reactive signals FIRST so SolidJS tracks them as dependencies
-        // If we return early before accessing them, they won't trigger re-runs
         const currentSelection = props.selection;
         const currentTessellation = props.tessellation;
 
-        // Now we can safely check non-reactive conditions
-        if (!mainMesh || !currentTessellation) return;
-
-        const data = currentTessellation;
-        const SEL_EDGE_NAME = "selection_edge_highlight";
-        const SEL_FACE_NAME = "selection_highlight";
-
-        // Clear existing face highlight first (always clean start)
-        const existingFaceHighlight = mainMesh.getObjectByName(SEL_FACE_NAME);
-        if (existingFaceHighlight) {
-            mainMesh.remove(existingFaceHighlight);
-            (existingFaceHighlight as THREE.Mesh).geometry?.dispose();
-            ((existingFaceHighlight as THREE.Mesh).material as THREE.Material)?.dispose();
-        }
-
-        // Clear existing edge highlights
-        const existingEdgeHighlight = mainMesh.getObjectByName(SEL_EDGE_NAME);
-        if (existingEdgeHighlight) {
-            mainMesh.remove(existingEdgeHighlight);
-            existingEdgeHighlight.traverse((child) => {
-                if ((child as any).geometry) (child as any).geometry.dispose();
-                if ((child as any).material) (child as any).material.dispose();
-            });
-        }
-
-        if (!currentSelection || currentSelection.length === 0) {
-            return;
-        }
-
-
-
-        // === FACE SELECTION (triangles) ===
-        const faceIndices: number[] = [];
-        data.triangle_ids.forEach((tid, triIdx) => {
-            const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
-            if (isSelected) {
-                faceIndices.push(data.indices[triIdx * 3]);
-                faceIndices.push(data.indices[triIdx * 3 + 1]);
-                faceIndices.push(data.indices[triIdx * 3 + 2]);
-            }
-        });
-
-        if (faceIndices.length > 0) {
-            console.log("[Viewport] Highlighting", faceIndices.length / 3, "triangles (faces)");
-
-            // Create face highlight mesh directly here (not via updateHighlightMesh)
-            const highlightGeo = new THREE.BufferGeometry();
-            highlightGeo.setAttribute('position', mainMesh.geometry.getAttribute('position'));
-            highlightGeo.setIndex(faceIndices);
-
-            const highlightMat = new THREE.MeshBasicMaterial({
-                color: 0xffaa00,
-                depthTest: true,
-                depthWrite: false,
-                transparent: true,
-                opacity: 0.7,
-                side: THREE.DoubleSide,
-                polygonOffset: true,
-                polygonOffsetFactor: -2,
-                polygonOffsetUnits: -2
-            });
-
-            const mesh = new THREE.Mesh(highlightGeo, highlightMat);
-            mesh.name = SEL_FACE_NAME;
-            mesh.renderOrder = 1001; // Higher than hover
-            mainMesh.add(mesh);
-        }
-
-        // === EDGE SELECTION (lines) ===
-        const SEL_VERTEX_NAME = "selection_vertex_highlight";
-        const edgeSegments: number[] = [];
-
-        // Debug: log what we're looking for
-        const edgeSelections = currentSelection.filter(s => s.rank === "Edge");
-        if (edgeSelections.length > 0) {
-            console.log("[Viewport] Looking for edges:", edgeSelections.length, "edge selections");
-            console.log("[Viewport] Available line_ids:", data.line_ids?.length || 0);
-        }
-
-        if (data.line_ids && data.line_indices) {
-            // line_ids: one ID per line segment (2 consecutive indices per segment)
-            data.line_ids.forEach((tid, lineIdx) => {
-                const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
-                if (isSelected) {
-                    const idx1 = data.line_indices[lineIdx * 2];
-                    const idx2 = data.line_indices[lineIdx * 2 + 1];
-                    // Get world positions
-                    edgeSegments.push(
-                        data.vertices[idx1 * 3], data.vertices[idx1 * 3 + 1], data.vertices[idx1 * 3 + 2],
-                        data.vertices[idx2 * 3], data.vertices[idx2 * 3 + 1], data.vertices[idx2 * 3 + 2]
-                    );
-                }
-            });
-        }
-
-        if (edgeSegments.length > 0) {
-            const lineGeo = new LineSegmentsGeometry();
-            lineGeo.setPositions(edgeSegments);
-
-            const lineMat = new LineMaterial({
-                color: 0x00ffff, // CYAN for edges (distinct from orange faces)
-                linewidth: 8, // Thick to stand out
-                resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
-                depthTest: true
-            });
-
-            const edgeHighlight = new LineSegments2(lineGeo, lineMat);
-            edgeHighlight.name = SEL_EDGE_NAME;
-            edgeHighlight.renderOrder = 1002; // Above face highlight
-            edgeHighlight.computeLineDistances();
-            mainMesh.add(edgeHighlight);
-        } else if (edgeSelections.length > 0) {
-            // Debug: we have edge selections but no matches found
-        }
-
-        // === VERTEX SELECTION (points) ===
-        // Clear existing vertex highlight
-        const existingVertexHighlight = mainMesh.getObjectByName(SEL_VERTEX_NAME);
-        if (existingVertexHighlight) {
-            mainMesh.remove(existingVertexHighlight);
-            const mat = (existingVertexHighlight as THREE.Points).material as THREE.Material;
-            mat?.dispose();
-        }
-
-        const vertexPositions: number[] = [];
-        const vertexSelections = currentSelection.filter(s => s.rank === "Vertex");
-
-        if (vertexSelections.length > 0 && data.point_ids && data.point_indices) {
-            console.log("[Viewport] Looking for vertices:", vertexSelections.length, "vertex selections");
-
-            data.point_ids.forEach((tid, ptIdx) => {
-                const isSelected = currentSelection.some(s => topoIdMatches(s, tid));
-                if (isSelected) {
-                    const idx = data.point_indices[ptIdx];
-                    vertexPositions.push(
-                        data.vertices[idx * 3],
-                        data.vertices[idx * 3 + 1],
-                        data.vertices[idx * 3 + 2]
-                    );
-                }
-            });
-        }
-
-        if (vertexPositions.length > 0) {
-            console.log("[Viewport] Highlighting", vertexPositions.length / 3, "vertices");
-
-            const pointGeo = new THREE.BufferGeometry();
-            pointGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertexPositions, 3));
-
-            const pointMat = new THREE.PointsMaterial({
-                color: 0x00ff00, // GREEN for vertices (distinct from orange faces and cyan edges)
-                size: 16,
-                sizeAttenuation: false,
-                depthTest: false // Always visible
-            });
-
-            const vertexHighlight = new THREE.Points(pointGeo, pointMat);
-            vertexHighlight.name = SEL_VERTEX_NAME;
-            vertexHighlight.renderOrder = 1003; // Above everything
-            mainMesh.add(vertexHighlight);
-        }
+        // Delegate to extracted function
+        applySelectionHighlights(mainMesh, currentTessellation, currentSelection);
     });
 
     // ... init/cleanup ... 

@@ -7,7 +7,7 @@ export class LineTool extends BaseTool {
     id = "line";
     private startPoint: [number, number] | null = null;
     private startSnap: SnapPoint | null = null;
-    private previewId = "preview_line";
+    private previewId: string | null = null;
 
     onMouseDown(u: number, v: number, _e?: MouseEvent): void {
         const snap = this.context.snapPoint;
@@ -18,7 +18,6 @@ export class LineTool extends BaseTool {
         }
 
         // Apply angular snapping if start point exists
-        // Apply constraint snapping if start point exists
         let constraintSnapType: "horizontal" | "vertical" | "parallel" | "perpendicular" | null = null;
         let constraintEntityId: string | null = null;
 
@@ -33,6 +32,7 @@ export class LineTool extends BaseTool {
             // Click 1: Start
             this.startPoint = effectivePoint;
             this.startSnap = snap;
+            this.previewId = crypto.randomUUID(); // Generate stable ID
             this.context.setTempPoint?.(this.startPoint); // Update global state for inference
         } else {
             // Click 2: End
@@ -61,15 +61,19 @@ export class LineTool extends BaseTool {
         this.reset();
         // Remove preview if exists
         const sketch = this.context.sketch;
-        const entities = sketch.entities.filter(e => e.id !== this.previewId);
-        if (entities.length !== sketch.entities.length) {
-            this.context.setSketch({ ...sketch, entities });
+        if (this.previewId) {
+            const entities = sketch.entities.filter(e => e.id !== this.previewId);
+            if (entities.length !== sketch.entities.length) {
+                this.context.setSketch({ ...sketch, entities });
+            }
         }
+        this.reset(); // Make sure previewId is cleared
     }
 
     private reset() {
         this.startPoint = null;
         this.startSnap = null;
+        this.previewId = null;
         this.context.setTempPoint?.(null);
     }
 
@@ -96,7 +100,9 @@ export class LineTool extends BaseTool {
         const sketch = { ...this.context.sketch };
 
         // Remove preview
-        sketch.entities = sketch.entities.filter(e => e.id !== this.previewId);
+        if (this.previewId) {
+            sketch.entities = sketch.entities.filter(e => e.id !== this.previewId);
+        }
 
         // Add new entity
         sketch.entities = [...sketch.entities, newEntity];
@@ -124,6 +130,8 @@ export class LineTool extends BaseTool {
     }
 
     private updatePreview(start: [number, number], end: [number, number]) {
+        if (!this.previewId) return;
+
         const previewEntity: SketchEntity = {
             id: this.previewId,
             geometry: {
