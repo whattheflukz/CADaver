@@ -513,7 +513,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Deterministic regeneration order
 - [x] Rollback & roll-forward preview
 - [x] Feature suppression
-- [ ] Feature reordering (with constraints)
+- [x] Feature reordering (with constraints)
 - [ ] Insert/replace features mid-tree
 - [x] Dependency visualization
 

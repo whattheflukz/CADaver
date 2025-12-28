@@ -17,6 +17,7 @@ interface FeatureTreeProps {
     onOpenVariables?: () => void;
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
+    onReorderFeature?: (id: string, newIndex: number) => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -79,6 +80,36 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
         return getDependents(hovered).includes(id);
     };
 
+    // Drag-and-drop state
+    const [draggedId, setDraggedId] = createSignal<string | null>(null);
+    const [dropTargetIndex, setDropTargetIndex] = createSignal<number | null>(null);
+
+    const handleDragStart = (e: DragEvent, id: string) => {
+        setDraggedId(id);
+        e.dataTransfer!.effectAllowed = 'move';
+        e.dataTransfer!.setData('text/plain', id);
+    };
+
+    const handleDragEnd = () => {
+        setDraggedId(null);
+        setDropTargetIndex(null);
+    };
+
+    const handleDragOver = (e: DragEvent, index: number) => {
+        e.preventDefault();
+        e.dataTransfer!.dropEffect = 'move';
+        setDropTargetIndex(index);
+    };
+
+    const handleDrop = (e: DragEvent, targetIndex: number) => {
+        e.preventDefault();
+        const id = draggedId();
+        if (id && props.onReorderFeature) {
+            props.onReorderFeature(id, targetIndex);
+        }
+        setDraggedId(null);
+        setDropTargetIndex(null);
+    };
 
     return (
         <div class="feature-tree">
@@ -148,7 +179,15 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                         };
 
                         return (
-                            <div class={`feature-block ${isRolledBack() ? 'rolled-back' : ''}`}>
+                            <div
+                                class={`feature-block ${isRolledBack() ? 'rolled-back' : ''} ${dropTargetIndex() === index() ? 'drop-target' : ''}`}
+                                onDragOver={(e) => handleDragOver(e, index())}
+                                onDrop={(e) => handleDrop(e, index())}
+                            >
+                                {/* Drop indicator line */}
+                                <Show when={dropTargetIndex() === index() && draggedId() !== id}>
+                                    <div class="drop-indicator" />
+                                </Show>
                                 {/* Rollback indicator bar */}
                                 <Show when={isRollbackPoint()}>
                                     <div class="rollback-indicator">
@@ -163,12 +202,15 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                     </div>
                                 </Show>
                                 <div
-                                    class={`feature-item ${props.selectedId === id ? 'selected' : ''} ${isRolledBack() ? 'faded' : ''} ${isParentOfHovered(id) ? 'dependency-parent' : ''} ${isChildOfHovered(id) ? 'dependency-child' : ''}`}
+                                    class={`feature-item ${props.selectedId === id ? 'selected' : ''} ${isRolledBack() ? 'faded' : ''} ${isParentOfHovered(id) ? 'dependency-parent' : ''} ${isChildOfHovered(id) ? 'dependency-child' : ''} ${draggedId() === id ? 'dragging' : ''}`}
+                                    draggable={true}
+                                    onDragStart={(e) => handleDragStart(e, id)}
+                                    onDragEnd={handleDragEnd}
                                     onClick={() => props.onSelect(id)}
                                     onDblClick={() => props.onSetRollback?.(isRollbackPoint() ? null : id)}
                                     onMouseEnter={() => setHoverFeatureId(id)}
                                     onMouseLeave={() => setHoverFeatureId(null)}
-                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Double-click to set rollback point here"}
+                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Drag to reorder • Double-click to set rollback"}
                                 >
                                     {/* Delete button - far left, separated */}
                                     <span

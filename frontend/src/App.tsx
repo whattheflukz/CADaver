@@ -78,6 +78,7 @@ const App: Component = () => {
     kernelErrors,
     dismissError,
     setRollback,
+    reorderFeature,
   } = useMicrocadConnection({
     autostartNextSketch: () => false, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
@@ -431,6 +432,7 @@ const App: Component = () => {
             onOpenVariables={() => setShowVariablesPanel(true)}
             rollbackPoint={graph().rollback_point ?? null}
             onSetRollback={setRollback}
+            onReorderFeature={reorderFeature}
           />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>

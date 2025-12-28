@@ -342,4 +342,5 @@ export type WebSocketCommand =
     | { command: "SelectionGroupDelete", payload: { name: string } }
     | { command: "SelectionGroupsList" }
     | { command: "ToggleSuppression", payload: { id: string } }
-    | { command: "SetRollback", payload: { id: string | null } };
+    | { command: "SetRollback", payload: { id: string | null } }
+    | { command: "ReorderFeature", payload: { id: string, new_index: number } };

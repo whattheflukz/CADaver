@@ -402,3 +402,40 @@
 .feature-item {
     position: relative;
 }
+
+/* Drag-and-drop styles */
+.feature-item.dragging {
+    opacity: 0.5;
+    background-color: #4a4a4a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.feature-item[draggable="true"] {
+    cursor: grab;
+}
+
+.feature-item[draggable="true"]:active {
+    cursor: grabbing;
+}
+
+.drop-indicator {
+    height: 3px;
+    background: linear-gradient(90deg, #4da6ff 0%, #7c3aed 100%);
+    border-radius: 2px;
+    margin: 2px 0;
+    animation: pulse-drop 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-drop {
+    from {
+        opacity: 0.6;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.feature-block.drop-target {
+    transform: translateY(2px);
+}

@@ -340,6 +340,84 @@ impl FeatureGraph {
         }
         all_refs
     }
+
+    /// Get all features that depend on the given feature (its dependents/children).
+    pub fn get_dependents(&self, id: EntityId) -> Vec<EntityId> {
+        self.nodes.values()
+            .filter(|f| f.dependencies.contains(&id))
+            .map(|f| f.id)
+            .collect()
+    }
+
+    /// Attempts to move a feature to a new position in sort_order.
+    /// Returns Err if the move would violate dependency constraints:
+    /// - A feature cannot be placed before any of its dependencies (parents)
+    /// - A feature cannot be placed after any of its dependents (children)
+    pub fn reorder_feature(&mut self, id: EntityId, new_index: usize) -> Result<(), String> {
+        // Ensure sort order is computed
+        if self.sort_order.is_empty() {
+            let _ = self.sort();
+        }
+
+        // Find current position
+        let current_index = self.sort_order.iter().position(|&fid| fid == id)
+            .ok_or_else(|| "Feature not found in sort order".to_string())?;
+
+        if current_index == new_index {
+            return Ok(()); // No-op
+        }
+
+        let new_index = new_index.min(self.sort_order.len() - 1);
+
+        // Get the feature's dependencies (parents)
+        let feature = self.nodes.get(&id)
+            .ok_or_else(|| "Feature not found".to_string())?;
+        let dependencies = feature.dependencies.clone();
+
+        // Get the feature's dependents (children) 
+        let dependents = self.get_dependents(id);
+
+        // Validate: cannot move before any dependency
+        for dep_id in &dependencies {
+            if let Some(dep_idx) = self.sort_order.iter().position(|&fid| fid == *dep_id) {
+                if new_index <= dep_idx {
+                    let dep_name = self.nodes.get(dep_id)
+                        .map(|f| f.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    return Err(format!(
+                        "Cannot move before dependency: {}",
+                        dep_name
+                    ));
+                }
+            }
+        }
+
+        // Validate: cannot move after any dependent
+        for dep_id in &dependents {
+            if let Some(dep_idx) = self.sort_order.iter().position(|&fid| fid == *dep_id) {
+                if new_index >= dep_idx {
+                    let dep_name = self.nodes.get(dep_id)
+                        .map(|f| f.name.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    return Err(format!(
+                        "Cannot move after dependent: {}",
+                        dep_name
+                    ));
+                }
+            }
+        }
+
+        // Execute the move
+        let feature_id = self.sort_order.remove(current_index);
+        let insert_index = if new_index > current_index {
+            new_index.saturating_sub(1).min(self.sort_order.len())
+        } else {
+            new_index.min(self.sort_order.len())
+        };
+        self.sort_order.insert(insert_index, feature_id);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -662,5 +740,47 @@ mod tests {
         // Test invalid rollback ID
         let invalid_id = EntityId::new();
         assert!(!graph.set_rollback(Some(invalid_id)), "set_rollback should return false for invalid ID");
+    }
+
+    #[test]
+    fn test_reorder_feature() {
+        let mut graph = FeatureGraph::new();
+        
+        // Create 3 features: F1 -> F2 -> F3 (chain of dependencies)
+        let f1 = create_feature("F1", vec![]);
+        let mut f2 = Feature::new("F2", FeatureType::Extrude);
+        f2.dependencies = vec![f1.id];
+        let mut f3 = Feature::new("F3", FeatureType::Extrude);
+        f3.dependencies = vec![f2.id];
+        
+        graph.add_node(f1.clone());
+        graph.add_node(f2.clone());
+        graph.add_node(f3.clone());
+        
+        // Ensure sorted
+        let _ = graph.sort();
+        assert_eq!(graph.sort_order, vec![f1.id, f2.id, f3.id]);
+        
+        // Test 1: Cannot move F2 before its dependency F1
+        let result = graph.reorder_feature(f2.id, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Cannot move before dependency"));
+        
+        // Test 2: Cannot move F2 after its dependent F3
+        let result = graph.reorder_feature(f2.id, 2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Cannot move after dependent"));
+        
+        // Test 3: Add independent feature F4 (no deps), can reorder freely
+        let f4 = create_feature("F4", vec![]);
+        graph.add_node(f4.clone());
+        let _ = graph.sort(); // Re-sort to include F4
+        
+        // F4 should be able to move before F1 (it has no dependencies)
+        let f4_idx = graph.get_feature_index(f4.id).unwrap();
+        // Move F4 to position 0
+        let result = graph.reorder_feature(f4.id, 0);
+        assert!(result.is_ok(), "Independent feature should be able to move to start");
+        assert_eq!(graph.sort_order[0], f4.id);
     }
 }

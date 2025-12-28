@@ -210,6 +210,11 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         send({ command: 'SetRollback', payload: { id } });
     };
 
+    // Feature reordering
+    const reorderFeature = (id: string, newIndex: number) => {
+        send({ command: 'ReorderFeature', payload: { id, new_index: newIndex } });
+    };
+
     return {
         status,
         graph,
@@ -228,7 +233,8 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         kernelErrors,
         clearErrors,
         dismissError,
-        setRollback
+        setRollback,
+        reorderFeature
     };
 }
 

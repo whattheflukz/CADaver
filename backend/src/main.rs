@@ -51,6 +51,7 @@ enum WebSocketCommand {
     SelectionGroupsList,
     ToggleSuppression { id: uuid::Uuid },
     SetRollback { id: Option<uuid::Uuid> },
+    ReorderFeature { id: uuid::Uuid, new_index: usize },
 }
 
 #[derive(Deserialize, Debug)]
@@ -467,6 +468,36 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     };
                     if let Some(json) = json_update { let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await; }
                     if let Some(program) = program { process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await; }
+                }
+
+                WebSocketCommand::ReorderFeature { id, new_index } => {
+                    let entity_id = cad_core::topo::EntityId::from_uuid(id);
+                    let result = {
+                        let mut graph = state.graph.write().unwrap();
+                        graph.reorder_feature(entity_id, new_index)
+                    };
+                    match result {
+                        Ok(()) => {
+                            // Reorder succeeded, send updated graph and regenerate
+                            let (json_update, program) = {
+                                let mut graph = state.graph.write().unwrap();
+                                let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                                let program = graph.regenerate();
+                                (json, program)
+                            };
+                            let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json_update))).await;
+                            process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await;
+                        }
+                        Err(err_msg) => {
+                            // Send error to client
+                            let error = serde_json::json!({
+                                "code": "REORDER_FAILED",
+                                "message": err_msg,
+                                "severity": "warning"
+                            });
+                            let _ = socket.send(Message::Text(format!("ERROR_UPDATE:{}", error))).await;
+                        }
+                    }
                 }
             }
         }
