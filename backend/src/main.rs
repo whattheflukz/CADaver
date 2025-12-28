@@ -50,6 +50,7 @@ enum WebSocketCommand {
     SelectionGroupDelete { name: String },
     SelectionGroupsList,
     ToggleSuppression { id: uuid::Uuid },
+    SetRollback { id: Option<uuid::Uuid> },
 }
 
 #[derive(Deserialize, Debug)]
@@ -450,6 +451,22 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                      };
                      if let Some(json) = json_update { let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await; }
                      if let Some(program) = program { process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await; }
+                }
+
+                WebSocketCommand::SetRollback { id } => {
+                    let entity_id = id.map(cad_core::topo::EntityId::from_uuid);
+                    let (json_update, program) = {
+                        let mut graph = state.graph.write().unwrap();
+                        if graph.set_rollback(entity_id) {
+                            let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                            let program = graph.regenerate();
+                            (Some(json), Some(program))
+                        } else {
+                            (None, None)
+                        }
+                    };
+                    if let Some(json) = json_update { let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await; }
+                    if let Some(program) = program { process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await; }
                 }
             }
         }

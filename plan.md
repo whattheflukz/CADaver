@@ -442,7 +442,7 @@ Mode changes must:
 - [x] Backend API framework (Axum / Actix)
 - [x] WebSocket-based model sync
 - [x] Deterministic UUID & entity ID system
-- [ ] Math & geometry utility layer
+- [x] Math & geometry utility layer
 - [x] Unit system (mm, inch, deg, etc.)
 
 ### **UI Infrastructure (Added)**
@@ -484,7 +484,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 ### **Topological Naming & References (Critical)**
 - [x] Persistent face/edge/vertex IDs
 - [x] Reference tracking across regenerations
-- [ ] Stable selection resolution
+- [x] Stable selection resolution
 - [ ] Failure recovery strategies
 - [x] Explicit “reference broken” reporting
 
@@ -498,7 +498,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] WebGL/WebGPU renderer
 - [ ] Tessellation from MicroCAD
 - [ ] Normals & edge rendering
-- [ ] Face/edge/vertex picking
+- [x] Face/edge/vertex picking
 - [x] Camera controls (orbit/pan/zoom)
 - [ ] LOD groundwork
 
@@ -511,11 +511,11 @@ Focus on building reusable, composable components to reduce duplication and ensu
 ### Feature Tree System
 - [x] Feature DAG
 - [x] Deterministic regeneration order
-- [ ] Rollback & roll-forward preview
+- [x] Rollback & roll-forward preview
 - [x] Feature suppression
 - [ ] Feature reordering (with constraints)
 - [ ] Insert/replace features mid-tree
-- [ ] Dependency visualization
+- [x] Dependency visualization
 
 ---
 

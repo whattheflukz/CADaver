@@ -38,7 +38,12 @@ pub use tessellation::Tessellation;
 pub mod intersection;
 pub use intersection::*;
 
+// Math & Geometry Utility Layers
+pub mod utils_2d;
+pub mod utils_3d;
+
 pub fn dist_sq(p1: &Point3, p2: &Point3) -> f64 {
 
     na::distance_squared(p1, p2)
 }
+

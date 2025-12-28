@@ -28,6 +28,10 @@ pub struct FeatureGraph {
     /// Global parametric variables
     #[serde(default)]
     pub variables: VariableStore,
+    /// Optional rollback point - if set, regeneration stops at this feature (inclusive)
+    /// This is for temporary preview mode, not permanent suppression
+    #[serde(default)]
+    pub rollback_point: Option<EntityId>,
 }
 
 
@@ -281,10 +285,48 @@ impl FeatureGraph {
                      };
                      _program.statements.push(stmt);
                 }
+                
+                // Check rollback point AFTER generating this feature
+                // Rollback is inclusive - we generate up to and including the rollback feature
+                if let Some(rb_id) = self.rollback_point {
+                    if *id == rb_id {
+                        break;
+                    }
+                }
             }
         }
         
         _program
+    }
+
+    /// Set rollback point to a specific feature (inclusive).
+    /// Pass None to disable rollback and show full model.
+    /// Returns true if the feature exists, false otherwise.
+    pub fn set_rollback(&mut self, id: Option<EntityId>) -> bool {
+        if let Some(target_id) = id {
+            if !self.nodes.contains_key(&target_id) {
+                return false;
+            }
+        }
+        self.rollback_point = id;
+        true
+    }
+
+    /// Get the index of a feature in the sorted order (for UI display).
+    /// Returns None if feature not found or sort order not computed.
+    pub fn get_feature_index(&self, id: EntityId) -> Option<usize> {
+        self.sort_order.iter().position(|&fid| fid == id)
+    }
+
+    /// Get the list of features that are currently "rolled back" (excluded from regeneration).
+    /// These are features that come after the rollback point in the sort order.
+    pub fn get_rolled_back_features(&self) -> Vec<EntityId> {
+        if let Some(rb_id) = self.rollback_point {
+            if let Some(rb_idx) = self.get_feature_index(rb_id) {
+                return self.sort_order.iter().skip(rb_idx + 1).cloned().collect();
+            }
+        }
+        vec![]
     }
 
     /// Collects all topological IDs referenced by any feature in the graph.
@@ -561,5 +603,64 @@ mod tests {
         let refs = graph.collect_all_references();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0], ref_id);
+    }
+
+    #[test]
+    fn test_rollback_preview() {
+        use crate::microcad_kernel::ast::Statement;
+        
+        let mut graph = FeatureGraph::new();
+        let f1 = create_feature("F1", vec![]);
+        let mut f2 = Feature::new("F2", FeatureType::Extrude);
+        f2.dependencies = vec![f1.id];
+        let mut f3 = Feature::new("F3", FeatureType::Extrude);
+        f3.dependencies = vec![f2.id];
+        
+        graph.add_node(f1.clone());
+        graph.add_node(f2.clone());
+        graph.add_node(f3.clone());
+        
+        // Full regeneration - should have all 3 features
+        let prog_full = graph.regenerate();
+        let has_f3_full = prog_full.statements.iter().any(|s| {
+            matches!(s, Statement::Assignment { name, .. } if name == &format!("feat_{}", f3.id))
+        });
+        assert!(has_f3_full, "F3 should be in full program");
+        
+        // Set rollback to F2 (should include F1 and F2, but not F3)
+        assert!(graph.set_rollback(Some(f2.id)), "set_rollback should return true for valid ID");
+        let prog_rolled = graph.regenerate();
+        
+        // Should have F1 and F2
+        let has_f1 = prog_rolled.statements.iter().any(|s| {
+            matches!(s, Statement::Assignment { name, .. } if name == &format!("feat_{}", f1.id))
+        });
+        let has_f2 = prog_rolled.statements.iter().any(|s| {
+            matches!(s, Statement::Assignment { name, .. } if name == &format!("feat_{}", f2.id))
+        });
+        let has_f3_rolled = prog_rolled.statements.iter().any(|s| {
+            matches!(s, Statement::Assignment { name, .. } if name == &format!("feat_{}", f3.id))
+        });
+        
+        assert!(has_f1, "F1 should be in rolled-back program");
+        assert!(has_f2, "F2 should be in rolled-back program (rollback is inclusive)");
+        assert!(!has_f3_rolled, "F3 should NOT be in rolled-back program");
+        
+        // Check get_rolled_back_features
+        let rolled_back = graph.get_rolled_back_features();
+        assert_eq!(rolled_back.len(), 1);
+        assert_eq!(rolled_back[0], f3.id);
+        
+        // Clear rollback - should restore full model
+        assert!(graph.set_rollback(None), "set_rollback(None) should succeed");
+        let prog_restored = graph.regenerate();
+        let has_f3_restored = prog_restored.statements.iter().any(|s| {
+            matches!(s, Statement::Assignment { name, .. } if name == &format!("feat_{}", f3.id))
+        });
+        assert!(has_f3_restored, "F3 should be restored after clearing rollback");
+        
+        // Test invalid rollback ID
+        let invalid_id = EntityId::new();
+        assert!(!graph.set_rollback(Some(invalid_id)), "set_rollback should return false for invalid ID");
     }
 }

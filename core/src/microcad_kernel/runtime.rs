@@ -459,113 +459,31 @@ impl Runtime {
                                 _ => sketch.entities.clone(), // None or empty list = extrude all
                             };
                             
-                            // Use chain finder to get closed loops
-                            let loops = crate::sketch::chains::find_closed_loops(&filtered_entities);
-                            logs.push(format!("Found {} closed loops for extrusion", loops.len()));
                             
-                            // Convert chain loops to 2D point arrays AND collect segment metadata
-                            // loop_segments tracks source entity for each segment (for face grouping)
+                            // Use robust region detection instead of simple chain finding
+                            let regions = crate::sketch::regions::find_regions(&filtered_entities);
+                            logs.push(format!("Found {} regions for extrusion", regions.len()));
                             
-                            let points_result: Vec<Vec<Vec<[f64; 2]>>> = loops.into_iter().map(|chain| {
-                                let mut points: Vec<[f64; 2]> = Vec::new();
-                                let mut segments: Vec<ProfileSegment> = Vec::new();
+                            // Convert regions to the expected 2D point array format: Vec<Vec<Vec<[f64; 2]>>>
+                            // Each item is a Profile (Outer Loop + Inner Voids)
+                            let points_result: Vec<Vec<Vec<[f64; 2]>>> = regions.into_iter().map(|region| {
+                                let mut profile_loops = Vec::new();
                                 
-                                for entity in chain {
-                                    let entity_id = entity.id.to_string();
-                                    
-                                    match &entity.geometry {
-                                        crate::sketch::types::SketchGeometry::Line { start, end } => {
-                                            // Single segment from line
-                                            segments.push(ProfileSegment {
-                                                p1: *start,
-                                                p2: *end,
-                                                source: ProfileSegmentSource::Line { entity_id: entity_id.clone() },
-                                            });
-                                            
-                                            if points.is_empty() || 
-                                               (points.last().unwrap()[0] - start[0]).abs() > 1e-6 ||
-                                               (points.last().unwrap()[1] - start[1]).abs() > 1e-6 {
-                                                points.push(*start);
-                                            }
-                                            points.push(*end);
-                                        },
-                                        crate::sketch::types::SketchGeometry::Circle { center, radius } => {
-                                            // Circle creates ~32 segments, all with same source
-                                            let num_segments = 32;
-                                            for j in 0..num_segments {
-                                                let angle1 = (j as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
-                                                let angle2 = ((j + 1) as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
-                                                let p1 = [center[0] + radius * angle1.cos(), center[1] + radius * angle1.sin()];
-                                                let p2 = [center[0] + radius * angle2.cos(), center[1] + radius * angle2.sin()];
-                                                
-                                                segments.push(ProfileSegment {
-                                                    p1,
-                                                    p2,
-                                                    source: ProfileSegmentSource::Circle { 
-                                                        entity_id: entity_id.clone(), 
-                                                        center: *center, 
-                                                        radius: *radius 
-                                                    },
-                                                });
-                                                points.push(p1);
-                                            }
-                                        },
-                                        crate::sketch::types::SketchGeometry::Ellipse { center, semi_major, semi_minor, rotation } => {
-                                            let num_segments = 32;
-                                            let cos_r = rotation.cos();
-                                            let sin_r = rotation.sin();
-                                            for j in 0..num_segments {
-                                                let t1 = (j as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
-                                                let t2 = ((j + 1) as f64 / num_segments as f64) * 2.0 * std::f64::consts::PI;
-                                                let x1 = semi_major * t1.cos();
-                                                let y1 = semi_minor * t1.sin();
-                                                let x2 = semi_major * t2.cos();
-                                                let y2 = semi_minor * t2.sin();
-                                                let p1 = [center[0] + x1 * cos_r - y1 * sin_r, center[1] + x1 * sin_r + y1 * cos_r];
-                                                let p2 = [center[0] + x2 * cos_r - y2 * sin_r, center[1] + x2 * sin_r + y2 * cos_r];
-                                                
-                                                segments.push(ProfileSegment {
-                                                    p1,
-                                                    p2,
-                                                    source: ProfileSegmentSource::Ellipse { entity_id: entity_id.clone(), center: *center },
-                                                });
-                                                points.push(p1);
-                                            }
-                                        },
-                                        crate::sketch::types::SketchGeometry::Arc { center, radius, start_angle, end_angle } => {
-                                            let num_segments = 16;
-                                            let angle_span = end_angle - start_angle;
-                                            for j in 0..num_segments {
-                                                let t1 = j as f64 / num_segments as f64;
-                                                let t2 = (j + 1) as f64 / num_segments as f64;
-                                                let a1 = start_angle + t1 * angle_span;
-                                                let a2 = start_angle + t2 * angle_span;
-                                                let p1 = [center[0] + radius * a1.cos(), center[1] + radius * a1.sin()];
-                                                let p2 = [center[0] + radius * a2.cos(), center[1] + radius * a2.sin()];
-                                                
-                                                segments.push(ProfileSegment {
-                                                    p1,
-                                                    p2,
-                                                    source: ProfileSegmentSource::Arc { 
-                                                        entity_id: entity_id.clone(), 
-                                                        center: *center, 
-                                                        radius: *radius 
-                                                    },
-                                                });
-                                                points.push(p1);
-                                            }
-                                            // Push final point of arc
-                                            let final_pt = [center[0] + radius * end_angle.cos(), center[1] + radius * end_angle.sin()];
-                                            points.push(final_pt);
-                                        },
-                                        _ => {}
-                                    }
+                                // Outer boundary
+                                profile_loops.push(region.boundary_points);
+                                
+                                // Inner voids
+                                for void in region.voids {
+                                    profile_loops.push(void);
                                 }
-                                // Store segments for this loop in the outer-scoped variable
-                                loop_segments.push(vec![segments]);
                                 
-                                vec![points] // Wrap single loop as a profile with no holes
+                                profile_loops
                             }).collect();
+                            
+                            // Clear segments metadata as we will reconstruct it geometrically
+                            // (Since regions don't currently track per-edge metadata easily)
+                            loop_segments.clear();
+
                             
                             points_result
                         };

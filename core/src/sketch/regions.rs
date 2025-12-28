@@ -5,12 +5,11 @@
 //! 2. Building a planar graph with vertices at endpoints/intersections
 //! 3. Traversing the graph to find minimal enclosed faces
 
+use crate::geometry::utils_2d::{self, EPSILON};
 use crate::sketch::types::{SketchEntity, SketchGeometry};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
-
-const EPSILON: f64 = 1e-6;
 
 /// A detected closed region in the sketch
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,40 +196,7 @@ pub fn find_regions(entities: &[SketchEntity]) -> Vec<SketchRegion> {
 
 /// Test if a point is inside a region using winding number algorithm
 pub fn point_in_region(point: [f64; 2], region: &SketchRegion) -> bool {
-    let pts = &region.boundary_points;
-    if pts.len() < 3 {
-        return false;
-    }
-    
-    let mut winding = 0i32;
-    let n = pts.len();
-    
-    for i in 0..n {
-        let p1 = pts[i];
-        let p2 = pts[(i + 1) % n];
-        
-        if p1[1] <= point[1] {
-            if p2[1] > point[1] {
-                // Upward crossing
-                if cross_product_sign(p1, p2, point) > 0.0 {
-                    winding += 1;
-                }
-            }
-        } else {
-            if p2[1] <= point[1] {
-                // Downward crossing
-                if cross_product_sign(p1, p2, point) < 0.0 {
-                    winding -= 1;
-                }
-            }
-        }
-    }
-    
-    winding != 0
-}
-
-fn cross_product_sign(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
-    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    utils_2d::point_in_polygon(point, &region.boundary_points)
 }
 
 /// Find all intersection points between entities
@@ -273,97 +239,19 @@ fn intersect_entities(e1: &SketchEntity, e2: &SketchEntity) -> Vec<[f64; 2]> {
     }
 }
 
-/// Circle-circle intersection
+/// Circle-circle intersection - delegates to utils_2d
 fn circle_circle_intersect(c1: [f64; 2], r1: f64, c2: [f64; 2], r2: f64) -> Vec<[f64; 2]> {
-    let dx = c2[0] - c1[0];
-    let dy = c2[1] - c1[1];
-    let d = (dx * dx + dy * dy).sqrt();
-    
-    // No intersection or coincident
-    if d > r1 + r2 + EPSILON || d < (r1 - r2).abs() - EPSILON || d < EPSILON {
-        return vec![];
-    }
-    
-    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
-    let h_sq = r1 * r1 - a * a;
-    
-    if h_sq < 0.0 {
-        return vec![];
-    }
-    
-    let h = h_sq.sqrt();
-    let px = c1[0] + a * dx / d;
-    let py = c1[1] + a * dy / d;
-    
-    if h < EPSILON {
-        // Tangent
-        return vec![[px, py]];
-    }
-    
-    let ox = h * dy / d;
-    let oy = h * dx / d;
-    
-    vec![
-        [px + ox, py - oy],
-        [px - ox, py + oy],
-    ]
+    utils_2d::circle_circle_intersect(c1, r1, c2, r2)
 }
 
-/// Line-line intersection (segments)
+/// Line-line intersection (segments) - delegates to utils_2d
 fn line_line_intersect(s1: [f64; 2], e1: [f64; 2], s2: [f64; 2], e2: [f64; 2]) -> Option<[f64; 2]> {
-    let d1x = e1[0] - s1[0];
-    let d1y = e1[1] - s1[1];
-    let d2x = e2[0] - s2[0];
-    let d2y = e2[1] - s2[1];
-    
-    let denom = d1x * d2y - d1y * d2x;
-    if denom.abs() < EPSILON {
-        return None; // Parallel
-    }
-    
-    let t = ((s2[0] - s1[0]) * d2y - (s2[1] - s1[1]) * d2x) / denom;
-    let u = ((s2[0] - s1[0]) * d1y - (s2[1] - s1[1]) * d1x) / denom;
-    
-    // Check if intersection is within both segments
-    if t >= -EPSILON && t <= 1.0 + EPSILON && u >= -EPSILON && u <= 1.0 + EPSILON {
-        Some([s1[0] + t * d1x, s1[1] + t * d1y])
-    } else {
-        None
-    }
+    utils_2d::line_line_intersect(s1, e1, s2, e2)
 }
 
-/// Line-circle intersection
+/// Line-circle intersection - delegates to utils_2d
 fn line_circle_intersect(s: [f64; 2], e: [f64; 2], c: [f64; 2], r: f64) -> Vec<[f64; 2]> {
-    let dx = e[0] - s[0];
-    let dy = e[1] - s[1];
-    let fx = s[0] - c[0];
-    let fy = s[1] - c[1];
-    
-    let a = dx * dx + dy * dy;
-    let b = 2.0 * (fx * dx + fy * dy);
-    let cc = fx * fx + fy * fy - r * r;
-    
-    let disc = b * b - 4.0 * a * cc;
-    
-    if disc < 0.0 {
-        return vec![];
-    }
-    
-    let disc_sqrt = disc.sqrt();
-    let mut results = Vec::new();
-    
-    let t1 = (-b - disc_sqrt) / (2.0 * a);
-    let t2 = (-b + disc_sqrt) / (2.0 * a);
-    
-    // Include intersections slightly outside segment for robustness
-    if t1 >= -EPSILON && t1 <= 1.0 + EPSILON {
-        results.push([s[0] + t1 * dx, s[1] + t1 * dy]);
-    }
-    if t2 >= -EPSILON && t2 <= 1.0 + EPSILON && (t2 - t1).abs() > EPSILON {
-        results.push([s[0] + t2 * dx, s[1] + t2 * dy]);
-    }
-    
-    results
+    utils_2d::line_circle_intersect(s, e, c, r)
 }
 
 /// Build planar graph from entities and intersection points

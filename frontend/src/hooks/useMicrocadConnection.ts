@@ -205,6 +205,11 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         setKernelErrors(prev => prev.filter(e => e.timestamp !== timestamp));
     };
 
+    // Rollback control
+    const setRollback = (id: string | null) => {
+        send({ command: 'SetRollback', payload: { id } });
+    };
+
     return {
         status,
         graph,
@@ -222,6 +227,8 @@ export function useMicrocadConnection(props: MicrocadConnectionProps) {
         selectionGroups,
         kernelErrors,
         clearErrors,
-        dismissError
+        dismissError,
+        setRollback
     };
 }
+

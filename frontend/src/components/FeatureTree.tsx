@@ -15,6 +15,8 @@ interface FeatureTreeProps {
     onUpdateFeature?: (id: string, params: Record<string, any>) => void;
     onEditSketch?: (id: string) => void;
     onOpenVariables?: () => void;
+    rollbackPoint?: string | null;
+    onSetRollback?: (id: string | null) => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -27,6 +29,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
     };
 
     const [variablesExpanded, setVariablesExpanded] = createSignal(false);
+    const [hoverFeatureId, setHoverFeatureId] = createSignal<string | null>(null);
 
     const formatUnit = (unit: VariableUnit): string => {
         if (unit === 'Dimensionless') return '';
@@ -48,6 +51,34 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
         const unitStr = formatUnit(variable.unit);
         return `${variable.cached_value.toFixed(4)}${unitStr ? ' ' + unitStr : ''}`;
     };
+
+    // Dependency visualization helpers
+    // Get features that depend on the given feature (children/dependents)
+    const getDependents = (id: string): string[] => {
+        return Object.values(props.graph.nodes)
+            .filter(f => f.dependencies?.includes(id))
+            .map(f => f.id);
+    };
+
+    // Get features this feature depends on (parents)
+    const getParents = (id: string): string[] => {
+        return props.graph.nodes[id]?.dependencies ?? [];
+    };
+
+    // Check if a feature is a parent of the currently hovered feature
+    const isParentOfHovered = (id: string): boolean => {
+        const hovered = hoverFeatureId();
+        if (!hovered) return false;
+        return getParents(hovered).includes(id);
+    };
+
+    // Check if a feature is a child/dependent of the currently hovered feature
+    const isChildOfHovered = (id: string): boolean => {
+        const hovered = hoverFeatureId();
+        if (!hovered) return false;
+        return getDependents(hovered).includes(id);
+    };
+
 
     return (
         <div class="feature-tree">
@@ -97,7 +128,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
 
                 <For each={props.graph.sort_order}>
 
-                    {(id) => {
+                    {(id, index) => {
                         // Access feature reactively by using a function derived from props.graph
                         // This ensures that even if 'id' stays the same, if the content in props.graph.nodes[id] changes,
                         // accessed values will update.
@@ -106,11 +137,38 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                         // Guard against missing feature
                         if (!feature()) return null;
 
+                        // Check if this feature is the rollback point
+                        const isRollbackPoint = () => props.rollbackPoint === id;
+
+                        // Check if this feature is "after" the rollback point (rolled back / hidden)
+                        const isRolledBack = () => {
+                            if (!props.rollbackPoint) return false;
+                            const rbIndex = props.graph.sort_order.indexOf(props.rollbackPoint);
+                            return rbIndex !== -1 && index() > rbIndex;
+                        };
+
                         return (
-                            <div class="feature-block">
+                            <div class={`feature-block ${isRolledBack() ? 'rolled-back' : ''}`}>
+                                {/* Rollback indicator bar */}
+                                <Show when={isRollbackPoint()}>
+                                    <div class="rollback-indicator">
+                                        <span class="rollback-bar">◄ Rollback Point</span>
+                                        <button
+                                            class="rollback-clear-btn"
+                                            onClick={() => props.onSetRollback?.(null)}
+                                            title="Show All Features"
+                                        >
+                                            Show All
+                                        </button>
+                                    </div>
+                                </Show>
                                 <div
-                                    class={`feature-item ${props.selectedId === id ? 'selected' : ''}`}
+                                    class={`feature-item ${props.selectedId === id ? 'selected' : ''} ${isRolledBack() ? 'faded' : ''} ${isParentOfHovered(id) ? 'dependency-parent' : ''} ${isChildOfHovered(id) ? 'dependency-child' : ''}`}
                                     onClick={() => props.onSelect(id)}
+                                    onDblClick={() => props.onSetRollback?.(isRollbackPoint() ? null : id)}
+                                    onMouseEnter={() => setHoverFeatureId(id)}
+                                    onMouseLeave={() => setHoverFeatureId(null)}
+                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Double-click to set rollback point here"}
                                 >
                                     {/* Delete button - far left, separated */}
                                     <span

@@ -1,7 +1,6 @@
 pub mod types;
 pub mod solver;
 pub mod snap;
-pub mod chains;
 pub mod regions;
 pub mod measurement;
 

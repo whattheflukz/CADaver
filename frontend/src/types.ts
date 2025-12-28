@@ -25,6 +25,7 @@ export interface FeatureGraphState {
     nodes: Record<string, Feature>;
     sort_order: string[];
     variables?: VariableStore;
+    rollback_point?: string;  // If set, regeneration stops at this feature (inclusive)
 }
 
 // Variable unit types (matching backend)
@@ -340,4 +341,5 @@ export type WebSocketCommand =
     | { command: "SelectionGroupRestore", payload: { name: string } }
     | { command: "SelectionGroupDelete", payload: { name: string } }
     | { command: "SelectionGroupsList" }
-    | { command: "ToggleSuppression", payload: { id: string } };
+    | { command: "ToggleSuppression", payload: { id: string } }
+    | { command: "SetRollback", payload: { id: string | null } };

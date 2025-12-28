@@ -394,7 +394,7 @@ export interface CircularPatternStateExtended {
     count: number;
     totalAngle: number;
     activeField: 'center' | 'entities';
-    centerType: 'point' | 'origin';
+    centerType: 'point' | 'origin' | null;
     flipDirection: boolean;
     previewGeometry: SketchEntity[];
 }
