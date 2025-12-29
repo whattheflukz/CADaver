@@ -11,7 +11,9 @@ nalgebra = { version = "0.32", features = ["serde-serialize"] }
 thiserror = "1.0"
 earcutr = "0.5.0"
 evalexpr = "13.1.0"
-# microcad = "0.1" # Uncomment when valid, for now we might mock or assume existence if user provided it. 
+microcad-core = "0.2"
+microcad-std = "0.2" 
+cgmath = "0.18" 
 # actually, let's look for a git repo or something if it fails?
 # The prompt implies it's a real thing I should use. I will try to include it.
 # If this fails, I will remove it and ask the user.

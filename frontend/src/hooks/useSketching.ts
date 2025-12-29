@@ -124,6 +124,7 @@ export function useSketching(props: UseSketchingProps) {
   // --- Initialize Tool Hook ---
   const toolHook = useSketchTool(
     currentSketch,
+    activeSketchId,
     setCurrentSketch,
     sketchSelection,
     setSketchSelection,
@@ -138,6 +139,7 @@ export function useSketching(props: UseSketchingProps) {
     (m) => setActiveMeasurements(prev => [...prev, m]),
     constructionMode,
     sendSketchUpdate,
+    send,
     dimensionPlacementMode,
     dimensionProposedAction
   );
@@ -223,6 +225,13 @@ export function useSketching(props: UseSketchingProps) {
   };
   // Keyboard shortcuts are now handled centrally by useKeyboardShortcuts in App.tsx
   const handleSelect = (topoId: string | null, modifier: "replace" | "add" | "remove" = "replace") => {
+    // Check if active tool handles selection (e.g. Project Tool)
+    const activeTool = sketchTool();
+    const toolInstance = toolRegistry.getTool(activeTool);
+    if (toolInstance && toolInstance.onSelect) {
+      const handled = toolInstance.onSelect(topoId);
+      if (handled) return;
+    }
     sel.handleSelect(topoId, modifier, send, sketchMode());
   };
   sel.setupToolSelectionSync(analyzeDimensionSelection);

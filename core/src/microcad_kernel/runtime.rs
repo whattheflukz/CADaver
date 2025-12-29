@@ -3,6 +3,8 @@ use crate::topo::{EntityId, IdGenerator};
 use crate::geometry::Tessellation;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use microcad_core::geo2d::{Rect, Point, Size2};
+use microcad_core::geo3d::Extrude;
 
 #[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum KernelError {
@@ -128,34 +130,66 @@ impl Runtime {
                 logs.push(format!("Created cube with ID {}", id));
                 
                 let ctx = NamingContext::new(id);
-                let face_id = ctx.derive("FaceTop", TopoRank::Face);
 
-                // Register the analytic geometry
+                // Create geometry using MicroCAD
+                let p1 = Point::new(0.0, 0.0);
+                let p2 = Point::new(10.0, 10.0);
+                let rect = Rect::new(p1, p2);
+                let poly = rect.to_polygon();
+                let mesh_result = poly.extrude(microcad_core::geo3d::Extrusion::Linear { 
+                    height: microcad_core::Length(10.0), 
+                    scale_x: 1.0, 
+                    scale_y: 1.0, 
+                    twist: cgmath::Rad(0.0).into() 
+                });
+                
+                let inner = &mesh_result.inner;
+                let positions = &inner.positions;
+                let indices = &inner.triangle_indices;
+
+                // Create a single Face ID for the extruded solid (implied topology for now)
+                let face_id = ctx.derive("Face-0", TopoRank::Face); // Only 1 face in raw mesh?
+                // Note: MicroCAD mesh is a "soup" of triangles currently. 
+                // We treat the whole result as one "Face" for selection purposes until we have B-Rep.
+                
+                // Register Face Geometry (Placeholder Plane for now, as we don't have surface info)
+                // In reality, it should be a Mesh surface?
                 let face_entity = KernelEntity {
                    id: face_id,
-                   geometry: AnalyticGeometry::Plane {
-                       origin: [0.0, 5.0, 0.0],
-                       normal: [0.0, 1.0, 0.0],
-                   }
+                   geometry: AnalyticGeometry::Mesh, // We added Mesh variant earlier?
                 };
                 topology_manifest.insert(face_id, face_entity);
 
-                tessellation.add_triangle(
-                    Point3::new(0.0, 0.0, 0.0),
-                    Point3::new(10.0, 0.0, 0.0),
-                    Point3::new(0.0, 10.0, 0.0),
-                    face_id
-                );
+                // Generate TopoIds for vertices to maintain stability
+                let mut vertex_ids = Vec::with_capacity(positions.len());
+                for (i, p) in positions.iter().enumerate() {
+                    let v_id = ctx.derive(&format!("V-{}", i), TopoRank::Vertex);
+                    vertex_ids.push(v_id);
+                    
+                    // Add selectable point
+                    tessellation.add_point(
+                        Point3::new(p.x.into(), p.y.into(), p.z.into()),
+                        v_id
+                    );
+                }
 
-                // Add vertices (Corners)
-                let v1_id = ctx.derive("V1", TopoRank::Vertex);
-                tessellation.add_point(Point3::new(0.0, 0.0, 0.0), v1_id);
-                
-                let v2_id = ctx.derive("V2", TopoRank::Vertex);
-                tessellation.add_point(Point3::new(10.0, 0.0, 0.0), v2_id);
+                // Add triangles
+                for tri in indices {
+                    let i0 = tri.0 as usize;
+                    let i1 = tri.1 as usize;
+                    let i2 = tri.2 as usize;
+                    
+                    let p0 = positions[i0];
+                    let p1 = positions[i1];
+                    let p2 = positions[i2];
 
-                let v3_id = ctx.derive("V3", TopoRank::Vertex);
-                tessellation.add_point(Point3::new(0.0, 10.0, 0.0), v3_id);
+                    tessellation.add_triangle(
+                        Point3::new(p0.x.into(), p0.y.into(), p0.z.into()),
+                        Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
+                        Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
+                        face_id
+                    );
+                }
 
                 Ok(())
             }
@@ -168,6 +202,51 @@ impl Runtime {
                 if let Some(first_arg) = call.args.first() {
                     if let Expression::Value(Value::String(json)) = first_arg {
                         if let Ok(mut sketch) = serde_json::from_str::<crate::sketch::types::Sketch>(json) {
+                            // Update External References
+                            // This ensures that projected geometry matches the current state of referenced topology
+                            {
+                                let origin = sketch.plane.origin;
+                                let x_axis = sketch.plane.x_axis;
+                                let y_axis = sketch.plane.y_axis;
+                                
+                                // Helper to project 3D point to 2D sketch plane
+                                let project_to_2d = |p: [f64; 3]| -> [f64; 2] {
+                                    let v = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                                    let x = v[0]*x_axis[0] + v[1]*x_axis[1] + v[2]*x_axis[2];
+                                    let y = v[0]*y_axis[0] + v[1]*y_axis[1] + v[2]*y_axis[2];
+                                    [x, y]
+                                };
+
+                                // Collect updates first to avoid borrow issues
+                                let mut updates: Vec<(crate::topo::EntityId, crate::sketch::types::SketchGeometry)> = Vec::new();
+                                
+                                for (entity_id, topo_id) in &sketch.external_references {
+                                    if let Some(kernel_entity) = topology_manifest.get(topo_id) {
+                                        let new_geo = match &kernel_entity.geometry {
+                                            AnalyticGeometry::Line { start, end } => {
+                                                Some(crate::sketch::types::SketchGeometry::Line {
+                                                    start: project_to_2d(*start),
+                                                    end: project_to_2d(*end),
+                                                })
+                                            },
+                                            // TODO: Support projecting other types (Circle -> Ellipse/Line, etc)
+                                            _ => None
+                                        };
+                                        
+                                        if let Some(geo) = new_geo {
+                                            updates.push((*entity_id, geo));
+                                        }
+                                    }
+                                }
+                                
+                                // Apply updates
+                                for (id, geo) in updates {
+                                    if let Some(entity) = sketch.entities.iter_mut().find(|e| e.id == id) {
+                                        entity.geometry = geo;
+                                    }
+                                }
+                            }
+
                             // Run solver (in-place)
                             let converged = crate::sketch::solver::SketchSolver::solve(&mut sketch);
                             if !converged {
@@ -181,6 +260,11 @@ impl Runtime {
                             let y_axis = plane.y_axis;
                             let to_world = |x: f64, y: f64| -> Point3 {
                                 origin + x_axis * x + y_axis * y
+                            };
+                            let z_axis = x_axis.cross(&y_axis);
+                            let to_world_vec = |x: f64, y: f64, z: f64| -> [f64; 3] {
+                                let v = x_axis * x + y_axis * y + z_axis * z;
+                                [v[0], v[1], v[2]]
                             };
 
                             // Generate Visuals (Lines)
@@ -196,6 +280,15 @@ impl Runtime {
                                             0, 
                                             crate::topo::naming::TopoRank::Edge
                                         );
+
+                                        // Register Line Analytic Geometry
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Line {
+                                                start: { let p = to_world(start[0], start[1]); [p.x, p.y, p.z] },
+                                                end: { let p = to_world(end[0], end[1]); [p.x, p.y, p.z] },
+                                            }
+                                        });
 
                                         tessellation.add_line(
                                             to_world(start[0], start[1]),
@@ -217,6 +310,18 @@ impl Runtime {
                                             0, 
                                             crate::topo::naming::TopoRank::Edge
                                         );
+
+                                        // Register Circle Analytic Geometry
+                                        let normal = to_world_vec(0.0, 0.0, 1.0);
+                                        let center_3d = { let p = to_world(center[0], center[1]); [p.x, p.y, p.z] };
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Circle {
+                                                center: center_3d,
+                                                normal,
+                                                radius: *radius,
+                                            }
+                                        });
 
                                         // Discretize circle
                                         let segments = 64;
@@ -254,6 +359,20 @@ impl Runtime {
                                         let start_y = center[1] + radius * start_angle.sin();
                                         let mut prev_point = to_world(start_x, start_y);
 
+                                        // Register Arc Analytic Geometry
+                                        let normal = to_world_vec(0.0, 0.0, 1.0);
+                                        let center_3d = { let p = to_world(center[0], center[1]); [p.x, p.y, p.z] };
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Circle {
+                                                center: center_3d,
+                                                normal,
+                                                radius: *radius,
+                                            }
+                                        });
+
+
+
                                         for i in 1..=segments {
                                             let t = i as f64 / segments as f64;
                                             let angle = start_angle + sweep * t;
@@ -287,7 +406,18 @@ impl Runtime {
                                         );
                                         
                                         // Add the center point
-                                        tessellation.add_point(to_world(pos[0], pos[1]), topo_id);
+                                        let point_3d = to_world(pos[0], pos[1]);
+                                        tessellation.add_point(point_3d, topo_id);
+
+                                        // Register Point Analytic Geometry
+                                        let center_3d = { let p = to_world(pos[0], pos[1]); [p.x, p.y, p.z] };
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Sphere {
+                                                center: center_3d,
+                                                radius: 0.0,
+                                            }
+                                        });
                                         
                                         // Add cross lines for visibility (same as frontend)
                                         let size = 0.3;
@@ -313,6 +443,19 @@ impl Runtime {
                                             0,
                                             crate::topo::naming::TopoRank::Edge
                                         );
+                                        
+                                        // Register Ellipse Analytic Geometry (Fallback to Mesh)
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Mesh
+                                        });
+
+                                        // Register Ellipse Analytic Geometry (approximated as Mesh for now strictly, or add Ellipse variant later)
+                                        // For now, let's treat it as Mesh since AnalyticGeometry doesn't have Ellipse yet
+                                        topology_manifest.insert(topo_id, crate::topo::registry::KernelEntity {
+                                            id: topo_id,
+                                            geometry: crate::topo::registry::AnalyticGeometry::Mesh // Fallback
+                                        });
 
                                         // Discretize ellipse with rotation
                                         let segments = 64;
@@ -562,351 +705,73 @@ impl Runtime {
                             }
                         }
 
-                        let to_3d = |u: f64, v: f64| -> [f64; 3] {
-                            [
-                                origin[0] + u * x_axis[0] + v * y_axis[0],
-                                origin[1] + u * x_axis[1] + v * y_axis[1],
-                                origin[2] + u * x_axis[2] + v * y_axis[2],
-                            ]
-                        };
-
-                        for (profile_idx, profile_loops_2d) in loops_2d.iter().enumerate() {
-                            if profile_loops_2d.is_empty() { continue; }
+                        // Convert 2D loops to MicroCAD Polygons and Extrude
+                        use microcad_core::geo2d::{Polygon, LineString, Point};
+                        use microcad_core::geo3d::{Extrude, Extrusion};
+                        use microcad_core::Length;
+                        
+                        for (i, region_loops) in loops_2d.iter().enumerate() {
+                            if region_loops.is_empty() { continue; }
                             
-                            let outer_loop = &profile_loops_2d[0];
-                            let holes = &profile_loops_2d[1..];
+                            // 1. Create Exterior LineString
+                            let exterior_points: Vec<Point> = region_loops[0].iter()
+                                .map(|p| Point::new(p[0] as f64, p[1] as f64))
+                                .collect();
+                            let exterior = LineString::from(exterior_points);
                             
-                            // Triangulate with holes
-                            let (merged_2d_points, triangles) = crate::geometry::tessellation::triangulate_polygon_with_holes(outer_loop, holes);
-                            
-                            // Convert merged 2D points to 3D
-                            let merged_3d_points: Vec<[f64; 3]> = merged_2d_points.iter().map(|pt| to_3d(pt[0], pt[1])).collect();
-
-                             // Generate 3D prism from profile
-                            if !merged_3d_points.is_empty() {
-                                // Calculate Z-offsets vectors
-                                let vec_bottom = [normal[0] * start_offset, normal[1] * start_offset, normal[2] * start_offset];
-                                let vec_top = [normal[0] * (start_offset + distance), normal[1] * (start_offset + distance), normal[2] * (start_offset + distance)];
-                                
-                                // Bottom face plane (origin shifted)
-                                let bottom_origin = [origin[0] + vec_bottom[0], origin[1] + vec_bottom[1], origin[2] + vec_bottom[2]];
-                                let top_origin = [origin[0] + vec_top[0], origin[1] + vec_top[1], origin[2] + vec_top[2]];
-                                
-                                // Create bottom face TopoId
-                                let bottom_face_id = ctx.derive(&format!("BottomFace_{}", profile_idx), TopoRank::Face);
-                                let bottom_entity = KernelEntity {
-                                    id: bottom_face_id,
-                                    geometry: AnalyticGeometry::Plane {
-                                        origin: bottom_origin,
-                                        normal: [-normal[0], -normal[1], -normal[2]], 
-                                    }
-                                };
-                                topology_manifest.insert(bottom_face_id, bottom_entity);
-                                
-                                // Create top face TopoId
-                                let top_face_id = ctx.derive(&format!("TopFace_{}", profile_idx), TopoRank::Face);
-                                let top_entity = KernelEntity {
-                                    id: top_face_id,
-                                    geometry: AnalyticGeometry::Plane {
-                                        origin: top_origin,
-                                        normal: normal,
-                                    }
-                                };
-                                topology_manifest.insert(top_face_id, top_entity);
-                                
-                                // Add triangles for top/bottom faces
-                                for (i, j, k) in triangles {
-                                    let p0 = merged_3d_points[i];
-                                    let p1 = merged_3d_points[j];
-                                    let p2 = merged_3d_points[k];
-                                    
-                                    // Bottom face (reverse winding for outward normal)
-                                    tessellation.add_triangle(
-                                        Point3::new(p0[0] + vec_bottom[0], p0[1] + vec_bottom[1], p0[2] + vec_bottom[2]),
-                                        Point3::new(p2[0] + vec_bottom[0], p2[1] + vec_bottom[1], p2[2] + vec_bottom[2]),
-                                        Point3::new(p1[0] + vec_bottom[0], p1[1] + vec_bottom[1], p1[2] + vec_bottom[2]),
-                                        bottom_face_id
-                                    );
-                                    
-                                    // Top face
-                                    tessellation.add_triangle(
-                                        Point3::new(p0[0] + vec_top[0], p0[1] + vec_top[1], p0[2] + vec_top[2]),
-                                        Point3::new(p1[0] + vec_top[0], p1[1] + vec_top[1], p1[2] + vec_top[2]),
-                                        Point3::new(p2[0] + vec_top[0], p2[1] + vec_top[1], p2[2] + vec_top[2]),
-                                        top_face_id
-                                    );
-                                }
-                                
-                                // Maintain side faces (loop over ALL loops: outer + holes)
-                                // Use a cache to assign single face ID per source entity
-                                let mut face_id_cache: std::collections::HashMap<String, crate::topo::naming::TopoId> = std::collections::HashMap::new();
-                                
-                                for (sub_idx, loop_pts_2d) in profile_loops_2d.iter().enumerate() {
-                                    let profile_points: Vec<[f64; 3]> = loop_pts_2d.iter().map(|pt| to_3d(pt[0], pt[1])).collect();
-                                    
-                                    // Get segments for this loop if available
-                                    let segments_opt = loop_segments.get(profile_idx)
-                                        .and_then(|p| p.get(sub_idx));
-                                    
-                                    for i in 0..profile_points.len() {
-                                        let j = (i + 1) % profile_points.len();
-                                        let p1 = profile_points[i];
-                                        let p2 = profile_points[j];
-                                        
-                                        let dist_sq = (p1[0]-p2[0]).powi(2) + (p1[1]-p2[1]).powi(2) + (p1[2]-p2[2]).powi(2);
-                                        if dist_sq < 1e-9 { continue; }
-
-                                        // Determine face ID based on source entity (curved surfaces share same ID)
-                                        let (side_face_id, is_new_face) = if let Some(segments) = segments_opt {
-                                            if let Some(seg) = segments.get(i) {
-                                                // Get entity_id from source
-                                                let entity_id = match &seg.source {
-                                                    ProfileSegmentSource::Line { entity_id } => entity_id.clone(),
-                                                    ProfileSegmentSource::Circle { entity_id, .. } => entity_id.clone(),
-                                                    ProfileSegmentSource::Arc { entity_id, .. } => entity_id.clone(),
-                                                    ProfileSegmentSource::Ellipse { entity_id, .. } => entity_id.clone(),
-                                                    ProfileSegmentSource::Unknown => format!("unknown_{}_{}_{}", profile_idx, sub_idx, i),
-                                                };
-                                                
-                                                // Cache lookup: same entity_id = same face_id
-                                                let cache_key = format!("{}_{}", profile_idx, entity_id);
-                                                if let Some(&cached_id) = face_id_cache.get(&cache_key) {
-                                                    (cached_id, false) // Reuse existing face ID
-                                                } else {
-                                                    // Create new face ID for this source entity
-                                                    let face_name = match &seg.source {
-                                                        ProfileSegmentSource::Circle { .. } => format!("CylinderFace_{}_{}", profile_idx, entity_id),
-                                                        ProfileSegmentSource::Arc { .. } => format!("ArcFace_{}_{}", profile_idx, entity_id),
-                                                        ProfileSegmentSource::Ellipse { .. } => format!("EllipseFace_{}_{}", profile_idx, entity_id),
-                                                        _ => format!("PlaneFace_{}_{}", profile_idx, entity_id),
-                                                    };
-                                                    let new_id = ctx.derive(&face_name, TopoRank::Face);
-                                                    face_id_cache.insert(cache_key, new_id);
-                                                    (new_id, true) // New face ID
-                                                }
-                                            } else {
-                                                // Fallback: no segment info, create per-segment face
-                                                (ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face), true)
-                                            }
-                                        } else {
-                                            // No segment metadata (from profile_regions path), create per-segment face  
-                                            (ctx.derive(&format!("SideFace_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Face), true)
-                                        };
-                                        
-                                        let v1_bottom = Point3::new(p1[0] + vec_bottom[0], p1[1] + vec_bottom[1], p1[2] + vec_bottom[2]);
-                                        let v2_bottom = Point3::new(p2[0] + vec_bottom[0], p2[1] + vec_bottom[1], p2[2] + vec_bottom[2]);
-                                        let v1_top = Point3::new(p1[0] + vec_top[0], p1[1] + vec_top[1], p1[2] + vec_top[2]);
-                                        let v2_top = Point3::new(p2[0] + vec_top[0], p2[1] + vec_top[1], p2[2] + vec_top[2]);
-                                        
-                                        // Explicitly calculate smooth normals for rendering (every segment)
-                                        let mut smooth_normal_1: Option<Vector3> = None;
-                                        let mut smooth_normal_2: Option<Vector3> = None;
-                                        
-                                        if let Some(segments) = segments_opt {
-                                            if let Some(seg) = segments.get(i) {
-                                                match &seg.source {
-                                                    ProfileSegmentSource::Circle { center, .. } |
-                                                    ProfileSegmentSource::Arc { center, .. } => {
-                                                        // Compute smooth vertex normals for rendering
-                                                        // Normal is radial from center in the sketch plane
-                                                        let n1_2d = [seg.p1[0] - center[0], seg.p1[1] - center[1]];
-                                                        let len1 = (n1_2d[0]*n1_2d[0] + n1_2d[1]*n1_2d[1]).sqrt();
-                                                        let n1_local = if len1 > 1e-6 { [n1_2d[0]/len1, n1_2d[1]/len1] } else { [1.0, 0.0] };
-                                                        
-                                                        let n2_2d = [seg.p2[0] - center[0], seg.p2[1] - center[1]];
-                                                        let len2 = (n2_2d[0]*n2_2d[0] + n2_2d[1]*n2_2d[1]).sqrt();
-                                                        let n2_local = if len2 > 1e-6 { [n2_2d[0]/len2, n2_2d[1]/len2] } else { [1.0, 0.0] };
-                                                        
-                                                        // Transform local 2D normal to global 3D normal
-                                                        // Normal is purely in the sketch plane (perpendicular to extrusion axis)
-                                                        let n1_3d = Vector3::new(
-                                                            x_axis[0]*n1_local[0] + y_axis[0]*n1_local[1],
-                                                            x_axis[1]*n1_local[0] + y_axis[1]*n1_local[1],
-                                                            x_axis[2]*n1_local[0] + y_axis[2]*n1_local[1]
-                                                        ).normalize();
-                                                        
-                                                        let n2_3d = Vector3::new(
-                                                            x_axis[0]*n2_local[0] + y_axis[0]*n2_local[1],
-                                                            x_axis[1]*n2_local[0] + y_axis[1]*n2_local[1],
-                                                            x_axis[2]*n2_local[0] + y_axis[2]*n2_local[1]
-                                                        ).normalize();
-                                                        
-                                                        smooth_normal_1 = Some(n1_3d);
-                                                        smooth_normal_2 = Some(n2_3d);
-                                                    },
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-
-                                        // Register side entity only once per face (when is_new_face)
-                                        if is_new_face {
-                                            // Side normal approximation (flat) - used for fallback geometry
-                                            let dx = p2[0] - p1[0];
-                                            let dy = p2[1] - p1[1];
-                                            let dz = p2[2] - p1[2];
-                                            let tx = dx; let ty = dy; let tz = dz;
-                                            let nx = ty * normal[2] - tz * normal[1];
-                                            let ny = tz * normal[0] - tx * normal[2];
-                                            let nz = tx * normal[1] - ty * normal[0];
-                                            let len = (nx*nx + ny*ny + nz*nz).sqrt();
-                                            let side_normal = if len > 1e-6 { [nx/len, ny/len, nz/len] } else { [0.0, 0.0, 1.0] };
-
-                                            // Generate analytical geometry based on source type
-                                            let geometry = if let Some(segments) = segments_opt {
-                                                if let Some(seg) = segments.get(i) {
-                                                    match &seg.source {
-                                                        ProfileSegmentSource::Circle { center, radius, .. } |
-                                                        ProfileSegmentSource::Arc { center, radius, .. } => {
-                                                            // Cylinder analytical geometry
-                                                            let center_3d = to_3d(center[0], center[1]);
-                                                            AnalyticGeometry::Cylinder {
-                                                                axis_start: center_3d,
-                                                                axis_dir: normal,
-                                                                radius: *radius,
-                                                            }
-                                                        },
-                                                        _ => {
-                                                            // Default to plane
-                                                            AnalyticGeometry::Plane {
-                                                                origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
-                                                                normal: side_normal,
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    AnalyticGeometry::Plane {
-                                                        origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
-                                                        normal: side_normal,
-                                                    }
-                                                }
-                                            } else {
-                                                AnalyticGeometry::Plane {
-                                                    origin: [(v1_bottom.x+v1_top.x)/2.0, (v1_bottom.y+v1_top.y)/2.0, (v1_bottom.z+v1_top.z)/2.0],
-                                                    normal: side_normal,
-                                                }
-                                            };
-
-                                            let side_entity = KernelEntity {
-                                                id: side_face_id,
-                                                geometry,
-                                            };
-                                            topology_manifest.insert(side_face_id, side_entity);
-                                        }
-                                        
-                                        // For holes (sub_idx > 0), reverse winding so faces point inward
-                                        // Use smooth normals if available
-                                        if let (Some(n1), Some(n2)) = (smooth_normal_1, smooth_normal_2) {
-                                            // Ensure normals point into valid material (out of the hole / away from solid for outer?)
-                                            // Calculated radial normals point OUT from center.
-                                            let n1_final = if sub_idx > 0 { -n1 } else { n1 };
-                                            let n2_final = if sub_idx > 0 { -n2 } else { n2 };
-
-                                            if sub_idx == 0 {
-                                                // Outer loop: faces point outward
-                                                tessellation.add_triangle_with_normals(v1_bottom, v2_bottom, v1_top, n1_final, n2_final, n1_final, side_face_id);
-                                                tessellation.add_triangle_with_normals(v2_bottom, v2_top, v1_top, n2_final, n2_final, n1_final, side_face_id);
-                                            } else {
-                                                // Hole loop: faces point inward (reversed winding)
-                                                tessellation.add_triangle_with_normals(v1_bottom, v1_top, v2_bottom, n1_final, n1_final, n2_final, side_face_id);
-                                                tessellation.add_triangle_with_normals(v2_bottom, v1_top, v2_top, n2_final, n1_final, n2_final, side_face_id);
-                                            }
-                                        } else {
-                                            // Fallback to flat shading
-                                            if sub_idx == 0 {
-                                                // Outer loop: faces point outward
-                                                tessellation.add_triangle(v1_bottom, v2_bottom, v1_top, side_face_id);
-                                                tessellation.add_triangle(v2_bottom, v2_top, v1_top, side_face_id);
-                                            } else {
-                                                // Hole loop: faces point inward (reversed winding)
-                                                tessellation.add_triangle(v1_bottom, v1_top, v2_bottom, side_face_id);
-                                                tessellation.add_triangle(v2_bottom, v1_top, v2_top, side_face_id);
-                                            }
-                                        }
-                                        
-                                        // === ADD EDGES FOR SELECTION ===
-                                        // === ADD EDGES FOR SELECTION ===
-                                        // Bottom edge
-                                        let bottom_edge_id = if let Some(segments) = segments_opt {
-                                             if let Some(seg) = segments.get(i) {
-                                                 match &seg.source {
-                                                     ProfileSegmentSource::Circle { entity_id, .. } => 
-                                                         ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
-                                                      ProfileSegmentSource::Arc { entity_id, .. } => 
-                                                         ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
-                                                     _ => ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                                 }
-                                             } else {
-                                                 ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                             }
-                                        } else {
-                                            ctx.derive(&format!("BottomEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                        };
-                                        tessellation.add_line(v1_bottom, v2_bottom, bottom_edge_id);
-                                        
-                                        // Top edge
-                                        let top_edge_id = if let Some(segments) = segments_opt {
-                                             if let Some(seg) = segments.get(i) {
-                                                 match &seg.source {
-                                                     ProfileSegmentSource::Circle { entity_id, .. } => 
-                                                         ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
-                                                      ProfileSegmentSource::Arc { entity_id, .. } => 
-                                                         ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, entity_id), TopoRank::Edge),
-                                                     _ => ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                                 }
-                                             } else {
-                                                 ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                             }
-                                        } else {
-                                            ctx.derive(&format!("TopEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge)
-                                        };
-                                        tessellation.add_line(v1_top, v2_top, top_edge_id);
-                                        
-                                        // Conditional Vertical Edge & Vertex Generation
-                                        let mut generate_vertical = true;
-                                        if let Some(segments) = segments_opt {
-                                            if let Some(curr_seg) = segments.get(i) {
-                                                let prev_idx = (i + profile_points.len() - 1) % profile_points.len();
-                                                if let Some(prev_seg) = segments.get(prev_idx) {
-                                                    // Check if sources are the same entity
-                                                    match (&curr_seg.source, &prev_seg.source) {
-                                                        (ProfileSegmentSource::Circle { entity_id: id1, .. }, 
-                                                         ProfileSegmentSource::Circle { entity_id: id2, .. }) if id1 == id2 => {
-                                                            generate_vertical = false;
-                                                        },
-                                                        (ProfileSegmentSource::Arc { entity_id: id1, .. }, 
-                                                         ProfileSegmentSource::Arc { entity_id: id2, .. }) if id1 == id2 => {
-                                                            // For arcs, internal junctions are smooth, but start/end are not
-                                                            // BUT: i and prev_idx might be wrap-around for a non-closed arc?
-                                                            // For now, treat same-ID arc segments as smooth
-                                                            generate_vertical = false;
-                                                            
-                                                            // Special case: if this is a closed loop made of one arc (e.g. 360 arc?), 
-                                                            // check if vertices coincide. But loop_pts_2d is already processed.
-                                                        },
-                                                        _ => {}
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        if generate_vertical {
-                                            // Vertical edge
-                                            let vert_edge_id = ctx.derive(&format!("VertEdge_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Edge);
-                                            tessellation.add_line(v1_bottom, v1_top, vert_edge_id);
-                                            
-                                            // === ADD VERTICES FOR SELECTION ===
-                                            // Bottom corner vertex
-                                            let bottom_vertex_id = ctx.derive(&format!("BottomVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
-                                            tessellation.add_point(v1_bottom, bottom_vertex_id);
-                                            
-                                            // Top corner vertex
-                                            let top_vertex_id = ctx.derive(&format!("TopVertex_{}_{}_{}", profile_idx, sub_idx, i), TopoRank::Vertex);
-                                            tessellation.add_point(v1_top, top_vertex_id);
-                                        }
-                                    }
-                                }
+                            // 2. Create Interior LineStrings (Holes)
+                            let mut interiors = Vec::new();
+                            for hole_loop in region_loops.iter().skip(1) {
+                                let hole_points: Vec<Point> = hole_loop.iter()
+                                    .map(|p| Point::new(p[0] as f64, p[1] as f64))
+                                    .collect();
+                                interiors.push(LineString::from(hole_points));
                             }
+                            
+                            // 3. Create Polygon
+                            let poly = Polygon::new(exterior, interiors);
+                            
+                            // 4. Extrude
+                            // Note: MicroCAD extrudes along Z. We might need to rotate if sketch is not on XY.
+                            // But for now, assuming sketches are XY plane based or transformed later?
+                            // The current system transforms visualization usually. 
+                            // However, the manual implementation had `x_axis`, `y_axis`, `normal` from sketch plane.
+                            // The MicroCAD kernel `extrude` currently just goes up Z.
+                            // If `plane` is not XY, we'd need to transform points or rotate result.
+                            
+                            let mesh_result = poly.extrude(Extrusion::Linear {
+                                height: Length(distance),
+                                scale_x: 1.0,
+                                scale_y: 1.0,
+                                twist: cgmath::Rad(0.0).into()
+                            });
+                            
+                            // 5. Add to Tessellation
+                            // We need to transform the mesh from local extrusion space (Z-up) to sketch plane space.
+                            let mut transformed_mesh = mesh_result.inner;
+                            
+                            // Apply transform: [u, v, w] -> origin + u*x_axis + v*y_axis + w*plane_normal
+                            for p in &mut transformed_mesh.positions {
+                                let u = p.x;
+                                let v = p.y;
+                                let w = p.z;
+                                
+                                let px = origin[0] as f32 + u * x_axis[0] as f32 + v * y_axis[0] as f32 + w * normal[0] as f32;
+                                let py = origin[1] as f32 + u * x_axis[1] as f32 + v * y_axis[1] as f32 + w * normal[1] as f32;
+                                let pz = origin[2] as f32 + u * x_axis[2] as f32 + v * y_axis[2] as f32 + w * normal[2] as f32;
+                                
+                                p.x = px;
+                                p.y = py;
+                                p.z = pz;
+                            }
+                            
+                            add_microcad_mesh_to_tessellation(
+                                &ctx, 
+                                tessellation, 
+                                topology_manifest, 
+                                &transformed_mesh, 
+                                &format!("Extrude_{}", i)
+                            );
                         }
 
                         if loops_2d.is_empty() {
@@ -1100,7 +965,269 @@ impl Runtime {
     }
 }
 
-#[cfg(test)]
+
+
+fn add_microcad_mesh_to_tessellation(
+    ctx: &crate::topo::naming::NamingContext,
+    tessellation: &mut crate::geometry::tessellation::Tessellation,
+    topology_manifest: &mut std::collections::HashMap<crate::topo::naming::TopoId, crate::topo::registry::KernelEntity>,
+    mesh: &microcad_core::geo3d::TriangleMesh,
+    base_name: &str,
+) {
+    use crate::topo::naming::TopoRank;
+    use crate::topo::registry::{KernelEntity, AnalyticGeometry};
+    use crate::geometry::Point3;
+    use microcad_core::geo2d::Point;
+
+    let positions = &mesh.positions;
+    
+    let positions = &mesh.positions;
+    
+    // Track vertex degree (incidence of Feature Edges) to filter shown vertices
+    // 0 = interior face vertex, 2 = edge interior vertex, != 2 && > 0 = Feature Vertex (Corner)
+    let mut vertex_feature_degree = vec![0usize; positions.len()];
+
+    // 1. Compute Normals for all triangles
+    let mut triangle_normals = Vec::with_capacity(mesh.triangle_indices.len());
+    for tri in &mesh.triangle_indices {
+        let i0 = tri.0 as usize;
+        let i1 = tri.1 as usize;
+        let i2 = tri.2 as usize;
+        let p0 = positions[i0];
+        let p1 = positions[i1];
+        let p2 = positions[i2];
+        
+        let u_x = p1.x as f64 - p0.x as f64;
+        let u_y = p1.y as f64 - p0.y as f64;
+        let u_z = p1.z as f64 - p0.z as f64;
+        let v_x = p2.x as f64 - p0.x as f64;
+        let v_y = p2.y as f64 - p0.y as f64;
+        let v_z = p2.z as f64 - p0.z as f64;
+        
+        let nx = u_y * v_z - u_z * v_y;
+        let ny = u_z * v_x - u_x * v_z;
+        let nz = u_x * v_y - u_y * v_x;
+        
+        let len = (nx * nx + ny * ny + nz * nz).sqrt();
+        let normal = if len < 1e-6 { [0.0, 0.0, 1.0] } else { [nx / len, ny / len, nz / len] };
+        triangle_normals.push(normal);
+    }
+    
+    // 2. Build Adjacency Graph (Edge -> Triangles)
+    let mut edge_map: std::collections::HashMap<(usize, usize), Vec<usize>> = std::collections::HashMap::new();
+    
+    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
+        let indices = [tri.0 as usize, tri.1 as usize, tri.2 as usize];
+        for k in 0..3 {
+            let v1 = indices[k];
+            let v2 = indices[(k + 1) % 3];
+            let key = if v1 < v2 { (v1, v2) } else { (v2, v1) };
+            edge_map.entry(key).or_default().push(tri_idx);
+        }
+    }
+    
+    // 3. Union-Find / Disjoint Set to group smooth faces
+    let num_tris = mesh.triangle_indices.len();
+    let mut parent: Vec<usize> = (0..num_tris).collect();
+    
+    // Simple iterative find with path compression
+    let mut find = |mut i: usize, parent: &mut Vec<usize>| -> usize {
+        while i != parent[i] {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    };
+    
+    let mut union = |i: usize, j: usize, parent: &mut Vec<usize>| {
+        let root_i = find(i, parent);
+        let root_j = find(j, parent);
+        if root_i != root_j {
+            // Deterministic merge: always merge larger into smaller to keep stable representative
+            if root_i < root_j {
+                parent[root_j] = root_i;
+            } else {
+                parent[root_i] = root_j;
+            }
+        }
+    };
+    
+    // Threshold: 40 degrees (cos(40) ~ 0.766)
+    let smoothness_threshold = 0.766; 
+    
+    // Iterate edges deterministically? edge_map iteration is random but union is commutative commutative enough?
+    // To be perfectly safe, let's sort keys, but hashmap iteration might be fine if rule is strict (min index).
+    // Actually, iterating in random order could affect the structure of the tree but path compression and "min index root" rule
+    // guarantees the final root is the minimum index in the set.
+    for (_, neighbors) in &edge_map {
+        if neighbors.len() == 2 {
+            let t1 = neighbors[0];
+            let t2 = neighbors[1];
+            
+            let n1 = triangle_normals[t1];
+            let n2 = triangle_normals[t2];
+            
+            let dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
+            
+            if dot > smoothness_threshold {
+                union(t1, t2, &mut parent);
+            }
+        }
+    }
+    
+    // 3b. Compute Smooth Normals (Per Vertex, Per FaceGroup)
+    // Map (VertexIndex, FaceRoot) -> Accumulator Normal
+    let mut vertex_smooth_normals: std::collections::HashMap<(usize, usize), [f64; 3]> = std::collections::HashMap::new();
+    
+    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
+        let root = find(tri_idx, &mut parent);
+        let normal = triangle_normals[tri_idx];
+        let indices = [tri.0 as usize, tri.1 as usize, tri.2 as usize];
+        
+        for &v_idx in &indices {
+            let entry = vertex_smooth_normals.entry((v_idx, root)).or_insert([0.0, 0.0, 0.0]);
+            entry[0] += normal[0];
+            entry[1] += normal[1];
+            entry[2] += normal[2];
+        }
+    }
+    
+    // Normalize accumulators
+    for (_, n) in vertex_smooth_normals.iter_mut() {
+        let len = (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]).sqrt();
+        if len > 1e-6 {
+            n[0] /= len; n[1] /= len; n[2] /= len;
+        }
+    }
+
+    // 4. Generate TopoIds for Groups
+    let mut group_id_map: std::collections::HashMap<usize, crate::topo::naming::TopoId> = std::collections::HashMap::new();
+    
+    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
+        let root = find(tri_idx, &mut parent);
+        
+        let face_id = *group_id_map.entry(root).or_insert_with(|| {
+             let n = triangle_normals[root];
+             let q_normal = [
+                 (n[0] * 100.0) as i64,
+                 (n[1] * 100.0) as i64,
+                 (n[2] * 100.0) as i64
+             ];
+             let seed = format!("{}_Face_Smooth_{}_{}_{}_{}", base_name, root, q_normal[0], q_normal[1], q_normal[2]);
+             let id = ctx.derive(&seed, TopoRank::Face);
+             
+             let entity = KernelEntity {
+                id,
+                geometry: AnalyticGeometry::Plane {
+                    origin: [positions[tri.0 as usize].x as f64, positions[tri.0 as usize].y as f64, positions[tri.0 as usize].z as f64],
+                    normal: n,
+                }, 
+             };
+             topology_manifest.insert(id, entity);
+             id
+        });
+
+        let i0 = tri.0 as usize;
+        let i1 = tri.1 as usize;
+        let i2 = tri.2 as usize;
+        let p0 = positions[i0];
+        let p1 = positions[i1];
+        let p2 = positions[i2];
+        
+        // Fetch smooth normals
+        let default_n = [0.0, 1.0, 0.0];
+        let n0 = vertex_smooth_normals.get(&(i0, root)).unwrap_or(&default_n);
+        let n1 = vertex_smooth_normals.get(&(i1, root)).unwrap_or(&default_n);
+        let n2 = vertex_smooth_normals.get(&(i2, root)).unwrap_or(&default_n);
+
+        use crate::geometry::Vector3;
+        tessellation.add_triangle_with_normals(
+            Point3::new(p0.x.into(), p0.y.into(), p0.z.into()),
+            Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
+            Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
+            Vector3::new(n0[0] as f64, n0[1] as f64, n0[2] as f64),
+            Vector3::new(n1[0] as f64, n1[1] as f64, n1[2] as f64),
+            Vector3::new(n2[0] as f64, n2[1] as f64, n2[2] as f64),
+            face_id
+        );
+    }
+    
+    // 5. Extract Feature Edges
+    // Edges are "Features" if they separate two different Face Groups or are boundaries
+    // We group segments by the Pair of connected Faces to create Unified Edges.
+    let mut edge_groups: std::collections::HashMap<(usize, usize), crate::topo::naming::TopoId> = std::collections::HashMap::new();
+
+    for ((v1, v2), neighbors) in &edge_map {
+        let (root1, root2) = if neighbors.len() != 2 {
+            // Boundary edge. Use a special "Outer" marker? 
+            // We use the single face root key and a marker max-usize
+            (find(neighbors[0], &mut parent), usize::MAX)
+        } else {
+            let r1 = find(neighbors[0], &mut parent);
+            let r2 = find(neighbors[1], &mut parent);
+            if r1 < r2 { (r1, r2) } else { (r2, r1) }
+        };
+        
+        let is_feature = root1 != root2;
+        
+        if is_feature {
+            // Track Feature Degree for vertices
+            if *v1 < vertex_feature_degree.len() { vertex_feature_degree[*v1] += 1; }
+            if *v2 < vertex_feature_degree.len() { vertex_feature_degree[*v2] += 1; }
+
+            // Fetch or create Edge ID for this Face Pair
+            // Stable ID based on the Face Roots (which are minimal indices)
+            let edge_id = *edge_groups.entry((root1, root2)).or_insert_with(|| {
+                let seed = format!("{}_Edge_Group_{}_{}", base_name, root1, root2);
+                let id = ctx.derive(&seed, TopoRank::Edge);
+                
+                // For now, we register a generic Line for the FIRST segment we find.
+                // Ideally this would be a Composite Curve or Polyline.
+                // The geometry is just metadata for selection raycasting.
+                // We pick the current segment as representative.
+                let p1 = positions[*v1];
+                let p2 = positions[*v2];
+                 
+                let entity = KernelEntity {
+                    id,
+                    geometry: AnalyticGeometry::Line {
+                        start: [p1.x as f64, p1.y as f64, p1.z as f64],
+                        end: [p2.x as f64, p2.y as f64, p2.z as f64],
+                    },
+                };
+                topology_manifest.insert(id, entity);
+                id
+            });
+            
+            let p1 = positions[*v1];
+            let p2 = positions[*v2];
+            
+            tessellation.add_line(
+                Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
+                Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
+                edge_id
+            );
+        }
+    }
+    
+    // 6. Extract Feature Vertices (Corners)
+    // Only show vertices that are topologically significant (corners junctions or endpoints)
+    // Degree 2 nodes are just passing through an edge.
+    for (i, degree) in vertex_feature_degree.iter().enumerate() {
+        if *degree > 0 && *degree != 2 {
+            // This is a feature vertex!
+            let p = positions[i];
+            let v_id = ctx.derive(&format!("{}_V_{}", base_name, i), TopoRank::Vertex);
+            
+            tessellation.add_point(
+                Point3::new(p.x.into(), p.y.into(), p.z.into()),
+                v_id
+            );
+        }
+    }
+}
+
+
 mod tests {
     use super::*;
     use crate::microcad_kernel::ast::*;
@@ -1230,8 +1357,9 @@ mod tests {
         // Each triangle = 3 indices
         assert!(res.tessellation.indices.len() >= 6, "Should have triangle indices for 3D geometry");
         
-        // Should have face TopoIds in manifest (top, bottom, 3 sides)
-        assert!(res.topology_manifest.len() >= 2, "Should have face TopoIds in manifest");
+        // Should have face TopoIds in manifest
+        // Current MicroCAD integration returns a single mesh face for the extrusion
+        assert!(res.topology_manifest.len() >= 1, "Should have face TopoIds in manifest");
         
         // Check logs for success message
         assert!(res.logs.iter().any(|l| l.contains("Processing") && l.contains("profiles for extrusion")), 

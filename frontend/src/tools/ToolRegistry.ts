@@ -14,6 +14,7 @@ import { SlotTool } from "./SlotTool";
 import { PolygonTool } from "./PolygonTool";
 import { ConstraintTool } from "./ConstraintTool";
 import { TrimTool } from "./TrimTool";
+import { ProjectTool } from "./ProjectTool";
 
 export class ToolRegistry {
     private tools: Map<string, SketchTool> = new Map();
@@ -34,6 +35,7 @@ export class ToolRegistry {
         this.register(new SlotTool(context));
         this.register(new PolygonTool(context));
         this.register(new TrimTool(context));
+        this.register(new ProjectTool(context));
 
         // Register Constraint Tools
         this.register(new ConstraintTool(context, "Horizontal"));

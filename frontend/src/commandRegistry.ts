@@ -128,6 +128,14 @@ export const COMMAND_DEFINITIONS: Command[] = [
         modes: ["sketch"],
         category: "edit",
     },
+    {
+        id: "tool:project",
+        name: "Project / Use",
+        description: "Project 3D geometry into sketch",
+        shortcut: "U",
+        modes: ["sketch"],
+        category: "edit",
+    },
 
     // === CONSTRAINT TOOLS (Sketch Mode) ===
     {

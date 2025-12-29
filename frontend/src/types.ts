@@ -75,6 +75,23 @@ export interface SketchEntity {
 
 export type EntityId = string;
 
+export enum TopoRank {
+    Vertex = 0,
+    Edge = 1,
+    Wire = 2,
+    Face = 3,
+    Shell = 4,
+    Solid = 5,
+    CompSolid = 6,
+    Compound = 7,
+}
+
+export interface TopoId {
+    feature_id: EntityId;
+    local_id: number;
+    rank: TopoRank;
+}
+
 export interface ConstraintPoint {
     id: EntityId;
     index: number; // 0=Start/Center, 1=End
@@ -134,6 +151,7 @@ export interface Sketch {
     entities: SketchEntity[];
     constraints: SketchConstraintEntry[];
     history: SketchOperation[];
+    external_references?: Record<string, TopoId>;
 }
 
 /** A detected closed region in a sketch (for extrude profile selection) */
@@ -202,6 +220,7 @@ export const defaultSnapConfig: SnapConfig = {
 export type SketchToolType =
     | "select" | "line" | "circle" | "arc" | "rectangle" | "slot" | "polygon" | "point" | "ellipse"
     | "trim" | "mirror" | "offset" | "linear_pattern" | "circular_pattern"
+    | "project"
     | "constraint_horizontal" | "constraint_vertical" | "constraint_coincident"
     | "constraint_parallel" | "constraint_perpendicular" | "constraint_equal" | "constraint_fix"
     | "dimension" | "measure";

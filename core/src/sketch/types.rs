@@ -173,6 +173,9 @@ pub struct Sketch {
     pub constraints: Vec<SketchConstraintEntry>,
     #[serde(default)]
     pub history: Vec<SketchOperation>,
+    /// Maps local EntityId (in the sketch) to the stable TopoId (from the 3D kernel) it references.
+    #[serde(default)]
+    pub external_references: std::collections::HashMap<EntityId, crate::topo::naming::TopoId>,
 }
 
 impl Sketch {
@@ -182,6 +185,7 @@ impl Sketch {
             entities: Vec::new(),
             constraints: Vec::new(),
             history: Vec::new(),
+            external_references: std::collections::HashMap::new(),
         }
     }
 

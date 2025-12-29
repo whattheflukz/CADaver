@@ -6,6 +6,7 @@ import { detectInferredConstraints, defaultInferenceConfig } from '../utils/Cons
 
 export function useSketchTool(
     currentSketch: () => Sketch,
+    activeSketchId: () => string | null,
     setCurrentSketch: (s: Sketch) => void,
     sketchSelection: () => any[],
     setSketchSelection: (s: any[]) => void,
@@ -20,6 +21,7 @@ export function useSketchTool(
     addActiveMeasurement: (m: any) => void,
     constructionMode: () => boolean,
     sendSketchUpdate: (s: Sketch) => void,
+    send: (msg: any) => void,
     dimensionPlacementMode: () => boolean,
     dimensionProposedAction: () => any
 ) {
@@ -37,6 +39,7 @@ export function useSketchTool(
     // Tool Registry
     const toolRegistry = new ToolRegistry({
         get sketch() { return currentSketch(); },
+        get sketchId() { return activeSketchId(); },
         setSketch: (s) => setCurrentSketch(s),
         get selection() { return sketchSelection(); },
         setSelection: (s) => setSketchSelection(s),
@@ -64,7 +67,8 @@ export function useSketchTool(
             const updated = { ...sketch, entities: [...sketch.entities, e] };
             setCurrentSketch(updated);
             sendSketchUpdate(updated);
-        }
+        },
+        send: (msg) => send(msg)
     });
 
     const inferredConstraints = () => {

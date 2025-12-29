@@ -3,6 +3,7 @@ import type { Sketch, SketchEntity, SelectionCandidate, SnapPoint } from "../typ
 export interface SketchToolContext {
     // State Accessors
     sketch: Sketch;
+    sketchId: string | null;
     selection: SelectionCandidate[];
     snapPoint: SnapPoint | null;
     constructionMode: boolean;
@@ -33,6 +34,7 @@ export interface SketchToolContext {
     // Actions
     sendUpdate: (sketch: Sketch) => void; // Trigger solver
     spawnEntity: (entity: SketchEntity) => void; // Add new entity helper
+    send: (msg: any) => void; // Send arbitrary WebSocket command
 
     // Command / Input
     getSketchAction?: (e: KeyboardEvent) => any;
@@ -49,6 +51,9 @@ export interface SketchTool {
     onMouseDown?(u: number, v: number, _e?: MouseEvent): void;
     onMouseMove?(u: number, v: number, _e?: MouseEvent): void;
     onMouseUp?(u: number, v: number, _e?: MouseEvent): void;
+
+    // Selection Event
+    onSelect?(topoId: any): boolean; // Return true if handled
 
     // Keyboard Events
     onKeyDown?(e: KeyboardEvent): void;

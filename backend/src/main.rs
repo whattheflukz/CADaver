@@ -26,6 +26,7 @@ fn format_error(code: &str, message: &str, severity: &str) -> String {
 // Application State
 struct AppState {
     graph: Arc<RwLock<FeatureGraph>>,
+    registry: Arc<RwLock<cad_core::topo::TopoRegistry>>,
 }
 
 // --- API Protocol Definitions ---
@@ -53,6 +54,7 @@ enum WebSocketCommand {
     SetRollback { id: Option<uuid::Uuid> },
     ReorderFeature { id: uuid::Uuid, new_index: usize },
     InsertFeature { feature_type: String, name: String, after_id: Option<uuid::Uuid>, dependencies: Option<Vec<uuid::Uuid>> },
+    ProjectEntity { sketch_id: uuid::Uuid, topo_id: cad_core::topo::naming::TopoId },
 }
 
 #[derive(Deserialize, Debug)]
@@ -101,6 +103,7 @@ async fn main() {
 
     let shared_state = Arc::new(AppState {
         graph: Arc::new(RwLock::new(FeatureGraph::new())),
+        registry: Arc::new(RwLock::new(cad_core::topo::TopoRegistry::new())),
     });
 
     // build our application with a route
@@ -539,6 +542,81 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json_update))).await;
                     process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await;
                 }
+
+                WebSocketCommand::ProjectEntity { sketch_id, topo_id } => {
+                     let entity_id = cad_core::topo::EntityId::from_uuid(sketch_id);
+                     let (json_update, program, error_msg) = {    
+                         let registry = state.registry.read().unwrap();
+                         if let Some(kernel_entity) = registry.resolve(&topo_id) {
+                            let mut graph = state.graph.write().unwrap();
+                            if let Some(node) = graph.nodes.get_mut(&entity_id) {
+                                if let Some(cad_core::features::types::ParameterValue::Sketch(ref mut sketch)) = node.parameters.get_mut("sketch_data") {
+                                    // Found sketch and entity! Now project.
+                                    // 1. Get geometry from kernel_entity
+                                    let geom = &kernel_entity.geometry;
+                                    
+                                    // 2. Project onto sketch plane using local axes
+                                    let origin = sketch.plane.origin;
+                                    let x_axis = sketch.plane.x_axis;
+                                    let y_axis = sketch.plane.y_axis;
+                                    
+                                    let project_to_2d = |p: [f64; 3]| -> [f64; 2] {
+                                        let v = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+                                        let x = v[0]*x_axis[0] + v[1]*x_axis[1] + v[2]*x_axis[2];
+                                        let y = v[0]*y_axis[0] + v[1]*y_axis[1] + v[2]*y_axis[2];
+                                        [x, y]
+                                    };
+                                    
+                                    let projected_opt = match geom {
+                                        cad_core::topo::registry::AnalyticGeometry::Line { start, end } => {
+                                             Some(cad_core::sketch::types::SketchGeometry::Line { 
+                                                 start: project_to_2d(*start), 
+                                                 end: project_to_2d(*end) 
+                                             })
+                                        },
+                                        _ => None
+                                    };
+
+                                    if let Some(geo) = projected_opt {
+                                        let new_id = sketch.add_entity(geo);
+                                        // Mark as construction? Or explicit projected flag?
+                                        // For now, let's make it construction by default so it doesn't mess up profiles
+                                        if let Some(entity) = sketch.entities.iter_mut().find(|e| e.id == new_id) {
+                                            entity.is_construction = true;
+                                        }
+                                        
+                                        // Add to external references
+                                        sketch.external_references.insert(new_id, topo_id);
+                                        
+                                        // Add Fix constraint to anchor it? 
+                                        // Or rely on solver respecting external_references?
+                                        // Adding Fix is safer for existing solver.
+                                        // But we need the position. 
+                                        // Ideally, we add a "Projected" constraint which holds the TopoId.
+                                        
+                                        let json = serde_json::to_string(&*graph).unwrap_or("{}".to_string());
+                                        let program = graph.regenerate();
+                                        (Some(json), Some(program), None)
+                                    } else {
+                                        (None, None, Some("Geometry type not supported for projection".to_string()))
+                                    }
+                                } else {
+                                    (None, None, Some("Feature is not a sketch".to_string()))
+                                }
+                            } else {
+                                (None, None, Some("Sketch feature not found".to_string()))
+                            }
+                         } else {
+                             (None, None, Some("Referenced entity not found in registry".to_string()))
+                         }
+                     };
+
+                     if let Some(err) = error_msg {
+                         let _ = socket.send(Message::Text(format_error("PROJECTION_FAILED", &err, "error"))).await;
+                     }
+                     if let Some(json) = json_update { let _ = socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await; }
+                     if let Some(program) = program { process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await; }
+                }
             }
         }
     }
@@ -584,6 +662,12 @@ async fn process_regen(
                  let _ = socket.send(Message::Text(format!("ZOMBIE_UPDATE:{}", zombie_json))).await;
              } else {
                  let _ = socket.send(Message::Text(format!("ZOMBIE_UPDATE:[]"))).await;
+             }
+
+             // Update Global Registry
+             {
+                 let mut global_registry = state.registry.write().unwrap();
+                 *global_registry = registry.clone();
              }
 
              // Validate Selection State

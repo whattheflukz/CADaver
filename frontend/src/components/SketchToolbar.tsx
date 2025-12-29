@@ -146,6 +146,13 @@ const SketchToolbar: Component<SketchToolbarProps> = (props) => {
                 {...getCommandInfo("mirror")}
             />
             <ToolButton
+                icon="cube"
+                label="Project"
+                isActive={props.activeTool === "project"}
+                onClick={() => props.onToolSelect("project")}
+                {...getCommandInfo("project")}
+            />
+            <ToolButton
                 label="Reference"
                 isActive={props.activeTool === "offset"}
                 onClick={() => props.onToolSelect("offset")}
