@@ -949,6 +949,60 @@ impl Runtime {
                 
                 Ok(())
             }
+            "fillet" => {
+                let id = generator.next_id();
+                modified.push(id);
+                
+                let mut input_solid_var = String::new();
+                let mut radius = 0.0;
+                let mut edges: Vec<String> = Vec::new();
+                
+                for (i, arg) in call.args.iter().enumerate() {
+                    match (i, arg) {
+                        (0, Expression::Variable(s)) => input_solid_var = s.clone(),
+                        (0, Expression::Value(Value::String(s))) => input_solid_var = s.clone(), // Fallback
+                        (1, Expression::Value(Value::Number(r))) => radius = *r,
+                        (2, Expression::Value(Value::Array(arr))) => {
+                             edges = arr.iter().filter_map(|v| {
+                                 if let Value::String(s) = v { Some(s.clone()) } else { None }
+                             }).collect();
+                        },
+                         _ => {}
+                    }
+                }
+                
+                logs.push(format!("WARNING: Fillet operation not supported by current microcad-core kernel. Identity returned. Input={}, Radius={}, Edges={:?}", 
+                    input_solid_var, radius, edges));
+                
+                Ok(())
+            }
+            "chamfer" => {
+                let id = generator.next_id();
+                modified.push(id);
+                
+                let mut input_solid_var = String::new();
+                let mut distance = 0.0;
+                let mut edges: Vec<String> = Vec::new();
+                
+                for (i, arg) in call.args.iter().enumerate() {
+                    match (i, arg) {
+                        (0, Expression::Variable(s)) => input_solid_var = s.clone(),
+                        (0, Expression::Value(Value::String(s))) => input_solid_var = s.clone(), // Fallback
+                        (1, Expression::Value(Value::Number(d))) => distance = *d,
+                        (2, Expression::Value(Value::Array(arr))) => {
+                                edges = arr.iter().filter_map(|v| {
+                                    if let Value::String(s) = v { Some(s.clone()) } else { None }
+                                }).collect();
+                        },
+                            _ => {}
+                    }
+                }
+                
+                logs.push(format!("WARNING: Chamfer operation not supported by current microcad-core kernel. Identity returned. Input={}, Distance={}, Edges={:?}", 
+                    input_solid_var, distance, edges));
+                
+                Ok(())
+            }
             "sphere" => {
                 let id = generator.next_id();
                 modified.push(id);

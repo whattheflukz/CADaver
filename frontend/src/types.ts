@@ -9,7 +9,7 @@ export interface Tessellation {
     point_ids: any[];
 }
 
-export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Cut' | 'Plane' | 'Axis' | 'Point';
+export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Fillet' | 'Chamfer' | 'Cut' | 'Plane' | 'Axis' | 'Point';
 
 export interface Feature {
     id: string; // EntityId is UUID string

@@ -11,6 +11,9 @@ import { COMMAND_DEFINITIONS } from '../commandRegistry';
 
 interface ModelingToolbarProps {
     onExtrude: () => void;
+    onRevolve: () => void;
+    onFillet: () => void;
+    onChamfer: () => void;
 }
 
 // Helper to look up command info from registry
@@ -62,14 +65,23 @@ const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
 
             <div style={{ width: "1px", height: "24px", background: "#666" }} />
 
-            {/* Placeholder for Fillet */}
+            {/* Fillet Button */}
             <ToolButton
                 icon="⚪"
                 label="Fillet"
                 isActive={false}
-                disabled={true}
-                onClick={() => { }}
-                description="Coming soon: Add rounded edges"
+                onClick={props.onFillet}
+                description="Round sharp edges"
+                minWidth="60px"
+            />
+
+            {/* Chamfer Button */}
+            <ToolButton
+                icon="📐"
+                label="Chamfer"
+                isActive={false}
+                onClick={props.onChamfer}
+                description="Bevel sharp edges"
                 minWidth="60px"
             />
         </div>

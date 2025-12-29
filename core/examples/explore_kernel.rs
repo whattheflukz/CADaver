@@ -1,29 +1,28 @@
-use microcad_core::geo2d::{Rect, Point, Size2}; 
-use microcad_core::geo3d::Extrude;
+use microcad_core::geo2d::{Rect, Point};
+use microcad_core::geo3d::{Extrusion};
+use microcad_core::{Length, Extrude};
 
 fn main() {
+    println!("Exploring Mesh API...");
+    
     let p1 = Point::new(0.0, 0.0);
-    // let s = Size2 { width: 10.0, height: 10.0 };
     let p2 = Point::new(10.0, 10.0);
-    let r = Rect::new(p1, p2);
+    let rect = Rect::new(p1, p2);
+    let poly = rect.to_polygon();
     
-    // let inner = mesh.inner;
-    // println!("Vertices: {}", inner.vertices.len()); // Guessing field
-    // println!("Indices: {}", inner.triangles.len()); 
-    // Force variant error first to list them?
-    // let mesh = poly.extrude(microcad_core::geo3d::Extrusion::Foo);
-    
-    let poly = r.to_polygon();
-    // Valid construction to see fields
-    let mesh = poly.extrude(microcad_core::geo3d::Extrusion::Linear {
-        height: microcad_core::Length(10.0), 
+    let mesh = poly.extrude(Extrusion::Linear { 
+        height: Length(10.0), 
         scale_x: 1.0, 
         scale_y: 1.0, 
-        twist: microcad_core::Angle::from(cgmath::Rad(0.0)) // Try From Rad
+        twist: cgmath::Rad(0.0).into() 
     });
     
-    let inner = mesh.inner;
-    let indices = &inner.triangle_indices;
-    println!("First index: {:?}", indices[0]);
-    // let _: () = indices[0];
+    println!("Mesh generated. Vertices: {}", mesh.positions.len());
+    
+    // Note: microcad_core v0.2 produces a raw TriangleMesh from extrusion.
+    // Use of boolean operations or B-Rep modification is not currently supported.
+}
+
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>());
 }

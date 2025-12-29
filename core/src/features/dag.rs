@@ -338,6 +338,80 @@ impl FeatureGraph {
                             args, 
                         })
                     },
+                    FeatureType::Fillet => {
+                        let mut args = Vec::new();
+                        
+                        // Dependency: The input solid to modify
+                        // We assume the first dependency provides the solid.
+                        // We pass it as a Variable lookup because previous steps assigned it to `feat_ID`.
+                        if let Some(_) = feature.dependencies.first() {
+                             args.push(Expression::Variable(input_solid_var.clone()));
+                        } else {
+                            // Fallback to direct string if no explicit dependency (unlikely in DAG)
+                            args.push(Expression::Value(Value::String(input_solid_var.clone())));
+                        }
+                        
+                        // Radius (default 1.0)
+                        let radius = match feature.parameters.get("radius") {
+                            Some(crate::features::types::ParameterValue::Float(r)) => *r,
+                            _ => 1.0, 
+                        };
+                        args.push(Expression::Value(Value::Number(radius)));
+
+                        // Edges List
+                        if let Some(val) = feature.parameters.get("edges") {
+                            match val {
+                                crate::features::types::ParameterValue::List(list) => {
+                                    let arr = list.iter().map(|s| Value::String(s.clone())).collect();
+                                    args.push(Expression::Value(Value::Array(arr)));
+                                },
+                                _ => args.push(Expression::Value(Value::Array(vec![])))
+                            }
+                        } else {
+                            args.push(Expression::Value(Value::Array(vec![])))
+                        }
+
+                        Some(Call {
+                            function: "fillet".to_string(),
+                            args, 
+                        })
+                    },
+                    FeatureType::Chamfer => {
+                         let mut args = Vec::new();
+                         // Uses implicit dependency (usually previous solid)
+                         if let Some(_) = feature.dependencies.first() {
+                             // Use variable reference to previous feature
+                             args.push(Expression::Variable(input_solid_var.clone()));
+                         } else {
+                             // Fallback to direct string if no explicit dependency (unlikely in DAG)
+                            args.push(Expression::Value(Value::String(input_solid_var.clone())));
+                         }
+                         
+                         // Distance (default 1.0)
+                         let distance = match feature.parameters.get("distance") {
+                             Some(crate::features::types::ParameterValue::Float(d)) => *d,
+                             _ => 1.0, 
+                         };
+                         args.push(Expression::Value(Value::Number(distance)));
+ 
+                         // Edges List
+                         if let Some(val) = feature.parameters.get("edges") {
+                             match val {
+                                 crate::features::types::ParameterValue::List(list) => {
+                                     let arr = list.iter().map(|s| Value::String(s.clone())).collect();
+                                     args.push(Expression::Value(Value::Array(arr)));
+                                 },
+                                 _ => args.push(Expression::Value(Value::Array(vec![])))
+                             }
+                         } else {
+                             args.push(Expression::Value(Value::Array(vec![])))
+                         }
+ 
+                         Some(Call {
+                             function: "chamfer".to_string(),
+                             args, 
+                         })
+                    },
                     _ => None
                 };
 

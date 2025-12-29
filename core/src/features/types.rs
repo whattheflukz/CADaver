@@ -59,6 +59,8 @@ pub enum FeatureType {
     Sketch,
     Extrude,
     Revolve,
+    Fillet,
+    Chamfer,
     Cut,
     // Datums
     Plane,

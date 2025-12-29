@@ -211,6 +211,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           "Sketch" => cad_core::features::types::FeatureType::Sketch,
                           "Extrude" => cad_core::features::types::FeatureType::Extrude,
                           "Revolve" => cad_core::features::types::FeatureType::Revolve,
+                          "Fillet" => cad_core::features::types::FeatureType::Fillet,
+                          "Chamfer" => cad_core::features::types::FeatureType::Chamfer,
                           _ => cad_core::features::types::FeatureType::Point 
                       };
                       

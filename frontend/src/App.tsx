@@ -15,6 +15,8 @@ import { OffsetModal } from './components/OffsetModal';
 import { LinearPatternModal } from './components/LinearPatternModal';
 import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
+import FilletModal from './components/FilletModal';
+import ChamferModal from './components/ChamferModal';
 import ModelingToolbar from './components/ModelingToolbar';
 import CommandPalette from './components/CommandPalette';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
@@ -44,6 +46,17 @@ const App: Component = () => {
   const [editingExtrudeId, setEditingExtrudeId] = createSignal<string | null>(null);
   // For region click detection in extrude mode
   const [regionClickPoint, setRegionClickPoint] = createSignal<[number, number] | null>(null);
+
+  // Fillet Modal state
+  const [editingFilletId, setEditingFilletId] = createSignal<string | null>(null);
+  const [pendingFillet, setPendingFillet] = createSignal(false);
+  const [pendingFilletName, setPendingFilletName] = createSignal<string | null>(null);
+
+  // Chamfer Modal state
+  const [editingChamferId, setEditingChamferId] = createSignal<string | null>(null);
+  const [pendingChamfer, setPendingChamfer] = createSignal(false);
+  const [pendingChamferName, setPendingChamferName] = createSignal<string | null>(null);
+
   // Command Palette state
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
   // Variables Panel state
@@ -259,6 +272,44 @@ const App: Component = () => {
     send({ command: 'CreateFeature', payload: cmd });
   };
 
+  const handleFillet = () => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Fillet').length;
+    const name = `Fillet ${existing + 1}`;
+    console.log("handleFillet: Creating new feature with name:", name);
+
+    // Dependencies will be filled by user selection in the modal/viewport?
+    // Actually, Fillet creates a modifier. The "edge list" is a parameter.
+    // The dependency should probably be the solid we are modifying, if we can infer it.
+    // Logic: If edges are selected, find their owner feature?
+    // For now, empty dependencies and empty params.
+
+    const cmd = {
+      type: "Fillet",
+      name,
+      dependencies: []
+    };
+
+    setPendingFilletName(name);
+    setPendingFillet(true);
+    send({ command: 'CreateFeature', payload: cmd });
+  };
+
+  const handleChamfer = () => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Chamfer').length;
+    const name = `Chamfer ${existing + 1}`;
+    console.log("handleChamfer: Creating new feature with name:", name);
+
+    const cmd = {
+      type: "Chamfer",
+      name,
+      dependencies: []
+    };
+
+    setPendingChamferName(name);
+    setPendingChamfer(true);
+    send({ command: 'CreateFeature', payload: cmd });
+  };
+
 
 
   // Auto-select newly created extrude feature
@@ -300,6 +351,44 @@ const App: Component = () => {
             }, 50);
           }
         }
+      }
+    }
+  });
+
+  // Auto-select newly created Fillet feature
+  createEffect(() => {
+    if (pendingFillet() && pendingFilletName()) {
+      const nodes = graph().nodes;
+      const targetName = pendingFilletName()!;
+
+      const fillets = Object.values(nodes).filter(n => n.feature_type === 'Fillet');
+      const match = fillets.find(n => n.name === targetName);
+
+      if (match) {
+        console.log("Found newly created fillet:", match.id);
+        setPendingFillet(false);
+        setPendingFilletName(null);
+        setSelectedFeature(match.id);
+        setEditingFilletId(match.id);
+      }
+    }
+  });
+
+  // Auto-select newly created chamfer feature
+  createEffect(() => {
+    if (pendingChamfer() && pendingChamferName()) {
+      const nodes = graph().nodes;
+      const targetName = pendingChamferName()!;
+
+      const chamfers = Object.values(nodes).filter(n => n.feature_type === 'Chamfer');
+      const match = chamfers.find(n => n.name === targetName);
+
+      if (match) {
+        console.log("Found newly created chamfer:", match.id);
+        setPendingChamfer(false);
+        setPendingChamferName(null);
+        setSelectedFeature(match.id);
+        setEditingChamferId(match.id);
       }
     }
   });
@@ -515,7 +604,12 @@ const App: Component = () => {
 
           {/* Modeling Toolbar (same position as Sketch Toolbar, mode-aware) */}
           {!sketchMode() && (
-            <ModelingToolbar onExtrude={handleExtrude} />
+            <ModelingToolbar
+              onExtrude={() => handleExtrude()}
+              onRevolve={() => { /* Revolve Logic Pending */ }}
+              onFillet={() => handleFillet()}
+              onChamfer={() => handleChamfer()}
+            />
           )}
 
           {/* DOF (Degrees of Freedom) Status Indicator - Server Authoritative */}
@@ -834,6 +928,21 @@ const App: Component = () => {
           />
         )}
 
+        {/* Fillet Modal */}
+        {editingFilletId() && (
+          <FilletModal
+            featureId={editingFilletId()!}
+            initialParams={graph().nodes[editingFilletId()!].parameters}
+            onUpdate={(id, params) => {
+              send({ command: 'UpdateFeature', payload: { id, params } });
+            }}
+            onClose={() => setEditingFilletId(null)}
+            selection={selection()}
+            setSelection={setSelection}
+            graph={graph()}
+          />
+        )}
+
         {/* Circular Pattern Modal */}
         {sketchTool() === "circular_pattern" && (
           <CircularPatternModal
@@ -901,6 +1010,19 @@ const App: Component = () => {
               send({ command: 'VariableReorder', payload: cmd });
             }}
             onClose={() => setShowVariablesPanel(false)}
+          />
+        </Show>
+
+        {/* Chamfer Modal */}
+        <Show when={editingChamferId()}>
+          <ChamferModal
+            featureId={editingChamferId()!}
+            initialParams={graph().nodes[editingChamferId()!]?.parameters || {}}
+            onUpdate={(id, params) => send({ command: 'UpdateFeature', payload: { id, params } })}
+            onClose={() => setEditingChamferId(null)}
+            selection={selection()}
+            setSelection={setSelection}
+            graph={graph()}
           />
         </Show>
 
