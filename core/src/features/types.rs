@@ -48,6 +48,52 @@ pub enum RevolveAxis {
     },
 }
 
+/// Definition for construction plane features
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PlaneDefinition {
+    /// Standard reference planes
+    XY,
+    XZ,
+    YZ,
+    /// Offset from a base plane by distance
+    Offset {
+        base: String,       // "XY", "XZ", "YZ", or feature ID
+        distance: f64,
+    },
+    /// Plane defined by point and normal vector
+    PointAndNormal {
+        point: [f64; 3],
+        normal: [f64; 3],
+    },
+    /// Plane through three points
+    ThreePoints {
+        p1: [f64; 3],
+        p2: [f64; 3],
+        p3: [f64; 3],
+    },
+}
+
+impl Default for PlaneDefinition {
+    fn default() -> Self {
+        PlaneDefinition::XY
+    }
+}
+
+/// Computed plane data for sketch plane selection
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlaneData {
+    pub origin: [f64; 3],
+    pub normal: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+}
+
+/// Reference point data
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PointData {
+    pub position: [f64; 3],
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,

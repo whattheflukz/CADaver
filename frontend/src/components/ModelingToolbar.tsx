@@ -14,6 +14,8 @@ interface ModelingToolbarProps {
     onRevolve: () => void;
     onFillet: () => void;
     onChamfer: () => void;
+    onPlane?: () => void;
+    onPoint?: () => void;
 }
 
 // Helper to look up command info from registry
@@ -82,6 +84,28 @@ const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
                 isActive={false}
                 onClick={props.onChamfer}
                 description="Bevel sharp edges"
+                minWidth="60px"
+            />
+
+            <div style={{ width: "1px", height: "24px", background: "#666" }} />
+
+            {/* Plane Button */}
+            <ToolButton
+                icon="◻️"
+                label="Plane"
+                isActive={false}
+                onClick={() => props.onPlane?.()}
+                description="Create a construction plane for sketching"
+                minWidth="60px"
+            />
+
+            {/* Point Button */}
+            <ToolButton
+                icon="📍"
+                label="Point"
+                isActive={false}
+                onClick={() => props.onPoint?.()}
+                description="Create a reference point"
                 minWidth="60px"
             />
         </div>

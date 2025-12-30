@@ -1,4 +1,4 @@
-use super::{Point3, Vector3, ApproxEq, EPSILON};
+use super::{Point3, Vector3, EPSILON};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -108,6 +108,7 @@ impl Aabb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::ApproxEq;
 
     #[test]
     fn test_line_projection() {

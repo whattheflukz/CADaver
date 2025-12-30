@@ -1,6 +1,6 @@
 //! Tests for constraint suppression functionality
 
-use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry, SketchConstraint, SketchConstraintEntry, ConstraintPoint};
+use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry, SketchConstraint, SketchConstraintEntry};
 use crate::sketch::solver::SketchSolver;
 
 /// Test that a suppressed Horizontal constraint does not affect geometry

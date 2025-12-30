@@ -19,9 +19,11 @@ interface FeatureTreeProps {
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
     onReorderFeature?: (id: string, newIndex: number) => void;
-    onReorderFeature?: (id: string, newIndex: number) => void;
     onInsertAfter?: (afterId: string, featureType: string) => void;
     onExtrudeSketch?: (id: string) => void;
+    // Standard plane visibility
+    standardPlaneVisibility?: { XY: boolean; XZ: boolean; YZ: boolean };
+    onToggleStandardPlane?: (plane: 'XY' | 'XZ' | 'YZ') => void;
 }
 
 const FeatureTree: Component<FeatureTreeProps> = (props) => {
@@ -182,6 +184,43 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                             </Show>
                         </div>
                     </Show>
+                </div>
+
+                {/* Standard Planes - Always visible, not deletable */}
+                <div class="feature-block standard-planes-block">
+                    <div class="feature-item plane-item xy-plane" style={{ opacity: props.standardPlaneVisibility?.XY !== false ? 1 : 0.5 }}>
+                        <span class="plane-color-indicator" style={{ background: '#0000ff' }} />
+                        <span class="feature-name">XY Plane</span>
+                        <span
+                            class="visibility-toggle"
+                            onClick={() => props.onToggleStandardPlane?.('XY')}
+                            title={props.standardPlaneVisibility?.XY !== false ? "Hide" : "Show"}
+                        >
+                            {props.standardPlaneVisibility?.XY !== false ? '👁️' : '👁️‍🗨️'}
+                        </span>
+                    </div>
+                    <div class="feature-item plane-item xz-plane" style={{ opacity: props.standardPlaneVisibility?.XZ !== false ? 1 : 0.5 }}>
+                        <span class="plane-color-indicator" style={{ background: '#00ff00' }} />
+                        <span class="feature-name">XZ Plane</span>
+                        <span
+                            class="visibility-toggle"
+                            onClick={() => props.onToggleStandardPlane?.('XZ')}
+                            title={props.standardPlaneVisibility?.XZ !== false ? "Hide" : "Show"}
+                        >
+                            {props.standardPlaneVisibility?.XZ !== false ? '👁️' : '👁️‍🗨️'}
+                        </span>
+                    </div>
+                    <div class="feature-item plane-item yz-plane" style={{ opacity: props.standardPlaneVisibility?.YZ !== false ? 1 : 0.5 }}>
+                        <span class="plane-color-indicator" style={{ background: '#ff0000' }} />
+                        <span class="feature-name">YZ Plane</span>
+                        <span
+                            class="visibility-toggle"
+                            onClick={() => props.onToggleStandardPlane?.('YZ')}
+                            title={props.standardPlaneVisibility?.YZ !== false ? "Hide" : "Show"}
+                        >
+                            {props.standardPlaneVisibility?.YZ !== false ? '👁️' : '👁️‍🗨️'}
+                        </span>
+                    </div>
                 </div>
 
                 <For each={props.graph.sort_order}>

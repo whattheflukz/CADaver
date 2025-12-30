@@ -75,16 +75,18 @@ export interface SketchEntity {
 
 export type EntityId = string;
 
-export enum TopoRank {
-    Vertex = 0,
-    Edge = 1,
-    Wire = 2,
-    Face = 3,
-    Shell = 4,
-    Solid = 5,
-    CompSolid = 6,
-    Compound = 7,
-}
+export const TopoRank = {
+    Vertex: 0,
+    Edge: 1,
+    Wire: 2,
+    Face: 3,
+    Shell: 4,
+    Solid: 5,
+    CompSolid: 6,
+    Compound: 7,
+} as const;
+
+export type TopoRank = (typeof TopoRank)[keyof typeof TopoRank];
 
 export interface TopoId {
     feature_id: EntityId;

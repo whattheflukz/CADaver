@@ -1,7 +1,7 @@
 //! Expression evaluator with variable resolution and unit conversion.
 
 use super::parser::{BinaryOperator, Expr, UnaryOperator};
-use super::types::{Unit, Variable, VariableStore};
+use super::types::VariableStore;
 use std::collections::HashSet;
 
 /// Evaluation error
@@ -315,6 +315,7 @@ pub fn resolve_expression(expression: &str, store: &VariableStore) -> Result<f64
 mod evaluator_tests {
     use super::*;
     use crate::units::LengthUnit;
+    use crate::variables::{Variable, Unit};
 
     #[test]
     fn test_eval_simple() {

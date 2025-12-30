@@ -469,7 +469,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
   - Features: drag header, keyboard nav, mode-aware filtering
 
 **Future Candidates:**
-- [ ] `SelectionField` — Reusable "click to select entity" input field
+- [x] `SelectionField` — Reusable "click to select entity" input field *(Added)*
 - [x] `NumericInput` — Styled number input with unit support and variable expressions *(Added)*
 - [x] `ToolButton` — Toolbar button with rich tooltip, shortcut, and description display *(Added)*
 
@@ -566,7 +566,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] Driven vs driving dimensions
 - [x] Inline dimension editing
 - [x] Dimension to origin
-- [ ] Dimension to construction geometry
+- [x] Dimension to construction geometry *(Already supported)*
 - [x] Measurement tool (temporary, non-driving)
 
 ### Constraints
@@ -625,15 +625,15 @@ The project must not proceed to advanced solid modeling unless:
 - [ ] Mirror bodies
 
 ### Reference Geometry
-- [ ] Construction planes
+- [x] Construction planes *(PlaneModal, offset mode)*
 - [ ] Axes
-- [ ] Reference points
+- [x] Reference points *(PointModal)*
 - [ ] Midplanes
 
 ### Parametrics & Configurations
-- [ ] Global parameters
-- [ ] Expressions
-- [ ] Unit-aware equations
+- [x] Global parameters *(VariablesPanel, VariableStore)*
+- [x] Expressions *(Expression evaluator with variable references)*
+- [x] Unit-aware equations *(Unit system with Length/Angle types)*
 - [ ] Parameter tables
 - [ ] Feature-linked parameters
 - [ ] Part configurations

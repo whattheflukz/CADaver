@@ -360,10 +360,7 @@ export function findClosestEntity(
     let bestDist = threshold;
     let bestMatch: { id: string; type: "entity" | "point"; distance: number } | null = null;
 
-    for (const entity of sketch.entities) {
-        if (entity.is_construction) continue; // Optional: decide if construction geometry is selectable. Usually yes.
-        // Actually, construction geometry SHOULD be selectable. Removing that check or making it optional.
-    }
+    // Construction geometry is intentionally selectable for constraints/dimensions
 
     // Re-looping properly
     for (const entity of sketch.entities) {

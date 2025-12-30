@@ -462,8 +462,9 @@ const ExtrudeModal: Component<ExtrudeModalProps> = (props) => {
                                 onChange={(e) => {
                                     const val = e.currentTarget.value;
                                     if (val) {
-                                        // Update dependency
-                                        props.onUpdate(props.featureId, { dependencies: [val] });
+                                        // Update dependency - store as List ParameterValue
+                                        // Note: The backend should interpret 'dependencies' specially
+                                        props.onUpdate(props.featureId, { _dependencies: { List: [val] } });
                                         // Trigger region request
                                         setTimeout(() => {
                                             if (props.onRequestRegions) props.onRequestRegions(val);

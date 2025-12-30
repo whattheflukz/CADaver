@@ -23,7 +23,7 @@ import { updateHighlightMesh as doUpdateHighlightMesh, applySelectionHighlights 
 import { renderDimensionPreview, cleanupPreviewDimension } from "../rendering/DimensionPreviewRenderer";
 import { useDimensionDrag } from "../hooks/useDimensionDrag";
 import { handleCanvasClick } from "../services/ViewportClickHandler";
-import { updatePlaneHelpers } from "../rendering/PlaneHelperManager";
+import { updatePlaneHelpers, updatePersistentPlanes, type CustomPlane } from "../rendering/PlaneHelperManager";
 
 interface ViewportProps {
     tessellation: Tessellation | null;
@@ -36,6 +36,8 @@ interface ViewportProps {
     onDimensionEdit?: (constraintIndex: number, type: string) => void;
     // New props for sketch setup
     sketchSetupMode?: boolean;
+    customPlanes?: CustomPlane[];
+    standardPlaneVisibility?: { XY: boolean; XZ: boolean; YZ: boolean };
     onSelectPlane?: (plane: SketchPlane) => void;
     previewDimension?: {
         type: "Distance" | "Angle" | "Radius" | "Length" | "DistancePointLine" | "DistanceParallelLines" | "HorizontalDistance" | "VerticalDistance" | "Unsupported";
@@ -323,7 +325,13 @@ const Viewport: Component<ViewportProps> = (props) => {
     // Plane Selection Helpers - logic extracted to PlaneHelperManager.ts
     createEffect(() => {
         if (!ready() || !scene) return;
-        updatePlaneHelpers(scene, !!props.sketchSetupMode);
+        updatePlaneHelpers(scene, !!props.sketchSetupMode, props.customPlanes || []);
+    });
+
+    // Persistent Plane Display - always visible XY/XZ/YZ and custom planes
+    createEffect(() => {
+        if (!ready() || !scene) return;
+        updatePersistentPlanes(scene, props.customPlanes || [], props.standardPlaneVisibility || { XY: true, XZ: true, YZ: true });
     });
 
     // Helper: Raycast including Plane Helpers

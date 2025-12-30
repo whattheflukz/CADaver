@@ -3,7 +3,6 @@
 //! This module provides pure 3D geometry functions for plane operations,
 //! ray casting, and spatial calculations.
 
-use nalgebra as na;
 use super::{Point3, Vector3};
 
 /// Tolerance for floating-point comparisons

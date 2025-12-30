@@ -10,10 +10,16 @@ uuid = { version = "1.0", features = ["v4", "serde", "v5"] }
 nalgebra = { version = "0.32", features = ["serde-serialize"] }
 thiserror = "1.0"
 earcutr = "0.5.0"
-evalexpr = "13.1.0"
-microcad-core = "0.2"
-microcad-std = "0.2" 
-cgmath = "0.18" 
-# actually, let's look for a git repo or something if it fails?
-# The prompt implies it's a real thing I should use. I will try to include it.
-# If this fails, I will remove it and ask the user.
+
+# MIT-compatible CAD kernel (Apache-2.0 licensed)
+truck-modeling = "0.6"
+truck-meshalgo = "0.4"
+truck-polymesh = "0.6"
+truck-topology = "0.6"
+truck-base = "0.5"
+truck-shapeops = "0.4"  # Boolean operations (union, intersect, subtract)
+truck-stepio = "0.3"    # STEP file import/export
+
+# cgmath is used by truck internally
+cgmath = "0.18"
+

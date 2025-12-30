@@ -17,6 +17,8 @@ import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
 import FilletModal from './components/FilletModal';
 import ChamferModal from './components/ChamferModal';
+import PlaneModal from './components/PlaneModal';
+import PointModal from './components/PointModal';
 import ModelingToolbar from './components/ModelingToolbar';
 import CommandPalette from './components/CommandPalette';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
@@ -56,6 +58,26 @@ const App: Component = () => {
   const [editingChamferId, setEditingChamferId] = createSignal<string | null>(null);
   const [pendingChamfer, setPendingChamfer] = createSignal(false);
   const [pendingChamferName, setPendingChamferName] = createSignal<string | null>(null);
+
+  // Plane Modal state
+  const [showPlaneModal, setShowPlaneModal] = createSignal(false);
+
+  // Point Modal state
+  const [showPointModal, setShowPointModal] = createSignal(false);
+
+  // Standard plane visibility state
+  const [standardPlaneVisibility, setStandardPlaneVisibility] = createSignal<{ XY: boolean; XZ: boolean; YZ: boolean }>({
+    XY: true,
+    XZ: true,
+    YZ: true
+  });
+
+  const toggleStandardPlane = (plane: 'XY' | 'XZ' | 'YZ') => {
+    setStandardPlaneVisibility(prev => ({
+      ...prev,
+      [plane]: !prev[plane]
+    }));
+  };
 
   // Command Palette state
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
@@ -310,8 +332,61 @@ const App: Component = () => {
     send({ command: 'CreateFeature', payload: cmd });
   };
 
+  const handlePlane = () => {
+    setShowPlaneModal(true);
+  };
 
+  const handlePlaneCreate = (params: Record<string, any>) => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Plane').length;
+    const name = params.name?.String || `Plane ${existing + 1}`;
 
+    const cmd = {
+      type: "Plane",
+      name,
+      dependencies: []
+    };
+
+    send({ command: 'CreateFeature', payload: cmd });
+
+    // Give backend time to create the feature, then update with params
+    setTimeout(() => {
+      const nodes = graph().nodes;
+      const planeFeature = Object.values(nodes).find(n => n.name === name);
+      if (planeFeature) {
+        send({ command: 'UpdateFeature', payload: { id: planeFeature.id, params } });
+      }
+    }, 100);
+
+    setShowPlaneModal(false);
+  };
+
+  const handlePoint = () => {
+    setShowPointModal(true);
+  };
+
+  const handlePointCreate = (params: Record<string, any>) => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Point').length;
+    const name = params.name?.String || `Point ${existing + 1}`;
+
+    const cmd = {
+      type: "Point",
+      name,
+      dependencies: []
+    };
+
+    send({ command: 'CreateFeature', payload: cmd });
+
+    // Wait for feature to be created, then update with params
+    setTimeout(() => {
+      const nodes = graph().nodes;
+      const pointFeature = Object.values(nodes).find(n => n.name === name);
+      if (pointFeature) {
+        send({ command: 'UpdateFeature', payload: { id: pointFeature.id, params } });
+      }
+    }, 100);
+
+    setShowPointModal(false);
+  };
   // Auto-select newly created extrude feature
   createEffect(() => {
     if (pendingExtrude() && pendingExtrudeName()) {
@@ -571,6 +646,8 @@ const App: Component = () => {
                 }
               });
             }}
+            standardPlaneVisibility={standardPlaneVisibility()}
+            onToggleStandardPlane={toggleStandardPlane}
             onExtrudeSketch={handleExtrude}
           />
         </div>
@@ -609,6 +686,8 @@ const App: Component = () => {
               onRevolve={() => { /* Revolve Logic Pending */ }}
               onFillet={() => handleFillet()}
               onChamfer={() => handleChamfer()}
+              onPlane={handlePlane}
+              onPoint={handlePoint}
             />
           )}
 
@@ -692,6 +771,30 @@ const App: Component = () => {
             onDimensionDrag={sketchMode() ? handleDimensionDrag : undefined}
             onDimensionEdit={sketchMode() ? handleDimensionEdit : undefined}
             sketchSetupMode={sketchSetupMode()}
+            standardPlaneVisibility={standardPlaneVisibility()}
+            customPlanes={
+              // Extract custom planes from feature graph
+              Object.values(graph().nodes)
+                .filter(f => f.feature_type === 'Plane' && !f.suppressed)
+                .map(f => {
+                  try {
+                    const planeDataStr = f.parameters?.plane_data?.String;
+                    if (!planeDataStr) return null;
+                    const planeData = JSON.parse(planeDataStr);
+                    return {
+                      id: f.id,
+                      name: f.name,
+                      plane: {
+                        origin: planeData.origin || [0, 0, 0],
+                        normal: planeData.normal || [0, 0, 1],
+                        x_axis: planeData.x_axis || [1, 0, 0],
+                        y_axis: planeData.y_axis || [0, 1, 0],
+                      }
+                    };
+                  } catch { return null; }
+                })
+                .filter(Boolean) as any
+            }
             onSelectPlane={handlePlaneSelected}
             previewDimension={sketchMode() && sketchTool() === "dimension" && dimensionPlacementMode() && dimensionProposedAction()?.isValid ? {
               type: dimensionProposedAction()!.type,
@@ -1023,6 +1126,24 @@ const App: Component = () => {
             selection={selection()}
             setSelection={setSelection}
             graph={graph()}
+          />
+        </Show>
+
+        {/* Plane Modal */}
+        <Show when={showPlaneModal()}>
+          <PlaneModal
+            onConfirm={handlePlaneCreate}
+            onCancel={() => setShowPlaneModal(false)}
+            variables={graph().variables || { variables: {}, order: [] }}
+          />
+        </Show>
+
+        {/* Point Modal */}
+        <Show when={showPointModal()}>
+          <PointModal
+            onConfirm={handlePointCreate}
+            onCancel={() => setShowPointModal(false)}
+            variables={graph().variables || { variables: {}, order: [] }}
           />
         </Show>
 

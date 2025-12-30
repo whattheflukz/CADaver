@@ -213,7 +213,13 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           "Revolve" => cad_core::features::types::FeatureType::Revolve,
                           "Fillet" => cad_core::features::types::FeatureType::Fillet,
                           "Chamfer" => cad_core::features::types::FeatureType::Chamfer,
-                          _ => cad_core::features::types::FeatureType::Point 
+                          "Plane" => cad_core::features::types::FeatureType::Plane,
+                          "Axis" => cad_core::features::types::FeatureType::Axis,
+                          "Point" => cad_core::features::types::FeatureType::Point,
+                          _ => {
+                              warn!("Unknown feature type: {}", cmd.feature_type);
+                              cad_core::features::types::FeatureType::Point
+                          }
                       };
                       
                       let mut feature = cad_core::features::types::Feature::new(&cmd.name, f_type);

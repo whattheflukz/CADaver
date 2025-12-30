@@ -344,11 +344,12 @@ impl FeatureGraph {
                         // Dependency: The input solid to modify
                         // We assume the first dependency provides the solid.
                         // We pass it as a Variable lookup because previous steps assigned it to `feat_ID`.
-                        if let Some(_) = feature.dependencies.first() {
-                             args.push(Expression::Variable(input_solid_var.clone()));
+                        if let Some(dep_id) = feature.dependencies.first() {
+                            let input_solid_var = format!("feat_{}", dep_id);
+                            args.push(Expression::Variable(input_solid_var));
                         } else {
-                            // Fallback to direct string if no explicit dependency (unlikely in DAG)
-                            args.push(Expression::Value(Value::String(input_solid_var.clone())));
+                            // Fallback to empty string if no explicit dependency (unlikely in DAG)
+                            args.push(Expression::Value(Value::String(String::new())));
                         }
                         
                         // Radius (default 1.0)
@@ -379,12 +380,13 @@ impl FeatureGraph {
                     FeatureType::Chamfer => {
                          let mut args = Vec::new();
                          // Uses implicit dependency (usually previous solid)
-                         if let Some(_) = feature.dependencies.first() {
+                         if let Some(dep_id) = feature.dependencies.first() {
                              // Use variable reference to previous feature
-                             args.push(Expression::Variable(input_solid_var.clone()));
+                             let input_solid_var = format!("feat_{}", dep_id);
+                             args.push(Expression::Variable(input_solid_var));
                          } else {
-                             // Fallback to direct string if no explicit dependency (unlikely in DAG)
-                            args.push(Expression::Value(Value::String(input_solid_var.clone())));
+                             // Fallback to empty string if no explicit dependency (unlikely in DAG)
+                             args.push(Expression::Value(Value::String(String::new())));
                          }
                          
                          // Distance (default 1.0)
@@ -411,6 +413,19 @@ impl FeatureGraph {
                              function: "chamfer".to_string(),
                              args, 
                          })
+                    },
+                    FeatureType::Plane => {
+                        // Planes are reference geometry - no kernel call needed
+                        // The plane data is stored in parameters and used for sketch plane selection
+                        None
+                    },
+                    FeatureType::Axis => {
+                        // Axes are reference geometry - no kernel call needed
+                        None
+                    },
+                    FeatureType::Point => {
+                        // Reference points - no kernel call needed
+                        None
                     },
                     _ => None
                 };

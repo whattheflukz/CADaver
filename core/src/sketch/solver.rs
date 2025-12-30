@@ -1,4 +1,4 @@
-use super::types::{Sketch, SketchEntity, SketchConstraint, SketchGeometry, ConstraintPoint};
+use super::types::{Sketch, SketchConstraint, SketchGeometry, ConstraintPoint};
 #[allow(unused_imports)]
 use crate::topo::EntityId;
 use std::collections::HashMap;
@@ -2061,10 +2061,10 @@ impl SketchSolver {
                 
                 if let (Some(SketchGeometry::Line { start: s1, end: e1 }), Some(SketchGeometry::Line { start: s2, end: e2 })) = (geo1, geo2) {
                     // Determine connectivity to normalize vectors (outward from vertex)
-                    let d_ss = ((s1[0]-s2[0]).powi(2) + (s1[1]-s2[1]).powi(2));
-                    let d_se = ((s1[0]-e2[0]).powi(2) + (s1[1]-e2[1]).powi(2));
-                    let d_es = ((e1[0]-s2[0]).powi(2) + (e1[1]-s2[1]).powi(2));
-                    let d_ee = ((e1[0]-e2[0]).powi(2) + (e1[1]-e2[1]).powi(2));
+                    let d_ss = (s1[0]-s2[0]).powi(2) + (s1[1]-s2[1]).powi(2);
+                    let d_se = (s1[0]-e2[0]).powi(2) + (s1[1]-e2[1]).powi(2);
+                    let d_es = (e1[0]-s2[0]).powi(2) + (e1[1]-s2[1]).powi(2);
+                    let d_ee = (e1[0]-e2[0]).powi(2) + (e1[1]-e2[1]).powi(2);
                     
                     let min_dist = d_ss.min(d_se).min(d_es).min(d_ee);
                     

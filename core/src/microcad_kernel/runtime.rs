@@ -3,8 +3,9 @@ use crate::topo::{EntityId, IdGenerator};
 use crate::geometry::Tessellation;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use microcad_core::geo2d::{Rect, Point, Size2};
-use microcad_core::geo3d::Extrude;
+
+// Use the new MIT-compatible kernel abstraction
+use crate::kernel::{self, GeometryKernel, Polygon2D, Point2D, ExtrudeParams, Vector3D};
 
 #[derive(Debug, Error, Clone, Serialize, Deserialize)]
 pub enum KernelError {
@@ -118,7 +119,7 @@ impl Runtime {
         topology_manifest: &mut std::collections::HashMap<crate::topo::naming::TopoId, crate::topo::registry::KernelEntity>,
     ) -> Result<(), KernelError> {
         // Common imports for syscalls
-        use crate::geometry::{Point3, Vector3};
+        use crate::geometry::Point3;
         use crate::topo::naming::{NamingContext, TopoRank};
         use crate::topo::registry::{KernelEntity, AnalyticGeometry};
 
@@ -131,64 +132,33 @@ impl Runtime {
                 
                 let ctx = NamingContext::new(id);
 
-                // Create geometry using MicroCAD
-                let p1 = Point::new(0.0, 0.0);
-                let p2 = Point::new(10.0, 10.0);
-                let rect = Rect::new(p1, p2);
-                let poly = rect.to_polygon();
-                let mesh_result = poly.extrude(microcad_core::geo3d::Extrusion::Linear { 
-                    height: microcad_core::Length(10.0), 
-                    scale_x: 1.0, 
-                    scale_y: 1.0, 
-                    twist: cgmath::Rad(0.0).into() 
-                });
+                // Use the new MIT-compatible Truck kernel
+                let kernel = kernel::default_kernel();
                 
-                let inner = &mesh_result.inner;
-                let positions = &inner.positions;
-                let indices = &inner.triangle_indices;
-
-                // Create a single Face ID for the extruded solid (implied topology for now)
-                let face_id = ctx.derive("Face-0", TopoRank::Face); // Only 1 face in raw mesh?
-                // Note: MicroCAD mesh is a "soup" of triangles currently. 
-                // We treat the whole result as one "Face" for selection purposes until we have B-Rep.
-                
-                // Register Face Geometry (Placeholder Plane for now, as we don't have surface info)
-                // In reality, it should be a Mesh surface?
-                let face_entity = KernelEntity {
-                   id: face_id,
-                   geometry: AnalyticGeometry::Mesh, // We added Mesh variant earlier?
-                };
-                topology_manifest.insert(face_id, face_entity);
-
-                // Generate TopoIds for vertices to maintain stability
-                let mut vertex_ids = Vec::with_capacity(positions.len());
-                for (i, p) in positions.iter().enumerate() {
-                    let v_id = ctx.derive(&format!("V-{}", i), TopoRank::Vertex);
-                    vertex_ids.push(v_id);
-                    
-                    // Add selectable point
-                    tessellation.add_point(
-                        Point3::new(p.x.into(), p.y.into(), p.z.into()),
-                        v_id
-                    );
-                }
-
-                // Add triangles
-                for tri in indices {
-                    let i0 = tri.0 as usize;
-                    let i1 = tri.1 as usize;
-                    let i2 = tri.2 as usize;
-                    
-                    let p0 = positions[i0];
-                    let p1 = positions[i1];
-                    let p2 = positions[i2];
-
-                    tessellation.add_triangle(
-                        Point3::new(p0.x.into(), p0.y.into(), p0.z.into()),
-                        Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
-                        Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
-                        face_id
-                    );
+                // Create a 10x10x10 box
+                match kernel.create_box(10.0, 10.0, 10.0) {
+                    Ok(solid) => {
+                        // Tessellate the solid to get triangles
+                        match kernel.tessellate(&solid) {
+                            Ok(mesh) => {
+                                // Use the kernel's mesh_to_tessellation to populate our Tessellation
+                                kernel.mesh_to_tessellation(
+                                    &mesh,
+                                    tessellation,
+                                    topology_manifest,
+                                    &ctx,
+                                    "Cube"
+                                );
+                                logs.push("Created cube using Truck kernel".to_string());
+                            }
+                            Err(e) => {
+                                logs.push(format!("Warning: Failed to tessellate cube: {:?}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("Warning: Failed to create cube: {:?}", e));
+                    }
                 }
 
                 Ok(())
@@ -705,73 +675,66 @@ impl Runtime {
                             }
                         }
 
-                        // Convert 2D loops to MicroCAD Polygons and Extrude
-                        use microcad_core::geo2d::{Polygon, LineString, Point};
-                        use microcad_core::geo3d::{Extrude, Extrusion};
-                        use microcad_core::Length;
+                        // Use the new MIT-compatible Truck kernel for extrusion
+                        let kernel = kernel::default_kernel();
                         
                         for (i, region_loops) in loops_2d.iter().enumerate() {
                             if region_loops.is_empty() { continue; }
                             
-                            // 1. Create Exterior LineString
-                            let exterior_points: Vec<Point> = region_loops[0].iter()
-                                .map(|p| Point::new(p[0] as f64, p[1] as f64))
+                            // 1. Create Polygon2D with exterior and holes
+                            let exterior_points: Vec<Point2D> = region_loops[0].iter()
+                                .map(|p| Point2D::new(p[0], p[1]))
                                 .collect();
-                            let exterior = LineString::from(exterior_points);
                             
-                            // 2. Create Interior LineStrings (Holes)
-                            let mut interiors = Vec::new();
-                            for hole_loop in region_loops.iter().skip(1) {
-                                let hole_points: Vec<Point> = hole_loop.iter()
-                                    .map(|p| Point::new(p[0] as f64, p[1] as f64))
-                                    .collect();
-                                interiors.push(LineString::from(hole_points));
+                            let interior_loops: Vec<Vec<Point2D>> = region_loops.iter().skip(1)
+                                .map(|hole_loop| hole_loop.iter().map(|p| Point2D::new(p[0], p[1])).collect())
+                                .collect();
+                            
+                            let polygon = if interior_loops.is_empty() {
+                                Polygon2D::new(exterior_points)
+                            } else {
+                                Polygon2D::with_holes(exterior_points, interior_loops)
+                            };
+                            
+                            // 2. Create extrusion parameters
+                            let extrude_params = ExtrudeParams::linear(distance)
+                                .with_direction(Vector3D::new(0.0, 0.0, 1.0)); // Truck extrudes in Z
+                            
+                            // 3. Extrude the polygon
+                            match kernel.extrude_polygon(&polygon, &extrude_params) {
+                                Ok(solid) => {
+                                    // 4. Tessellate the solid
+                                    match kernel.tessellate(&solid) {
+                                        Ok(mut mesh) => {
+                                            // 5. Transform from local Z-up space to sketch plane space
+                                            for p in &mut mesh.positions {
+                                                let u = p.x;
+                                                let v = p.y;
+                                                let w = p.z;
+                                                
+                                                p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
+                                                p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
+                                                p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                            }
+                                            
+                                            // 6. Add to tessellation using kernel's mesh_to_tessellation
+                                            kernel.mesh_to_tessellation(
+                                                &mesh,
+                                                tessellation,
+                                                topology_manifest,
+                                                &ctx,
+                                                &format!("Extrude_{}", i)
+                                            );
+                                        }
+                                        Err(e) => {
+                                            logs.push(format!("Warning: Tessellation failed for region {}: {:?}", i, e));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    logs.push(format!("Warning: Extrusion failed for region {}: {:?}", i, e));
+                                }
                             }
-                            
-                            // 3. Create Polygon
-                            let poly = Polygon::new(exterior, interiors);
-                            
-                            // 4. Extrude
-                            // Note: MicroCAD extrudes along Z. We might need to rotate if sketch is not on XY.
-                            // But for now, assuming sketches are XY plane based or transformed later?
-                            // The current system transforms visualization usually. 
-                            // However, the manual implementation had `x_axis`, `y_axis`, `normal` from sketch plane.
-                            // The MicroCAD kernel `extrude` currently just goes up Z.
-                            // If `plane` is not XY, we'd need to transform points or rotate result.
-                            
-                            let mesh_result = poly.extrude(Extrusion::Linear {
-                                height: Length(distance),
-                                scale_x: 1.0,
-                                scale_y: 1.0,
-                                twist: cgmath::Rad(0.0).into()
-                            });
-                            
-                            // 5. Add to Tessellation
-                            // We need to transform the mesh from local extrusion space (Z-up) to sketch plane space.
-                            let mut transformed_mesh = mesh_result.inner;
-                            
-                            // Apply transform: [u, v, w] -> origin + u*x_axis + v*y_axis + w*plane_normal
-                            for p in &mut transformed_mesh.positions {
-                                let u = p.x;
-                                let v = p.y;
-                                let w = p.z;
-                                
-                                let px = origin[0] as f32 + u * x_axis[0] as f32 + v * y_axis[0] as f32 + w * normal[0] as f32;
-                                let py = origin[1] as f32 + u * x_axis[1] as f32 + v * y_axis[1] as f32 + w * normal[1] as f32;
-                                let pz = origin[2] as f32 + u * x_axis[2] as f32 + v * y_axis[2] as f32 + w * normal[2] as f32;
-                                
-                                p.x = px;
-                                p.y = py;
-                                p.z = pz;
-                            }
-                            
-                            add_microcad_mesh_to_tessellation(
-                                &ctx, 
-                                tessellation, 
-                                topology_manifest, 
-                                &transformed_mesh, 
-                                &format!("Extrude_{}", i)
-                            );
                         }
 
                         if loops_2d.is_empty() {
@@ -1020,274 +983,27 @@ impl Runtime {
 }
 
 
+// NOTE: The add_microcad_mesh_to_tessellation function has been removed.
+// Mesh-to-tessellation conversion is now handled by TruckKernel::mesh_to_tessellation()
+// in the kernel abstraction layer (core/src/kernel/truck.rs).
 
-fn add_microcad_mesh_to_tessellation(
-    ctx: &crate::topo::naming::NamingContext,
-    tessellation: &mut crate::geometry::tessellation::Tessellation,
-    topology_manifest: &mut std::collections::HashMap<crate::topo::naming::TopoId, crate::topo::registry::KernelEntity>,
-    mesh: &microcad_core::geo3d::TriangleMesh,
-    base_name: &str,
-) {
-    use crate::topo::naming::TopoRank;
-    use crate::topo::registry::{KernelEntity, AnalyticGeometry};
-    use crate::geometry::Point3;
-    use microcad_core::geo2d::Point;
 
-    let positions = &mesh.positions;
-    
-    let positions = &mesh.positions;
-    
-    // Track vertex degree (incidence of Feature Edges) to filter shown vertices
-    // 0 = interior face vertex, 2 = edge interior vertex, != 2 && > 0 = Feature Vertex (Corner)
-    let mut vertex_feature_degree = vec![0usize; positions.len()];
 
-    // 1. Compute Normals for all triangles
-    let mut triangle_normals = Vec::with_capacity(mesh.triangle_indices.len());
-    for tri in &mesh.triangle_indices {
-        let i0 = tri.0 as usize;
-        let i1 = tri.1 as usize;
-        let i2 = tri.2 as usize;
-        let p0 = positions[i0];
-        let p1 = positions[i1];
-        let p2 = positions[i2];
-        
-        let u_x = p1.x as f64 - p0.x as f64;
-        let u_y = p1.y as f64 - p0.y as f64;
-        let u_z = p1.z as f64 - p0.z as f64;
-        let v_x = p2.x as f64 - p0.x as f64;
-        let v_y = p2.y as f64 - p0.y as f64;
-        let v_z = p2.z as f64 - p0.z as f64;
-        
-        let nx = u_y * v_z - u_z * v_y;
-        let ny = u_z * v_x - u_x * v_z;
-        let nz = u_x * v_y - u_y * v_x;
-        
-        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-        let normal = if len < 1e-6 { [0.0, 0.0, 1.0] } else { [nx / len, ny / len, nz / len] };
-        triangle_normals.push(normal);
-    }
-    
-    // 2. Build Adjacency Graph (Edge -> Triangles)
-    let mut edge_map: std::collections::HashMap<(usize, usize), Vec<usize>> = std::collections::HashMap::new();
-    
-    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
-        let indices = [tri.0 as usize, tri.1 as usize, tri.2 as usize];
-        for k in 0..3 {
-            let v1 = indices[k];
-            let v2 = indices[(k + 1) % 3];
-            let key = if v1 < v2 { (v1, v2) } else { (v2, v1) };
-            edge_map.entry(key).or_default().push(tri_idx);
-        }
-    }
-    
-    // 3. Union-Find / Disjoint Set to group smooth faces
-    let num_tris = mesh.triangle_indices.len();
-    let mut parent: Vec<usize> = (0..num_tris).collect();
-    
-    // Simple iterative find with path compression
-    let mut find = |mut i: usize, parent: &mut Vec<usize>| -> usize {
-        while i != parent[i] {
-            parent[i] = parent[parent[i]];
-            i = parent[i];
-        }
-        i
-    };
-    
-    let mut union = |i: usize, j: usize, parent: &mut Vec<usize>| {
-        let root_i = find(i, parent);
-        let root_j = find(j, parent);
-        if root_i != root_j {
-            // Deterministic merge: always merge larger into smaller to keep stable representative
-            if root_i < root_j {
-                parent[root_j] = root_i;
-            } else {
-                parent[root_i] = root_j;
-            }
-        }
-    };
-    
-    // Threshold: 40 degrees (cos(40) ~ 0.766)
-    let smoothness_threshold = 0.766; 
-    
-    // Iterate edges deterministically? edge_map iteration is random but union is commutative commutative enough?
-    // To be perfectly safe, let's sort keys, but hashmap iteration might be fine if rule is strict (min index).
-    // Actually, iterating in random order could affect the structure of the tree but path compression and "min index root" rule
-    // guarantees the final root is the minimum index in the set.
-    for (_, neighbors) in &edge_map {
-        if neighbors.len() == 2 {
-            let t1 = neighbors[0];
-            let t2 = neighbors[1];
-            
-            let n1 = triangle_normals[t1];
-            let n2 = triangle_normals[t2];
-            
-            let dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
-            
-            if dot > smoothness_threshold {
-                union(t1, t2, &mut parent);
-            }
-        }
-    }
-    
-    // 3b. Compute Smooth Normals (Per Vertex, Per FaceGroup)
-    // Map (VertexIndex, FaceRoot) -> Accumulator Normal
-    let mut vertex_smooth_normals: std::collections::HashMap<(usize, usize), [f64; 3]> = std::collections::HashMap::new();
-    
-    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
-        let root = find(tri_idx, &mut parent);
-        let normal = triangle_normals[tri_idx];
-        let indices = [tri.0 as usize, tri.1 as usize, tri.2 as usize];
-        
-        for &v_idx in &indices {
-            let entry = vertex_smooth_normals.entry((v_idx, root)).or_insert([0.0, 0.0, 0.0]);
-            entry[0] += normal[0];
-            entry[1] += normal[1];
-            entry[2] += normal[2];
-        }
-    }
-    
-    // Normalize accumulators
-    for (_, n) in vertex_smooth_normals.iter_mut() {
-        let len = (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]).sqrt();
-        if len > 1e-6 {
-            n[0] /= len; n[1] /= len; n[2] /= len;
-        }
-    }
 
-    // 4. Generate TopoIds for Groups
-    let mut group_id_map: std::collections::HashMap<usize, crate::topo::naming::TopoId> = std::collections::HashMap::new();
-    
-    for (tri_idx, tri) in mesh.triangle_indices.iter().enumerate() {
-        let root = find(tri_idx, &mut parent);
-        
-        let face_id = *group_id_map.entry(root).or_insert_with(|| {
-             let n = triangle_normals[root];
-             let q_normal = [
-                 (n[0] * 100.0) as i64,
-                 (n[1] * 100.0) as i64,
-                 (n[2] * 100.0) as i64
-             ];
-             let seed = format!("{}_Face_Smooth_{}_{}_{}_{}", base_name, root, q_normal[0], q_normal[1], q_normal[2]);
-             let id = ctx.derive(&seed, TopoRank::Face);
-             
-             let entity = KernelEntity {
-                id,
-                geometry: AnalyticGeometry::Plane {
-                    origin: [positions[tri.0 as usize].x as f64, positions[tri.0 as usize].y as f64, positions[tri.0 as usize].z as f64],
-                    normal: n,
-                }, 
-             };
-             topology_manifest.insert(id, entity);
-             id
-        });
 
-        let i0 = tri.0 as usize;
-        let i1 = tri.1 as usize;
-        let i2 = tri.2 as usize;
-        let p0 = positions[i0];
-        let p1 = positions[i1];
-        let p2 = positions[i2];
-        
-        // Fetch smooth normals
-        let default_n = [0.0, 1.0, 0.0];
-        let n0 = vertex_smooth_normals.get(&(i0, root)).unwrap_or(&default_n);
-        let n1 = vertex_smooth_normals.get(&(i1, root)).unwrap_or(&default_n);
-        let n2 = vertex_smooth_normals.get(&(i2, root)).unwrap_or(&default_n);
 
-        use crate::geometry::Vector3;
-        tessellation.add_triangle_with_normals(
-            Point3::new(p0.x.into(), p0.y.into(), p0.z.into()),
-            Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
-            Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
-            Vector3::new(n0[0] as f64, n0[1] as f64, n0[2] as f64),
-            Vector3::new(n1[0] as f64, n1[1] as f64, n1[2] as f64),
-            Vector3::new(n2[0] as f64, n2[1] as f64, n2[2] as f64),
-            face_id
-        );
-    }
-    
-    // 5. Extract Feature Edges
-    // Edges are "Features" if they separate two different Face Groups or are boundaries
-    // We group segments by the Pair of connected Faces to create Unified Edges.
-    let mut edge_groups: std::collections::HashMap<(usize, usize), crate::topo::naming::TopoId> = std::collections::HashMap::new();
 
-    for ((v1, v2), neighbors) in &edge_map {
-        let (root1, root2) = if neighbors.len() != 2 {
-            // Boundary edge. Use a special "Outer" marker? 
-            // We use the single face root key and a marker max-usize
-            (find(neighbors[0], &mut parent), usize::MAX)
-        } else {
-            let r1 = find(neighbors[0], &mut parent);
-            let r2 = find(neighbors[1], &mut parent);
-            if r1 < r2 { (r1, r2) } else { (r2, r1) }
-        };
-        
-        let is_feature = root1 != root2;
-        
-        if is_feature {
-            // Track Feature Degree for vertices
-            if *v1 < vertex_feature_degree.len() { vertex_feature_degree[*v1] += 1; }
-            if *v2 < vertex_feature_degree.len() { vertex_feature_degree[*v2] += 1; }
-
-            // Fetch or create Edge ID for this Face Pair
-            // Stable ID based on the Face Roots (which are minimal indices)
-            let edge_id = *edge_groups.entry((root1, root2)).or_insert_with(|| {
-                let seed = format!("{}_Edge_Group_{}_{}", base_name, root1, root2);
-                let id = ctx.derive(&seed, TopoRank::Edge);
-                
-                // For now, we register a generic Line for the FIRST segment we find.
-                // Ideally this would be a Composite Curve or Polyline.
-                // The geometry is just metadata for selection raycasting.
-                // We pick the current segment as representative.
-                let p1 = positions[*v1];
-                let p2 = positions[*v2];
-                 
-                let entity = KernelEntity {
-                    id,
-                    geometry: AnalyticGeometry::Line {
-                        start: [p1.x as f64, p1.y as f64, p1.z as f64],
-                        end: [p2.x as f64, p2.y as f64, p2.z as f64],
-                    },
-                };
-                topology_manifest.insert(id, entity);
-                id
-            });
-            
-            let p1 = positions[*v1];
-            let p2 = positions[*v2];
-            
-            tessellation.add_line(
-                Point3::new(p1.x.into(), p1.y.into(), p1.z.into()),
-                Point3::new(p2.x.into(), p2.y.into(), p2.z.into()),
-                edge_id
-            );
-        }
-    }
-    
-    // 6. Extract Feature Vertices (Corners)
-    // Only show vertices that are topologically significant (corners junctions or endpoints)
-    // Degree 2 nodes are just passing through an edge.
-    for (i, degree) in vertex_feature_degree.iter().enumerate() {
-        if *degree > 0 && *degree != 2 {
-            // This is a feature vertex!
-            let p = positions[i];
-            let v_id = ctx.derive(&format!("{}_V_{}", base_name, i), TopoRank::Vertex);
-            
-            tessellation.add_point(
-                Point3::new(p.x.into(), p.y.into(), p.z.into()),
-                v_id
-            );
-        }
-    }
-}
 
 
 mod tests {
     use super::*;
-    use crate::microcad_kernel::ast::*;
+    use crate::topo::IdGenerator;
+    
+    
 
     #[test]
     fn test_evaluate_cube() {
+        use crate::microcad_kernel::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1308,6 +1024,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_error() {
+        use crate::microcad_kernel::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1325,6 +1042,7 @@ mod tests {
     
     #[test]
     fn test_unknown_function() {
+        use crate::microcad_kernel::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1345,6 +1063,7 @@ mod tests {
     #[test]
     fn test_sketch_json_integration() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
+        use crate::microcad_kernel::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestSketch");
@@ -1377,6 +1096,7 @@ mod tests {
     #[test]
     fn test_extrude_with_sketch() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
+        use crate::microcad_kernel::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestExtrude");
@@ -1423,6 +1143,7 @@ mod tests {
     #[test]
     fn test_revolve_with_sketch() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
+        use crate::microcad_kernel::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestRevolve");

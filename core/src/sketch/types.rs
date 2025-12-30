@@ -1,4 +1,4 @@
-use crate::geometry::{Point3, Vector3, Transform3};
+use crate::geometry::{Point3, Vector3};
 use crate::topo::EntityId;
 use serde::{Deserialize, Serialize};
 

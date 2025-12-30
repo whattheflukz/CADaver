@@ -39,7 +39,7 @@ impl Tessellation {
         // Compute flat normal (very basic)
         let v1 = p2 - p1;
         let v2 = p3 - p1;
-        let mut normal = v1.cross(&v2).normalize();
+        let normal = v1.cross(&v2).normalize();
         
         // Add normals for each vertex (flat shading style for now)
         for _ in 0..3 {
@@ -158,7 +158,7 @@ pub fn ear_clip_triangulate(polygon: &[[f64; 2]]) -> Vec<(usize, usize, usize)> 
     
     // Ear clipping
     let mut safety = 0;
-    let mut no_ear_count = 0;
+    let no_ear_count = 0;
     while indices.len() > 3 && safety < n * n {
         safety += 1;
         let mut found_ear = false;

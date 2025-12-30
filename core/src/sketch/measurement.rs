@@ -4,7 +4,6 @@
 //! Measurements are session-only and update live as geometry changes.
 
 use crate::sketch::types::{SketchGeometry, SketchEntity};
-use crate::topo::EntityId;
 use serde::{Deserialize, Serialize};
 
 /// Result of a measurement operation
@@ -215,6 +214,7 @@ pub fn get_entity_point(entity: &SketchEntity, point_index: u8) -> Option<[f64; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::topo::EntityId;
 
     #[test]
     fn test_point_point_distance() {
@@ -302,12 +302,12 @@ mod tests {
     #[test]
     fn test_measure_entities_points() {
         let e1 = SketchEntity {
-            id: EntityId::new(),
+            id: crate::topo::EntityId::new(),
             geometry: SketchGeometry::Point { pos: [0.0, 0.0] },
             is_construction: false,
         };
         let e2 = SketchEntity {
-            id: EntityId::new(),
+            id: crate::topo::EntityId::new(),
             geometry: SketchGeometry::Point { pos: [3.0, 4.0] },
             is_construction: false,
         };
@@ -323,12 +323,12 @@ mod tests {
     #[test]
     fn test_measure_entities_lines_angle() {
         let e1 = SketchEntity {
-            id: EntityId::new(),
+            id: crate::topo::EntityId::new(),
             geometry: SketchGeometry::Line { start: [0.0, 0.0], end: [1.0, 0.0] },
             is_construction: false,
         };
         let e2 = SketchEntity {
-            id: EntityId::new(),
+            id: crate::topo::EntityId::new(),
             geometry: SketchGeometry::Line { start: [0.0, 0.0], end: [0.0, 1.0] },
             is_construction: false,
         };
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_get_entity_point_line() {
         let e = SketchEntity {
-            id: EntityId::new(),
+            id: crate::topo::EntityId::new(),
             geometry: SketchGeometry::Line { start: [1.0, 2.0], end: [3.0, 4.0] },
             is_construction: false,
         };
