@@ -76,48 +76,49 @@ pub fn find_regions(entities: &[SketchEntity]) -> Vec<SketchRegion> {
     
     if vertices.is_empty() || edges.is_empty() {
         // Handle self-contained loops (circles/ellipses)
+        // Don't return early - let containment detection run to identify voids
         for entity in &geom_entities {
             if let Some(region) = entity_as_region(entity) {
                 regions.push(region);
             }
         }
-        return regions;
-    }
-    
-    // 3. Link half-edges by sorting around vertices
-    link_half_edges(&vertices, &mut edges);
-    
-    // 4. Extract faces by following half-edge chains
-    let faces = extract_faces(&mut edges);
-    
-    // 5. Convert faces to regions
-    for face in faces {
-        if let Some(mut region) = face_to_region(&face, &vertices, &edges) {
-            // Interior faces have negative area (CW winding in our half-edge structure)
-            // The outer unbounded face has positive area (CCW winding)
-            // Skip faces with positive area (the exterior)
-            if region.area < -EPSILON {
-                // Interior faces are CW. Reverse to make CCW (standard).
-                region.boundary_points.reverse();
-                region.area = region.area.abs();
-                regions.push(region);
-            }
-        }
-    }
-    
-    // Also add any self-contained circles/ellipses that weren't split
-    for entity in &geom_entities {
-        match &entity.geometry {
-            SketchGeometry::Circle { .. } | SketchGeometry::Ellipse { .. } => {
-                // Check if this entity was split by intersections
-                let was_split = edges.iter().any(|e| e.entity_id == entity.id.0);
-                if !was_split {
-                    if let Some(region) = entity_as_region(entity) {
-                        regions.push(region);
-                    }
+        // Skip face extraction and go directly to containment detection below
+    } else {
+        // 3. Link half-edges by sorting around vertices
+        link_half_edges(&vertices, &mut edges);
+        
+        // 4. Extract faces by following half-edge chains
+        let faces = extract_faces(&mut edges);
+        
+        // 5. Convert faces to regions
+        for face in faces {
+            if let Some(mut region) = face_to_region(&face, &vertices, &edges) {
+                // Interior faces have negative area (CW winding in our half-edge structure)
+                // The outer unbounded face has positive area (CCW winding)
+                // Skip faces with positive area (the exterior)
+                if region.area < -EPSILON {
+                    // Interior faces are CW. Reverse to make CCW (standard).
+                    region.boundary_points.reverse();
+                    region.area = region.area.abs();
+                    regions.push(region);
                 }
             }
-            _ => {}
+        }
+        
+        // Also add any self-contained circles/ellipses that weren't split
+        for entity in &geom_entities {
+            match &entity.geometry {
+                SketchGeometry::Circle { .. } | SketchGeometry::Ellipse { .. } => {
+                    // Check if this entity was split by intersections
+                    let was_split = edges.iter().any(|e| e.entity_id == entity.id.0);
+                    if !was_split {
+                        if let Some(region) = entity_as_region(entity) {
+                            regions.push(region);
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
     
@@ -954,5 +955,47 @@ mod tests {
 
         assert_eq!(regions.len(), 1, "Square with filament should still be 1 region");
         assert!((regions[0].area - 400.0).abs() < 1.0, "Area should be approx 400");
+    }
+
+    #[test]
+    fn test_concentric_circles_void_detection() {
+        // Two concentric circles - inner should become void of outer
+        let entities = vec![
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [0.0, 0.0], radius: 10.0 },
+                is_construction: false,
+            },
+            SketchEntity {
+                id: EntityId::new(),
+                geometry: SketchGeometry::Circle { center: [0.0, 0.0], radius: 5.0 },
+                is_construction: false,
+            },
+        ];
+        
+        let regions = find_regions(&entities);
+        
+        println!("Found {} regions:", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            println!("  Region {}: Area={:.2}, Voids={}", i, r.area, r.voids.len());
+        }
+        
+        // Should have 2 regions:
+        // 1. Outer circle (ring) with inner circle as void
+        // 2. Inner circle (solid disk)
+        assert_eq!(regions.len(), 2, "Two concentric circles should produce 2 regions");
+        
+        // The larger region should have 1 void
+        let ring_area = std::f64::consts::PI * 10.0 * 10.0 - std::f64::consts::PI * 5.0 * 5.0;
+        let inner_area = std::f64::consts::PI * 5.0 * 5.0;
+        
+        // Find the ring region (larger original area, has void)
+        let ring_region = regions.iter().find(|r| r.voids.len() > 0);
+        assert!(ring_region.is_some(), "Outer region should have a void (the inner circle)");
+        
+        let ring = ring_region.unwrap();
+        assert_eq!(ring.voids.len(), 1, "Ring should have exactly 1 void");
+        // Ring area should be outer - inner
+        assert!((ring.area - ring_area).abs() < 1.0, "Ring area should be outer - inner = {:.2}, got {:.2}", ring_area, ring.area);
     }
 }
