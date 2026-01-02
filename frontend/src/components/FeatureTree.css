@@ -508,3 +508,87 @@
 .visibility-toggle:hover {
     opacity: 1;
 }
+
+/* Timeline UI Styles */
+.timeline-container {
+    display: flex;
+    gap: 0;
+    pointer-events: auto;
+}
+
+.timeline-track {
+    width: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    flex-shrink: 0;
+    pointer-events: auto;
+}
+
+.timeline-line {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, #555 0%, #444 100%);
+    transform: translateX(-50%);
+    border-radius: 1px;
+}
+
+.timeline-dot-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    z-index: 1;
+    padding: 8px 0;
+}
+
+.timeline-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3a3a3a;
+    border: 2px solid #555;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    pointer-events: auto;
+}
+
+.timeline-dot:hover {
+    border-color: #4da6ff;
+    transform: scale(1.3);
+    background: #4a4a4a;
+}
+
+.timeline-dot.active {
+    background: #4da6ff;
+    border-color: #7cc3ff;
+    box-shadow: 0 0 10px rgba(77, 166, 255, 0.6);
+}
+
+.timeline-dot.active:hover {
+    background: #5db6ff;
+}
+
+.timeline-dot.future {
+    opacity: 0.35;
+    background: #2a2a2a;
+    border-color: #444;
+}
+
+.timeline-dot.future:hover {
+    opacity: 0.7;
+    border-color: #666;
+}
+
+.feature-blocks-column {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}

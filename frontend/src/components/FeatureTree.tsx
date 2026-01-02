@@ -223,140 +223,166 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                     </div>
                 </div>
 
-                <For each={props.graph.sort_order}>
+                {/* Timeline Container - wraps timeline track and feature blocks */}
+                <Show when={props.graph.sort_order.length > 0}>
+                    <div class="timeline-container">
+                        {/* Timeline Track - vertical line with dots */}
+                        <div class="timeline-track">
+                            <div class="timeline-line" />
+                            <For each={props.graph.sort_order}>
+                                {(id, index) => {
+                                    const isRollbackPoint = () => props.rollbackPoint === id;
+                                    const isAfterRollback = () => {
+                                        if (!props.rollbackPoint) return false;
+                                        const rbIndex = props.graph.sort_order.indexOf(props.rollbackPoint);
+                                        return rbIndex !== -1 && index() > rbIndex;
+                                    };
+                                    // If no rollback point set, all features are "current" (last one is effectively active)
+                                    const isCurrentPosition = () => {
+                                        if (!props.rollbackPoint) {
+                                            // No rollback = show all, last item is "current"
+                                            return index() === props.graph.sort_order.length - 1;
+                                        }
+                                        return isRollbackPoint();
+                                    };
 
-                    {(id, index) => {
-                        // Access feature reactively by using a function derived from props.graph
-                        // This ensures that even if 'id' stays the same, if the content in props.graph.nodes[id] changes,
-                        // accessed values will update.
-                        const feature = () => props.graph.nodes[id];
+                                    return (
+                                        <div class="timeline-dot-wrapper">
+                                            <div
+                                                class={`timeline-dot ${isCurrentPosition() ? 'active' : ''} ${isAfterRollback() ? 'future' : ''}`}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    // If clicking the current rollback point (or last item when no rollback), clear it
+                                                    if (isRollbackPoint()) {
+                                                        props.onSetRollback?.(null);
+                                                    } else {
+                                                        props.onSetRollback?.(id);
+                                                    }
+                                                }}
+                                                title={isRollbackPoint() ? "Click to show all features" : `Roll back to ${props.graph.nodes[id]?.name || 'this feature'}`}
+                                            />
+                                        </div>
+                                    );
+                                }}
+                            </For>
+                        </div>
 
-                        // Guard against missing feature
-                        if (!feature()) return null;
+                        {/* Feature Blocks Column */}
+                        <div class="feature-blocks-column">
+                            <For each={props.graph.sort_order}>
+                                {(id, index) => {
+                                    const feature = () => props.graph.nodes[id];
+                                    if (!feature()) return null;
 
-                        // Check if this feature is the rollback point
-                        const isRollbackPoint = () => props.rollbackPoint === id;
+                                    const isRollbackPoint = () => props.rollbackPoint === id;
+                                    const isRolledBack = () => {
+                                        if (!props.rollbackPoint) return false;
+                                        const rbIndex = props.graph.sort_order.indexOf(props.rollbackPoint);
+                                        return rbIndex !== -1 && index() > rbIndex;
+                                    };
 
-                        // Check if this feature is "after" the rollback point (rolled back / hidden)
-                        const isRolledBack = () => {
-                            if (!props.rollbackPoint) return false;
-                            const rbIndex = props.graph.sort_order.indexOf(props.rollbackPoint);
-                            return rbIndex !== -1 && index() > rbIndex;
-                        };
-
-                        return (
-                            <div
-                                class={`feature-block ${isRolledBack() ? 'rolled-back' : ''} ${dropTargetIndex() === index() ? 'drop-target' : ''}`}
-                                onDragOver={(e) => handleDragOver(e, index())}
-                                onDrop={(e) => handleDrop(e, index())}
-                            >
-                                {/* Drop indicator line */}
-                                <Show when={dropTargetIndex() === index() && draggedId() !== id}>
-                                    <div class="drop-indicator" />
-                                </Show>
-                                {/* Rollback indicator bar */}
-                                <Show when={isRollbackPoint()}>
-                                    <div class="rollback-indicator">
-                                        <span class="rollback-bar">◄ Rollback Point</span>
-                                        <button
-                                            class="rollback-clear-btn"
-                                            onClick={() => props.onSetRollback?.(null)}
-                                            title="Show All Features"
+                                    return (
+                                        <div
+                                            class={`feature-block ${isRolledBack() ? 'rolled-back' : ''} ${dropTargetIndex() === index() ? 'drop-target' : ''}`}
+                                            onDragOver={(e) => handleDragOver(e, index())}
+                                            onDrop={(e) => handleDrop(e, index())}
                                         >
-                                            Show All
-                                        </button>
-                                    </div>
-                                </Show>
-                                <div
-                                    class={`feature-item ${props.selectedId === id ? 'selected' : ''} ${isRolledBack() ? 'faded' : ''} ${isParentOfHovered(id) ? 'dependency-parent' : ''} ${isChildOfHovered(id) ? 'dependency-child' : ''} ${draggedId() === id ? 'dragging' : ''}`}
-                                    draggable={true}
-                                    onDragStart={(e) => handleDragStart(e, id)}
-                                    onDragEnd={handleDragEnd}
-                                    onClick={() => props.onSelect(id)}
-                                    onDblClick={() => props.onSetRollback?.(isRollbackPoint() ? null : id)}
-                                    onContextMenu={(e) => handleContextMenu(e, id)}
-                                    onMouseEnter={() => setHoverFeatureId(id)}
-                                    onMouseLeave={() => setHoverFeatureId(null)}
-                                    title={isRolledBack() ? "Double-click to roll forward to this feature" : "Right-click for options • Drag to reorder"}
-                                >
-                                    {/* Delete button - far left, separated */}
-                                    <span
-                                        class="feature-delete"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            props.onDelete(id);
-                                        }}
-                                        title="Delete Feature"
-                                    >
-                                        🗑️
-                                    </span>
+                                            {/* Drop indicator line */}
+                                            <Show when={dropTargetIndex() === index() && draggedId() !== id}>
+                                                <div class="drop-indicator" />
+                                            </Show>
+                                            <div
+                                                class={`feature-item ${props.selectedId === id ? 'selected' : ''} ${isRolledBack() ? 'faded' : ''} ${isParentOfHovered(id) ? 'dependency-parent' : ''} ${isChildOfHovered(id) ? 'dependency-child' : ''} ${draggedId() === id ? 'dragging' : ''}`}
+                                                draggable={true}
+                                                onDragStart={(e) => handleDragStart(e, id)}
+                                                onDragEnd={handleDragEnd}
+                                                onClick={() => props.onSelect(id)}
+                                                onContextMenu={(e) => handleContextMenu(e, id)}
+                                                onMouseEnter={() => setHoverFeatureId(id)}
+                                                onMouseLeave={() => setHoverFeatureId(null)}
+                                                title="Right-click for options • Drag to reorder"
+                                            >
+                                                {/* Delete button */}
+                                                <span
+                                                    class="feature-delete"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        props.onDelete(id);
+                                                    }}
+                                                    title="Delete Feature"
+                                                >
+                                                    🗑️
+                                                </span>
 
-                                    {/* Feature name - flex grows to fill space */}
-                                    <span class={`feature-name ${feature().suppressed ? 'text-suppressed' : ''}`}>
-                                        {feature().name}
-                                    </span>
+                                                {/* Feature name */}
+                                                <span class={`feature-name ${feature().suppressed ? 'text-suppressed' : ''}`}>
+                                                    {feature().name}
+                                                </span>
 
-                                    {/* Toggle visibility */}
-                                    <span
-                                        class={`feature-toggle ${feature().suppressed ? 'suppressed' : ''}`}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            props.onToggle(id);
-                                        }}
-                                        title={feature().suppressed ? "Show Feature" : "Hide Feature"}
-                                    >
-                                        {feature().suppressed ? '🚫' : '👁️'}
-                                    </span>
+                                                {/* Toggle visibility */}
+                                                <span
+                                                    class={`feature-toggle ${feature().suppressed ? 'suppressed' : ''}`}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        props.onToggle(id);
+                                                    }}
+                                                    title={feature().suppressed ? "Show Feature" : "Hide Feature"}
+                                                >
+                                                    {feature().suppressed ? '🚫' : '👁️'}
+                                                </span>
 
-                                    {/* Edit icon - for Sketch and Extrude */}
-                                    {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
-                                        <span
-                                            class="feature-edit"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (feature().feature_type === 'Sketch') {
-                                                    props.onEditSketch?.(id);
-                                                } else {
-                                                    props.onEditExtrude?.(id);
-                                                }
-                                            }}
-                                            title="Edit Feature"
-                                        >
-                                            ✏️
-                                        </span>
-                                    )}
+                                                {/* Edit icon - for Sketch and Extrude */}
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                                    <span
+                                                        class="feature-edit"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (feature().feature_type === 'Sketch') {
+                                                                props.onEditSketch?.(id);
+                                                            } else {
+                                                                props.onEditExtrude?.(id);
+                                                            }
+                                                        }}
+                                                        title="Edit Feature"
+                                                    >
+                                                        ✏️
+                                                    </span>
+                                                )}
 
-                                    {/* Expand/collapse arrow - far right (expandable features) */}
-                                    {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
-                                        <span
-                                            class="feature-expander"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                props.onToggleExpand(id);
-                                            }}
-                                            title={props.expanded[id] ? "Collapse" : "Expand"}
-                                        >
-                                            {props.expanded[id] ? '▼' : '▶'}
-                                        </span>
-                                    )}
-                                </div>
-                                {feature().feature_type === 'Sketch' && props.expanded[id] && (
-                                    <SketchHistory
-                                        feature={feature()}
-                                        selectedId={props.selectedId}
-                                        onSelect={props.onSelect}
-                                    />
-                                )}
-                                {feature().feature_type === 'Extrude' && props.expanded[id] && (
-                                    <ExtrudeControls
-                                        feature={feature()}
-                                        onUpdate={(params) => props.onUpdateFeature?.(id, params)}
-                                    />
-                                )}
-                            </div>
-                        );
-                    }}
-                </For>
+                                                {/* Expand/collapse arrow */}
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                                    <span
+                                                        class="feature-expander"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            props.onToggleExpand(id);
+                                                        }}
+                                                        title={props.expanded[id] ? "Collapse" : "Expand"}
+                                                    >
+                                                        {props.expanded[id] ? '▼' : '▶'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {feature().feature_type === 'Sketch' && props.expanded[id] && (
+                                                <SketchHistory
+                                                    feature={feature()}
+                                                    selectedId={props.selectedId}
+                                                    onSelect={props.onSelect}
+                                                />
+                                            )}
+                                            {feature().feature_type === 'Extrude' && props.expanded[id] && (
+                                                <ExtrudeControls
+                                                    feature={feature()}
+                                                    onUpdate={(params) => props.onUpdateFeature?.(id, params)}
+                                                />
+                                            )}
+                                        </div>
+                                    );
+                                }}
+                            </For>
+                        </div>
+                    </div>
+                </Show>
                 {
                     props.graph.sort_order.length === 0 && (
                         <div class="empty-tree">
