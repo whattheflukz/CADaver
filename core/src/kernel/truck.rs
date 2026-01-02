@@ -718,67 +718,102 @@ impl GeometryKernel for TruckKernel {
         }
         
         // 6. Extract feature edges
+        // Use position-based edge keys to handle the case where Truck tessellation 
+        // doesn't share vertices across topological faces (seam edges have different indices
+        // but same positions, so we need to compare by position)
         let mut edge_groups: HashMap<(usize, usize), TopoId> = HashMap::new();
         
-        for ((v1, v2), neighbors) in &edge_map {
-            let (root1, root2) = if neighbors.len() != 2 {
-                let r = if use_face_ids { 
-                    remap_face_id(mesh.face_ids[neighbors[0]], &face_id_remap) as usize 
-                } else { 
-                    find(neighbors[0], &mut parent) 
-                };
-                (r, usize::MAX)
-            } else {
-                let r1 = if use_face_ids { 
-                    remap_face_id(mesh.face_ids[neighbors[0]], &face_id_remap) as usize 
-                } else { 
-                    find(neighbors[0], &mut parent) 
-                };
-                let r2 = if use_face_ids { 
-                    remap_face_id(mesh.face_ids[neighbors[1]], &face_id_remap) as usize 
-                } else { 
-                    find(neighbors[1], &mut parent) 
-                };
-                if r1 < r2 { (r1, r2) } else { (r2, r1) }
-            };
-            
-            if root1 != root2 {
-                vertex_feature_degree[*v1] += 1;
-                vertex_feature_degree[*v2] += 1;
-                
-                let edge_id = *edge_groups.entry((root1, root2)).or_insert_with(|| {
-                    let seed = format!("{}_Edge_{}_{}", base_name, root1, root2);
-                    let id = ctx.derive(&seed, TopoRank::Edge);
-                    
-                    let p1 = &positions[*v1];
-                    let p2 = &positions[*v2];
-                    let entity = KernelEntity {
-                        id,
-                        geometry: AnalyticGeometry::Line {
-                            start: [p1.x, p1.y, p1.z],
-                            end: [p2.x, p2.y, p2.z],
-                        },
-                    };
-                    topology_manifest.insert(id, entity);
-                    id
-                });
-                
-                let p1 = &positions[*v1];
-                let p2 = &positions[*v2];
-                tessellation.add_line(
-                    GeoPoint3::new(p1.x, p1.y, p1.z),
-                    GeoPoint3::new(p2.x, p2.y, p2.z),
-                    edge_id,
-                );
-            }
+        // Helper: quantize position to grid for comparison
+        fn pos_key(p: &super::types::Point3D) -> (i64, i64, i64) {
+            let scale = 10000.0; // 0.0001 precision
+            ((p.x * scale).round() as i64, (p.y * scale).round() as i64, (p.z * scale).round() as i64)
         }
         
-        // 7. Extract feature vertices (corners)
-        for (i, degree) in vertex_feature_degree.iter().enumerate() {
-            if *degree > 0 && *degree != 2 {
-                let p = &positions[i];
-                let v_id = ctx.derive(&format!("{}_V_{}", base_name, i), TopoRank::Vertex);
-            tessellation.add_point(GeoPoint3::new(p.x, p.y, p.z), v_id);
+        // Build position-based edge map: Map edge (by position pair) -> list of (vertex index pair, face root)
+        let mut pos_edge_faces: HashMap<((i64, i64, i64), (i64, i64, i64)), Vec<((usize, usize), usize)>> = HashMap::new();
+        // Track feature vertex degree by position (for corner detection)
+        let mut position_feature_degree: HashMap<(i64, i64, i64), usize> = HashMap::new();
+        
+        for ((v1, v2), neighbors) in &edge_map {
+            let p1 = &positions[*v1];
+            let p2 = &positions[*v2];
+            let pk1 = pos_key(p1);
+            let pk2 = pos_key(p2);
+            let pos_key_pair = if pk1 < pk2 { (pk1, pk2) } else { (pk2, pk1) };
+            
+            // Get the face root for this edge
+            let root = if use_face_ids {
+                remap_face_id(mesh.face_ids[neighbors[0]], &face_id_remap) as usize
+            } else {
+                find(neighbors[0], &mut parent)
+            };
+            
+            pos_edge_faces.entry(pos_key_pair).or_default().push(((*v1, *v2), root));
+        }
+        
+        // Now for each position-based edge, check all face roots that share it
+        for (pos_key_pair, edges) in &pos_edge_faces {
+            // Collect all unique face roots for this positional edge
+            let roots: std::collections::HashSet<usize> = edges.iter().map(|(_, r)| *r).collect();
+            
+            if roots.len() < 2 {
+                // All edges at this position belong to the same face group - INTERNAL edge, skip it
+                continue;
+            }
+            
+            // Edge is between different face groups - add it
+            let (v1, v2) = edges[0].0;
+            let p1 = &positions[v1];
+            let p2 = &positions[v2];
+            
+            // Get the two unique roots for edge identification
+            let mut roots_vec: Vec<usize> = roots.into_iter().collect();
+            roots_vec.sort();
+            let (root1, root2) = (roots_vec[0], roots_vec[1]);
+            
+            // Track feature degree by POSITION, not vertex index
+            let pk1 = pos_key(p1);
+            let pk2 = pos_key(p2);
+            *position_feature_degree.entry(pk1).or_insert(0) += 1;
+            *position_feature_degree.entry(pk2).or_insert(0) += 1;
+            
+            let edge_id = *edge_groups.entry((root1, root2)).or_insert_with(|| {
+                let seed = format!("{}_Edge_{}_{}", base_name, root1, root2);
+                let id = ctx.derive(&seed, TopoRank::Edge);
+                
+                let entity = KernelEntity {
+                    id,
+                    geometry: AnalyticGeometry::Line {
+                        start: [p1.x, p1.y, p1.z],
+                        end: [p2.x, p2.y, p2.z],
+                    },
+                };
+                topology_manifest.insert(id, entity);
+                id
+            });
+            
+            tessellation.add_line(
+                GeoPoint3::new(p1.x, p1.y, p1.z),
+                GeoPoint3::new(p2.x, p2.y, p2.z),
+                edge_id,
+            );
+        }
+        
+        // 7. Extract feature vertices (corners) - using position-based degree
+        // A vertex is a corner if it's on a boundary (degree 1) or at a T-junction (degree 3+)
+        // Vertices with degree 2 are just points on an edge, not corners
+        let mut added_vertex_positions: std::collections::HashSet<(i64, i64, i64)> = std::collections::HashSet::new();
+        for (&pk, &degree) in &position_feature_degree {
+            if degree > 0 && degree != 2 && !added_vertex_positions.contains(&pk) {
+                added_vertex_positions.insert(pk);
+                // Find a vertex at this position
+                for (i, p) in positions.iter().enumerate() {
+                    if pos_key(p) == pk {
+                        let v_id = ctx.derive(&format!("{}_V_{}", base_name, i), TopoRank::Vertex);
+                        tessellation.add_point(GeoPoint3::new(p.x, p.y, p.z), v_id);
+                        break;
+                    }
+                }
             }
         }
     }
