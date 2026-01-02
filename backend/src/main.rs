@@ -134,7 +134,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     info!("Client connected");
     
     // Send initial graph state
-    {
+    let program = {
         let json = {
             let graph = state.graph.read().unwrap();
             serde_json::to_string(&*graph).unwrap_or("{}".to_string())
@@ -143,11 +143,18 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         if socket.send(Message::Text(format!("GRAPH_UPDATE:{}", json))).await.is_err() {
             return;
         }
-    }
+        
+        // Generate initial program for tessellation
+        let mut graph = state.graph.write().unwrap();
+        graph.regenerate()
+    };
 
     let runtime = cad_core::evaluator::Runtime::new();
     let generator = cad_core::topo::IdGenerator::new("Session1"); 
     let mut selection_state = cad_core::topo::SelectionState::new();
+    
+    // Send initial tessellation so viewport shows content on page load
+    process_regen(&mut socket, &runtime, &generator, &program, &state, &mut selection_state).await;
 
     while let Some(msg) = socket.recv().await {
         let msg = if let Ok(msg) = msg {
