@@ -39,6 +39,150 @@ impl Default for TruckKernel {
     }
 }
 
+/// Detect if a set of 2D points forms a circle.
+/// Returns (center_x, center_y, radius) if the points are circular within tolerance.
+fn detect_circle_2d(points: &[Point2D], tolerance: f64) -> Option<(f64, f64, f64)> {
+    if points.len() < 8 {
+        // Need at least 8 points for reliable circle detection
+        return None;
+    }
+    
+    // Compute centroid
+    let n = points.len() as f64;
+    let cx: f64 = points.iter().map(|p| p.x).sum::<f64>() / n;
+    let cy: f64 = points.iter().map(|p| p.y).sum::<f64>() / n;
+    
+    // Compute distances from centroid
+    let distances: Vec<f64> = points.iter()
+        .map(|p| ((p.x - cx).powi(2) + (p.y - cy).powi(2)).sqrt())
+        .collect();
+    
+    // Check if centroid is near origin (circles are typically centered)
+    // and all points are equidistant
+    let avg_radius = distances.iter().sum::<f64>() / n;
+    
+    if avg_radius < 0.001 {
+        return None; // Degenerate case
+    }
+    
+    // Check all points are within tolerance of the average radius
+    let max_deviation = distances.iter()
+        .map(|d| (d - avg_radius).abs())
+        .fold(0.0, f64::max);
+    
+    // Relative tolerance: allow 0.5% deviation
+    let rel_tolerance = tolerance.max(avg_radius * 0.005);
+    
+    if max_deviation < rel_tolerance {
+        Some((cx, cy, avg_radius))
+    } else {
+        None
+    }
+}
+
+/// Detect if a set of 3D vertices lies on a cylinder.
+/// Returns (axis_point, axis_direction, radius) if cylindrical within tolerance.
+/// Uses a simple approach: check if min/max radius from centroid are close (band check).
+fn detect_cylinder_from_vertices(vertices: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3], f64)> {
+    if vertices.len() < 10 {
+        return None;
+    }
+    
+    // Remove duplicate vertices with a coarser tolerance
+    let mut unique: Vec<[f64; 3]> = Vec::with_capacity(vertices.len());
+    for v in vertices {
+        let is_duplicate = unique.iter().any(|u| {
+            (u[0] - v[0]).abs() < 0.001 && (u[1] - v[1]).abs() < 0.001 && (u[2] - v[2]).abs() < 0.001
+        });
+        if !is_duplicate {
+            unique.push(*v);
+        }
+    }
+    
+    if unique.len() < 6 {
+        return None;
+    }
+    
+    // Compute 3D bounding box centroid
+    let n = unique.len() as f64;
+    let cx = unique.iter().map(|v| v[0]).sum::<f64>() / n;
+    let cy = unique.iter().map(|v| v[1]).sum::<f64>() / n;
+    let cz = unique.iter().map(|v| v[2]).sum::<f64>() / n;
+    
+    // Try each principal axis
+    let axes: [[f64; 3]; 3] = [
+        [1.0, 0.0, 0.0], // X axis
+        [0.0, 1.0, 0.0], // Y axis
+        [0.0, 0.0, 1.0], // Z axis
+    ];
+    
+    for axis in &axes {
+        let axis_idx = if axis[0] > 0.5 { 0 } else if axis[1] > 0.5 { 1 } else { 2 };
+        
+        // Get the axial extent
+        let axial_coords: Vec<f64> = unique.iter().map(|v| v[axis_idx]).collect();
+        let min_axial = axial_coords.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_axial = axial_coords.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let axial_range = max_axial - min_axial;
+        
+        // Skip if no axial extent (flat face, not a cylinder surface)
+        if axial_range < 0.01 {
+            continue;
+        }
+        
+        // Project all vertices to 2D and compute distance from 2D centroid
+        let (perp_cx, perp_cy) = match axis_idx {
+            0 => (cy, cz),
+            1 => (cx, cz),
+            _ => (cx, cy),
+        };
+        
+        let mut min_radius = f64::INFINITY;
+        let mut max_radius = f64::NEG_INFINITY;
+        let mut sum_radius = 0.0;
+        
+        for v in &unique {
+            let (px, py) = match axis_idx {
+                0 => (v[1], v[2]),
+                1 => (v[0], v[2]),
+                _ => (v[0], v[1]),
+            };
+            let dist = ((px - perp_cx).powi(2) + (py - perp_cy).powi(2)).sqrt();
+            if dist < min_radius { min_radius = dist; }
+            if dist > max_radius { max_radius = dist; }
+            sum_radius += dist;
+        }
+        
+        let avg_radius = sum_radius / unique.len() as f64;
+        let radius_range = max_radius - min_radius;
+        
+        // Skip if radius is too small
+        if avg_radius < 0.1 {
+            continue;
+        }
+        
+        // Tolerance: 8% of average radius for the band width
+        let tolerance = avg_radius * 0.08;
+        
+        println!("[DEBUG CYLINDER] axis={:?}, n={}, avg_r={:.3}, range={:.4}, tol={:.4}, pass={}", 
+                 axis, unique.len(), avg_radius, radius_range, tolerance, radius_range < tolerance);
+        
+        if radius_range < tolerance {
+            // Found a cylindrical surface!
+            let mid_axial = (min_axial + max_axial) / 2.0;
+            let center_point = match axis_idx {
+                0 => [mid_axial, perp_cx, perp_cy],
+                1 => [perp_cx, mid_axial, perp_cy],
+                _ => [perp_cx, perp_cy, mid_axial],
+            };
+            return Some((center_point, *axis, avg_radius));
+        }
+    }
+    
+    None
+}
+
+
 impl GeometryKernel for TruckKernel {
     type Solid = Solid;
     type Mesh = PolygonMesh;
@@ -61,19 +205,31 @@ impl GeometryKernel for TruckKernel {
             ));
         }
         
-        // Build the exterior wire
-        let exterior_wire = self.build_wire_from_points(&polygon.exterior)?;
+        // Build the exterior wire - detect if it's a circle
+        let exterior_wire = if let Some((cx, cy, radius)) = detect_circle_2d(&polygon.exterior, self.tolerance) {
+            println!("[extrude_polygon] Detected exterior CIRCLE: center=({:.2}, {:.2}), radius={:.2}", cx, cy, radius);
+            self.build_circle_wire(cx, cy, radius)?
+        } else {
+            self.build_wire_from_points(&polygon.exterior)?
+        };
         
         // Create the face
         let face = if polygon.interiors.is_empty() {
             builder::try_attach_plane(&[exterior_wire])
                 .map_err(|e| KernelOpError::OperationFailed(format!("Failed to create face: {:?}", e)))?
         } else {
-            // Build wires for all holes
+            // Build wires for all holes - also check for circles
             let mut all_wires = vec![exterior_wire];
-            for hole in &polygon.interiors {
+            for (i, hole) in polygon.interiors.iter().enumerate() {
                 if hole.len() >= 3 {
-                    all_wires.push(self.build_wire_from_points(hole)?);
+                    let hole_wire = if let Some((cx, cy, radius)) = detect_circle_2d(hole, self.tolerance) {
+                        println!("[extrude_polygon] Detected hole {} CIRCLE: center=({:.2}, {:.2}), radius={:.2}", i, cx, cy, radius);
+                        // Holes need clockwise winding (opposite to exterior)
+                        self.build_circle_wire_cw(cx, cy, radius, true)?
+                    } else {
+                        self.build_wire_from_points(hole)?
+                    };
+                    all_wires.push(hole_wire);
                 }
             }
             builder::try_attach_plane(&all_wires)
@@ -129,10 +285,12 @@ impl GeometryKernel for TruckKernel {
         // Collect all meshes from all faces into one unified mesh
         let mut mesh = TriangleMesh::new();
         let mut vertex_offset: u32 = 0;
+        let mut face_id: u32 = 0;
         
         // Iterate through all shells in the solid
         for shell in meshed_solid.boundaries() {
             // Iterate through all faces in the shell
+            // Each iteration of face_iter() gives a topological face
             for face in shell.face_iter() {
                 if let Some(polygon_mesh) = face.surface() {
                     // Get positions from this face's mesh
@@ -141,17 +299,20 @@ impl GeometryKernel for TruckKernel {
                         mesh.add_vertex(Point3D::new(pos.x, pos.y, pos.z));
                     }
                     
-                    // Get triangles (tri_faces returns an iterator of vertex index arrays)
+                    // Get triangles - all triangles in this loop belong to the same topological face
                     for tri in polygon_mesh.tri_faces() {
-                        mesh.add_triangle(
+                        mesh.add_triangle_with_face(
                             vertex_offset + tri[0].pos as u32,
                             vertex_offset + tri[1].pos as u32,
                             vertex_offset + tri[2].pos as u32,
+                            face_id,
                         );
                     }
                     
                     vertex_offset += positions.len() as u32;
                 }
+                // Increment face_id for each topological face (whether it had mesh data or not)
+                face_id += 1;
             }
         }
         
@@ -214,8 +375,22 @@ impl GeometryKernel for TruckKernel {
             }
         }
         
-        // 3. Union-Find for face grouping based on smoothness
+        // 3. Determine face grouping
+        // If the mesh has topological face IDs from kernel, use those directly
+        // Otherwise, fall back to Union-Find based on normal smoothness
         let num_tris = triangles.len();
+        let use_face_ids = mesh.has_face_ids();
+        
+        // Debug: Log face ID usage
+        if use_face_ids {
+            let unique_face_ids: std::collections::HashSet<_> = mesh.face_ids.iter().cloned().collect();
+            println!("[mesh_to_tessellation] Using {} topological face IDs for {} triangles", 
+                     unique_face_ids.len(), num_tris);
+        } else {
+            println!("[mesh_to_tessellation] No face_ids, using normal-based grouping for {} triangles", num_tris);
+        }
+        
+        // For Union-Find fallback
         let mut parent: Vec<usize> = (0..num_tris).collect();
         
         fn find(i: usize, parent: &mut [usize]) -> usize {
@@ -235,23 +410,242 @@ impl GeometryKernel for TruckKernel {
             }
         }
         
-        let smoothness_threshold = 0.766; // ~40 degrees
-        
-        for neighbors in edge_map.values() {
-            if neighbors.len() == 2 {
-                let n1 = triangle_normals[neighbors[0]];
-                let n2 = triangle_normals[neighbors[1]];
-                let dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
-                if dot > smoothness_threshold {
-                    union(neighbors[0], neighbors[1], &mut parent);
+        // Step 3a: Normal-based Union-Find (only if no face IDs)
+        if !use_face_ids {
+            let smoothness_threshold = 0.766; // ~40 degrees
+            
+            for neighbors in edge_map.values() {
+                if neighbors.len() == 2 {
+                    let n1 = triangle_normals[neighbors[0]];
+                    let n2 = triangle_normals[neighbors[1]];
+                    let dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
+                    if dot > smoothness_threshold {
+                        union(neighbors[0], neighbors[1], &mut parent);
+                    }
                 }
             }
+        }
+        
+        // Step 3b: Merge cylindrical faces (scope remap outside)
+        let mut face_id_remap: HashMap<u32, u32> = HashMap::new();
+        
+        // When using kernel face IDs, adjacent faces with the same cylindrical axis should be merged
+        // This handles Truck's tendency to split circles into multiple edges/faces
+        if use_face_ids {
+            // Collect vertices per face group
+            let mut face_group_vertices: HashMap<u32, Vec<[f64; 3]>> = HashMap::new();
+            for (tri_idx, (i0, i1, i2)) in triangles.iter().enumerate() {
+                let face_id = mesh.face_ids[tri_idx];
+                let entry = face_group_vertices.entry(face_id).or_default();
+                entry.push([positions[*i0 as usize].x, positions[*i0 as usize].y, positions[*i0 as usize].z]);
+                entry.push([positions[*i1 as usize].x, positions[*i1 as usize].y, positions[*i1 as usize].z]);
+                entry.push([positions[*i2 as usize].x, positions[*i2 as usize].y, positions[*i2 as usize].z]);
+            }
+            
+            // Detect cylindrical faces and their axis/radius
+            // A face is cylindrical if all vertices lie at constant distance from a line (axis)
+            let mut face_cylinder_info: HashMap<u32, Option<([f64; 3], [f64; 3], f64)>> = HashMap::new(); // (axis_point, axis_dir, radius)
+            
+            for (&face_id, vertices) in &face_group_vertices {
+                let result = detect_cylinder_from_vertices(vertices);
+                println!("[DEBUG] Face {} ({} verts): cylinder={:?}", face_id, vertices.len(), result.is_some());
+                if let Some((center, axis, radius)) = &result {
+                    println!("[DEBUG]   center={:?}, axis={:?}, radius={:.3}", center, axis, radius);
+                }
+                face_cylinder_info.insert(face_id, result);
+            }
+            
+            // Build adjacency between face groups based on SPATIAL proximity
+            // (since Truck tessellation doesn't share vertices across topological faces)
+            // Two face groups are adjacent if any of their vertices are within tolerance of each other
+            let mut face_group_adjacency: HashMap<(u32, u32), bool> = HashMap::new();
+            let face_ids: Vec<u32> = face_group_vertices.keys().cloned().collect();
+            
+            for i in 0..face_ids.len() {
+                for j in (i+1)..face_ids.len() {
+                    let fid1 = face_ids[i];
+                    let fid2 = face_ids[j];
+                    let verts1 = &face_group_vertices[&fid1];
+                    let verts2 = &face_group_vertices[&fid2];
+                    
+                    // Check if any vertex in group 1 is within tolerance of any vertex in group 2
+                    // Use a larger tolerance since vertices at seams might not be exactly coincident
+                    let prox_tolerance = 0.1; // 0.1 units for vertex proximity
+                    let mut is_adjacent = false;
+                    
+                    // Sample more vertices for better coverage (every 10th, up to 200)
+                    let step1 = (verts1.len() / 200).max(1);
+                    let step2 = (verts2.len() / 200).max(1);
+                    let sample1: Vec<_> = verts1.iter().step_by(step1).collect();
+                    let sample2: Vec<_> = verts2.iter().step_by(step2).collect();
+                    
+                    'outer: for v1 in &sample1 {
+                        for v2 in &sample2 {
+                            let dist = ((v1[0] - v2[0]).powi(2) + (v1[1] - v2[1]).powi(2) + (v1[2] - v2[2]).powi(2)).sqrt();
+                            if dist < prox_tolerance {
+                                is_adjacent = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                    
+                    if is_adjacent {
+                        let key = if fid1 < fid2 { (fid1, fid2) } else { (fid2, fid1) };
+                        face_group_adjacency.insert(key, true);
+                    }
+                }
+            }
+            
+            println!("[DEBUG] Found {} adjacent face pairs (spatial proximity)", face_group_adjacency.len());
+            
+            // Instead of detecting cylinders geometrically, use average normals
+            // Compute average normal per face group from triangle normals
+            let mut face_avg_normals: HashMap<u32, [f64; 3]> = HashMap::new();
+            let mut face_tri_count: HashMap<u32, usize> = HashMap::new();
+            
+            for (tri_idx, _) in triangles.iter().enumerate() {
+                let face_id = mesh.face_ids[tri_idx];
+                let normal = triangle_normals[tri_idx];
+                
+                let entry = face_avg_normals.entry(face_id).or_insert([0.0, 0.0, 0.0]);
+                entry[0] += normal[0];
+                entry[1] += normal[1];
+                entry[2] += normal[2];
+                *face_tri_count.entry(face_id).or_insert(0) += 1;
+            }
+            
+            // Normalize the average normals
+            for (&face_id, normal) in &mut face_avg_normals {
+                let count = face_tri_count[&face_id] as f64;
+                normal[0] /= count;
+                normal[1] /= count;
+                normal[2] /= count;
+                let len = (normal[0].powi(2) + normal[1].powi(2) + normal[2].powi(2)).sqrt();
+                if len > 1e-6 {
+                    normal[0] /= len;
+                    normal[1] /= len;
+                    normal[2] /= len;
+                }
+            }
+            
+            // Find faces that are cylindrical (normals perpendicular to Y axis) and compute their average radius
+            let mut is_cylindrical: HashMap<u32, bool> = HashMap::new();
+            let mut face_avg_radius: HashMap<u32, f64> = HashMap::new();
+            
+            for (&face_id, normal) in &face_avg_normals {
+                // Cylindrical if normal is perpendicular to Y (n.y close to 0)
+                let y_perp = normal[1].abs() < 0.3;
+                is_cylindrical.insert(face_id, y_perp);
+                
+                // Compute average radius from axis (Y axis) for cylindrical faces
+                if y_perp {
+                    if let Some(verts) = face_group_vertices.get(&face_id) {
+                        let mut sum_radius = 0.0;
+                        let mut count = 0;
+                        for v in verts {
+                            // Distance from Y axis (at origin in X-Z plane)
+                            let r = (v[0].powi(2) + v[2].powi(2)).sqrt();
+                            sum_radius += r;
+                            count += 1;
+                        }
+                        if count > 0 {
+                            let avg_r = sum_radius / count as f64;
+                            face_avg_radius.insert(face_id, avg_r);
+                            println!("[DEBUG] Face {} avg_radius = {:.3}", face_id, avg_r);
+                        }
+                    }
+                }
+            }
+            
+            // Build a map of: for each flat face, which cylindrical faces are adjacent to it
+            let mut flat_face_neighbors: HashMap<u32, Vec<u32>> = HashMap::new();
+            
+            for (&(fid1, fid2), _) in &face_group_adjacency {
+                let cyl1 = *is_cylindrical.get(&fid1).unwrap_or(&false);
+                let cyl2 = *is_cylindrical.get(&fid2).unwrap_or(&false);
+                
+                // If one is cylindrical and the other is flat, record the relationship
+                if cyl1 && !cyl2 {
+                    flat_face_neighbors.entry(fid2).or_default().push(fid1);
+                } else if cyl2 && !cyl1 {
+                    flat_face_neighbors.entry(fid1).or_default().push(fid2);
+                }
+            }
+            
+            // For each flat face, group its cylindrical neighbors by radius and merge each group
+            for (&flat_face, neighbors) in &flat_face_neighbors {
+                if neighbors.len() < 2 {
+                    continue;
+                }
+                
+                println!("[DEBUG] Flat face {} has {} cylindrical neighbors: {:?}", flat_face, neighbors.len(), neighbors);
+                
+                // Group neighbors by radius (10% tolerance)
+                let mut radius_groups: Vec<(f64, Vec<u32>)> = Vec::new();
+                
+                for &neighbor in neighbors {
+                    let r = *face_avg_radius.get(&neighbor).unwrap_or(&0.0);
+                    
+                    // Find existing group with similar radius
+                    let mut found = false;
+                    for (group_r, group_faces) in &mut radius_groups {
+                        let tolerance = group_r.abs() * 0.1;
+                        if (r - *group_r).abs() < tolerance.max(0.5) {
+                            group_faces.push(neighbor);
+                            found = true;
+                            break;
+                        }
+                    }
+                    
+                    if !found {
+                        radius_groups.push((r, vec![neighbor]));
+                    }
+                }
+                
+                // Merge faces within each radius group
+                for (group_r, group_faces) in &radius_groups {
+                    if group_faces.len() < 2 {
+                        continue;
+                    }
+                    
+                    println!("[DEBUG]   Radius group {:.3} has {} faces: {:?}", group_r, group_faces.len(), group_faces);
+                    
+                    let target = *group_faces.iter().min().unwrap();
+                    let final_target = *face_id_remap.get(&target).unwrap_or(&target);
+                    
+                    for &neighbor in group_faces {
+                        if neighbor != target {
+                            face_id_remap.insert(neighbor, final_target);
+                            println!("[DEBUG]     MERGING {} -> {} (radius group {:.3})", neighbor, final_target, group_r);
+                        }
+                    }
+                }
+            }
+            
+            if !face_id_remap.is_empty() {
+                println!("[mesh_to_tessellation] Merged {} cylindrical face groups", face_id_remap.len());
+            } else {
+                println!("[mesh_to_tessellation] No cylindrical face groups merged");
+            }
+        }
+        
+        // Helper function to remap face IDs
+        fn remap_face_id(orig_id: u32, remap: &HashMap<u32, u32>) -> u32 {
+            let mut id = orig_id;
+            while let Some(&remapped) = remap.get(&id) {
+                id = remapped;
+            }
+            id
         }
         
         // 4. Compute smooth normals per (vertex, face-group)
         let mut vertex_smooth_normals: HashMap<(usize, usize), [f64; 3]> = HashMap::new();
         for (tri_idx, (i0, i1, i2)) in triangles.iter().enumerate() {
-            let root = find(tri_idx, &mut parent);
+            let root = if use_face_ids { 
+                remap_face_id(mesh.face_ids[tri_idx], &face_id_remap) as usize 
+            } else { 
+                find(tri_idx, &mut parent) 
+            };
             let normal = triangle_normals[tri_idx];
             for &v_idx in &[*i0 as usize, *i1 as usize, *i2 as usize] {
                 let entry = vertex_smooth_normals.entry((v_idx, root)).or_insert([0.0, 0.0, 0.0]);
@@ -270,12 +664,25 @@ impl GeometryKernel for TruckKernel {
         let mut group_id_map: HashMap<usize, TopoId> = HashMap::new();
         
         for (tri_idx, (i0, i1, i2)) in triangles.iter().enumerate() {
-            let root = find(tri_idx, &mut parent);
+            let root = if use_face_ids { 
+                remap_face_id(mesh.face_ids[tri_idx], &face_id_remap) as usize 
+            } else { 
+                find(tri_idx, &mut parent) 
+            };
             
             let face_id = *group_id_map.entry(root).or_insert_with(|| {
-                let n = triangle_normals[root];
-                let q = [(n[0] * 100.0) as i64, (n[1] * 100.0) as i64, (n[2] * 100.0) as i64];
-                let seed = format!("{}_Face_{}_{}_{}_{}", base_name, root, q[0], q[1], q[2]);
+                // Use this triangle's normal for the face (first one encountered in group)
+                let n = triangle_normals[tri_idx];
+                
+                // When using topological face IDs, don't include normal in seed
+                // (curved surfaces have varying normals but should be one face)
+                // When using normal-based grouping, include normal for stable face IDs
+                let seed = if use_face_ids {
+                    format!("{}_Face_{}", base_name, root)
+                } else {
+                    let q = [(n[0] * 100.0) as i64, (n[1] * 100.0) as i64, (n[2] * 100.0) as i64];
+                    format!("{}_Face_{}_{}_{}_{}", base_name, root, q[0], q[1], q[2])
+                };
                 let id = ctx.derive(&seed, TopoRank::Face);
                 
                 let p0 = &positions[*i0 as usize];
@@ -315,10 +722,23 @@ impl GeometryKernel for TruckKernel {
         
         for ((v1, v2), neighbors) in &edge_map {
             let (root1, root2) = if neighbors.len() != 2 {
-                (find(neighbors[0], &mut parent), usize::MAX)
+                let r = if use_face_ids { 
+                    remap_face_id(mesh.face_ids[neighbors[0]], &face_id_remap) as usize 
+                } else { 
+                    find(neighbors[0], &mut parent) 
+                };
+                (r, usize::MAX)
             } else {
-                let r1 = find(neighbors[0], &mut parent);
-                let r2 = find(neighbors[1], &mut parent);
+                let r1 = if use_face_ids { 
+                    remap_face_id(mesh.face_ids[neighbors[0]], &face_id_remap) as usize 
+                } else { 
+                    find(neighbors[0], &mut parent) 
+                };
+                let r2 = if use_face_ids { 
+                    remap_face_id(mesh.face_ids[neighbors[1]], &face_id_remap) as usize 
+                } else { 
+                    find(neighbors[1], &mut parent) 
+                };
                 if r1 < r2 { (r1, r2) } else { (r2, r1) }
             };
             
@@ -444,5 +864,36 @@ impl TruckKernel {
         
         let wire = Wire::from_iter(edges);
         Ok(wire)
+    }
+    
+    /// Build a circular wire using rsweep (rotational sweep of a vertex).
+    /// This creates a true circle/arc edge, preserving cylindrical topology on extrusion.
+    fn build_circle_wire(&self, cx: f64, cy: f64, radius: f64) -> KernelResult<Wire> {
+        self.build_circle_wire_cw(cx, cy, radius, false)
+    }
+    
+    /// Build a circular wire with optional clockwise winding.
+    /// clockwise=true for holes (opposite to exterior CCW winding).
+    fn build_circle_wire_cw(&self, cx: f64, cy: f64, radius: f64, clockwise: bool) -> KernelResult<Wire> {
+        use std::f64::consts::PI;
+        
+        // Create a vertex at radius distance from center (on the positive X side)
+        let start_point = Point3::new(cx + radius, cy, 0.0);
+        let center_point = Point3::new(cx, cy, 0.0);
+        
+        let v: Vertex = builder::vertex(start_point);
+        
+        // Sweep the vertex around the center point
+        // Truck requires angle > 2π for closed shapes (2π ≈ 6.28, so use 7.0)
+        // Use negative angle for clockwise (hole) winding
+        let angle = if clockwise { -7.0 } else { 7.0 };
+        let circle_wire: Wire = builder::rsweep(
+            &v,
+            center_point,
+            Vector3::new(0.0, 0.0, 1.0),  // Axis perpendicular to XY plane
+            Rad(angle),
+        );
+        
+        Ok(circle_wire)
     }
 }

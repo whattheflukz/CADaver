@@ -266,6 +266,9 @@ pub struct TriangleMesh {
     pub triangles: Vec<(u32, u32, u32)>,
     /// Optional per-vertex normals.
     pub normals: Option<Vec<Vector3D>>,
+    /// Optional per-triangle topological face ID.
+    /// When present, triangles with the same face_id belong to the same logical face.
+    pub face_ids: Vec<u32>,
 }
 
 impl TriangleMesh {
@@ -278,6 +281,7 @@ impl TriangleMesh {
             positions: Vec::with_capacity(vertices),
             triangles: Vec::with_capacity(triangles),
             normals: None,
+            face_ids: Vec::with_capacity(triangles),
         }
     }
     
@@ -289,5 +293,17 @@ impl TriangleMesh {
     
     pub fn add_triangle(&mut self, i0: u32, i1: u32, i2: u32) {
         self.triangles.push((i0, i1, i2));
+        // Note: face_ids left empty for backward compat (will use normal-based grouping)
+    }
+    
+    /// Add a triangle with an associated topological face ID.
+    pub fn add_triangle_with_face(&mut self, i0: u32, i1: u32, i2: u32, face_id: u32) {
+        self.triangles.push((i0, i1, i2));
+        self.face_ids.push(face_id);
+    }
+    
+    /// Check if this mesh has face ID information.
+    pub fn has_face_ids(&self) -> bool {
+        !self.face_ids.is_empty() && self.face_ids.len() == self.triangles.len()
     }
 }
