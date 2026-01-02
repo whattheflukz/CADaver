@@ -327,7 +327,7 @@ impl GeometryKernel for TruckKernel {
         ctx: &NamingContext,
         base_name: &str,
     ) {
-        // This is adapted from the original add_microcad_mesh_to_tessellation
+        // This is adapted from the original add_mesh_to_tessellation
         // but works with our TriangleMesh type instead
         
         let positions = &mesh.positions;

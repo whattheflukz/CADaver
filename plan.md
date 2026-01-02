@@ -119,7 +119,7 @@ Build a **self-hosted, browser-based parametric CAD system** that is *legitimate
 ### Technology Stack
 - **Backend:** Rust  
 - **Frontend:** TypeScript + SolidJS  
-- **CAD Kernel:** MicroCAD (https://microcad.xyz)  
+- **CAD Kernel:** Truck (https://github.com/ricosjp/truck) — Rust-native B-rep kernel  
 - **Rendering:** WebGL / WebGPU  
 - **Persistence:** Parametric, feature-based (no mesh-first modeling)
 
@@ -356,7 +356,7 @@ This is not optional hygiene — it is core infrastructure.
 └────────────┬───────────────┘
              │
 ┌────────────▼───────────────┐
-│ MicroCAD Kernel            │
+│ Truck Kernel               │
 │ Geometry Evaluation        │
 │ Solid & Surface Ops        │
 │ Boolean Ops                │
@@ -474,11 +474,14 @@ Focus on building reusable, composable components to reduce duplication and ensu
 - [x] `ToolButton` — Toolbar button with rich tooltip, shortcut, and description display *(Added)*
 
 
-### MicroCAD Integration
-- [ ] Embed MicroCAD Runtime
-- [x] Program generation layer
-- [x] MicroCAD AST/source mapping
-- [ ] Deterministic evaluation guarantees
+### Truck Kernel Integration
+- [x] Embed Truck kernel (`TruckKernel` in `core/src/kernel/truck.rs`)
+- [x] Extrusion (linear, tapered profiles)
+- [x] Revolution (axis-based rotation)
+- [x] Boolean operations (union, intersect, subtract)
+- [x] Tessellation with face/edge detection
+- [x] STEP export
+- [ ] STEP import (Truck v0.3 limitation)
 - [x] Kernel error propagation to UI
 
 ### **Topological Naming & References (Critical)**
@@ -496,7 +499,7 @@ Focus on building reusable, composable components to reduce duplication and ensu
 
 ### Rendering Pipeline
 - [x] WebGL/WebGPU renderer
-- [ ] Tessellation from MicroCAD
+- [x] Tessellation from Truck (via `TruckKernel::tessellate`)
 - [ ] Normals & edge rendering
 - [x] Face/edge/vertex picking
 - [x] Camera controls (orbit/pan/zoom)
@@ -821,7 +824,7 @@ The system is considered **competitive** when it supports:
 
 ## Final Notes
 
-- MicroCAD is the **single source of truth** for geometry
+- Truck is the **single source of truth** for B-rep geometry
 - Topological stability is non-negotiable
 - Every feature must be:
   - Parametric

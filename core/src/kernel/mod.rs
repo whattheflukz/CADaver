@@ -1,7 +1,7 @@
 //! Kernel abstraction layer for CAD geometry operations.
 //!
 //! This module provides a trait-based abstraction over the underlying CAD kernel,
-//! allowing for swapping implementations (e.g., microcad-core → Truck) without
+//! allowing for swapping implementations (e.g., Truck → custom kernel) without
 //! changing the rest of the codebase.
 
 pub mod types;
@@ -35,7 +35,7 @@ pub type KernelResult<T> = Result<T, KernelOpError>;
 /// Abstract interface for CAD kernel geometry operations.
 ///
 /// This trait defines the operations needed by the runtime, abstracting
-/// over the specific kernel implementation (Truck, microcad-core, etc.).
+/// over the specific kernel implementation (Truck, custom kernel, etc.).
 pub trait GeometryKernel: Send + Sync {
     /// The kernel's internal solid representation.
     type Solid;

@@ -120,12 +120,11 @@ The project is structured into several phases to achieve professional-grade pari
     - [ ] `SelectionField` (Pick-to-select input)
     - [x] `NumericInput` (Unit & variable support)
     - [x] `ToolButton` (Rich tooltips & shortcuts)
-- [ ] **Geometry Kernel (MicroCAD Integration)**
-    - [ ] Embed MicroCAD Runtime
+- [ ] **Geometry Kernel (Truck Integration)**
+    - [x] Embed Truck kernel
     - [x] Program generation layer
-    - [x] MicroCAD AST/source mapping
-    - [ ] Deterministic evaluation guarantees
-    - [ ] Kernel error propagation to UI
+    - [x] Kernel abstraction layer
+    - [x] Kernel error propagation to UI
 - [ ] **Topological Naming & References**
     - [x] Persistent face/edge/vertex IDs
     - [x] Reference tracking across regenerations
@@ -139,7 +138,7 @@ The project is structured into several phases to achieve professional-grade pari
     - [x] Named selections / selection sets
 - [ ] **Rendering Pipeline**
     - [x] WebGL/WebGPU renderer
-    - [ ] Tessellation from MicroCAD
+    - [x] Tessellation from Truck kernel
     - [ ] Normals & edge rendering
     - [ ] Face/edge/vertex picking
     - [x] Camera controls (orbit/pan/zoom)

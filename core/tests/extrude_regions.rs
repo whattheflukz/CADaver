@@ -1,5 +1,5 @@
-use cad_core::microcad_kernel::runtime::Runtime;
-use cad_core::microcad_kernel::ast::{Program, Statement, Expression, Call, Value};
+use cad_core::evaluator::runtime::Runtime;
+use cad_core::evaluator::ast::{Program, Statement, Expression, Call, Value};
 use cad_core::topo::IdGenerator;
 use cad_core::sketch::types::{Sketch, SketchPlane, SketchGeometry, SketchEntity};
 use cad_core::topo::EntityId;

@@ -2,7 +2,7 @@ pub mod geometry;
 pub mod modeling;
 pub mod topo;
 pub mod units;
-pub mod microcad_kernel;
+pub mod evaluator;
 pub mod features;
 pub mod sketch;
 pub mod variables;

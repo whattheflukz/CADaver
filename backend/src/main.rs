@@ -145,7 +145,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    let runtime = cad_core::microcad_kernel::Runtime::new();
+    let runtime = cad_core::evaluator::Runtime::new();
     let generator = cad_core::topo::IdGenerator::new("Session1"); 
     let mut selection_state = cad_core::topo::SelectionState::new();
 
@@ -645,9 +645,9 @@ async fn broadcast_groups(socket: &mut WebSocket, selection_state: &cad_core::to
 
 async fn process_regen(
     socket: &mut WebSocket, 
-    runtime: &cad_core::microcad_kernel::Runtime, 
+    runtime: &cad_core::evaluator::Runtime, 
     generator: &cad_core::topo::IdGenerator, 
-    program: &cad_core::microcad_kernel::ast::Program, 
+    program: &cad_core::evaluator::ast::Program, 
     state: &Arc<AppState>,
     selection_state: &mut cad_core::topo::SelectionState
 ) {

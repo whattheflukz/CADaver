@@ -32,7 +32,7 @@ import { parseValueOrExpression } from './expressionEvaluator';
 import { DimensionEditModal } from './components/DimensionEditModal';
 import { type AppMode, commandIdToSketchTool } from './commandRegistry';
 
-import { useMicrocadConnection } from './hooks/useMicrocadConnection';
+import { useBackendConnection } from './hooks/useBackendConnection';
 import { useSketching } from './hooks/useSketching';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { onMount, onCleanup, Show } from 'solid-js';
@@ -116,7 +116,7 @@ const App: Component = () => {
     dismissError,
     setRollback,
     reorderFeature,
-  } = useMicrocadConnection({
+  } = useBackendConnection({
     autostartNextSketch: () => null, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
     onAutoStartSketch: () => { },

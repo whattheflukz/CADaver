@@ -54,7 +54,7 @@ pub struct EvaluationResult {
     pub topology_manifest: std::collections::HashMap<crate::topo::naming::TopoId, crate::topo::registry::KernelEntity>,
 }
 
-/// The MicroCAD Runtime environment.
+/// The Evaluator Runtime environment.
 pub struct Runtime {
     // Placeholder for memory/state
 }
@@ -64,7 +64,7 @@ impl Runtime {
         Self {}
     }
 
-    /// Evaluates a MicroCAD program and returns the result.
+    /// Evaluates a program and returns the result.
     pub fn evaluate(&self, program: &Program, initial_generator: &IdGenerator) -> Result<EvaluationResult, KernelError> {
         let mut modified = Vec::new();
         let mut logs = Vec::new();
@@ -994,7 +994,7 @@ impl Runtime {
                     }
                 }
                 
-                logs.push(format!("WARNING: Fillet operation not supported by current microcad-core kernel. Identity returned. Input={}, Radius={}, Edges={:?}", 
+                logs.push(format!("WARNING: Fillet operation not supported by current kernel. Identity returned. Input={}, Radius={}, Edges={:?}", 
                     input_solid_var, radius, edges));
                 
                 Ok(None)
@@ -1021,7 +1021,7 @@ impl Runtime {
                     }
                 }
                 
-                logs.push(format!("WARNING: Chamfer operation not supported by current microcad-core kernel. Identity returned. Input={}, Distance={}, Edges={:?}", 
+                logs.push(format!("WARNING: Chamfer operation not supported by current kernel. Identity returned. Input={}, Distance={}, Edges={:?}", 
                     input_solid_var, distance, edges));
                 
                 Ok(None)
@@ -1043,7 +1043,7 @@ impl Runtime {
 }
 
 
-// NOTE: The add_microcad_mesh_to_tessellation function has been removed.
+// NOTE: The add_mesh_to_tessellation function has been removed.
 // Mesh-to-tessellation conversion is now handled by TruckKernel::mesh_to_tessellation()
 // in the kernel abstraction layer (core/src/kernel/truck.rs).
 
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_cube() {
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_error() {
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1102,7 +1102,7 @@ mod tests {
     
     #[test]
     fn test_unknown_function() {
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("Test");
         let prog = Program {
@@ -1123,7 +1123,7 @@ mod tests {
     #[test]
     fn test_sketch_json_integration() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestSketch");
@@ -1156,7 +1156,7 @@ mod tests {
     #[test]
     fn test_extrude_with_sketch() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestExtrude");
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn test_revolve_with_sketch() {
         use crate::sketch::types::{Sketch, SketchPlane, SketchGeometry};
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestRevolve");
@@ -1228,7 +1228,7 @@ mod tests {
     #[test]
     #[ignore] // TODO: Truck boolean operations are panic-prone("This wire is not simple"). Re-enable when Truck is more stable.
     fn test_boolean_operations() {
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestBoolean");
         
@@ -1258,7 +1258,7 @@ mod tests {
 
     #[test]
     fn test_export_step() {
-        use crate::microcad_kernel::ast::*;
+        use crate::evaluator::ast::*;
         let runtime = Runtime::new();
         let generator = IdGenerator::new("TestExport");
         

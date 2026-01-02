@@ -6,14 +6,14 @@ export interface SelectionGroup {
     count: number;
 }
 
-interface MicrocadConnectionProps {
+interface BackendConnectionProps {
     onAutoStartSketch: (id: string) => void;
     onSketchSolved: (id: string, sketch: Sketch) => void;
     autostartNextSketch: Accessor<boolean>;
     setAutostartNextSketch: (val: boolean) => void;
 }
 
-export function useMicrocadConnection(props: MicrocadConnectionProps) {
+export function useBackendConnection(props: BackendConnectionProps) {
     const [status, setStatus] = createSignal("Disconnected");
     const [graph, setGraph] = createSignal<FeatureGraphState>({ nodes: {}, sort_order: [] });
     const [lastTessellation, setTessellation] = createSignal<Tessellation | null>(null);

@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// Represents a value in the MicroCAD language
+/// Represents a value in the feature program language
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(f64),
@@ -38,7 +38,7 @@ impl fmt::Display for Value {
     }
 }
 
-/// Represents a function call or operation in MicroCAD
+/// Represents a function call or operation in the evaluator
 #[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub function: String,
@@ -56,7 +56,7 @@ impl fmt::Display for Call {
     }
 }
 
-/// Represents an expression in MicroCAD
+/// Represents an expression in the evaluator
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Value(Value),
@@ -74,7 +74,7 @@ impl fmt::Display for Expression {
     }
 }
 
-/// Represents a complete MicroCAD program statement
+/// Represents a complete feature program statement
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Assignment { name: String, expr: Expression },
@@ -90,7 +90,7 @@ impl fmt::Display for Statement {
     }
 }
 
-/// A full MicroCAD script
+/// A full feature program script
 #[derive(Debug, Default, Clone)]
 pub struct Program {
     pub statements: Vec<Statement>,

@@ -2,7 +2,7 @@ use super::types::Feature;
 use crate::topo::EntityId;
 use crate::variables::VariableStore;
 use std::collections::{HashMap, HashSet};
-use crate::microcad_kernel::ast::Program;
+use crate::evaluator::ast::Program;
 use serde::{Deserialize, Serialize};
 
 /// Context passed down during the regeneration of the feature graph.
@@ -188,7 +188,7 @@ impl FeatureGraph {
         Err("Feature not found".to_string())
     }
 
-    /// Walk the graph and generate the MicroCAD program logic for each feature.
+    /// Walk the graph and generate the program logic for each feature.
     /// This is the core "Regeneration" loop.
     pub fn regenerate(&mut self) -> Program {
         // Ensure sorted
@@ -199,7 +199,7 @@ impl FeatureGraph {
         let mut _program = Program::default();
         let mut _ctx = Context::new();
         
-        use crate::microcad_kernel::ast::{Statement, Expression, Call, Value};
+        use crate::evaluator::ast::{Statement, Expression, Call, Value};
         use super::types::FeatureType;
 
         for id in &self.sort_order {
@@ -686,12 +686,12 @@ mod tests {
         // Verify Context Switch 1
         let stmt_ctx1 = &program.statements[0];
         // verify it is set_context(f1.id)
-        if let crate::microcad_kernel::ast::Statement::Expression(
-            crate::microcad_kernel::ast::Expression::Call(c)
+        if let crate::evaluator::ast::Statement::Expression(
+            crate::evaluator::ast::Expression::Call(c)
         ) = stmt_ctx1 {
             assert_eq!(c.function, "set_context");
-            if let crate::microcad_kernel::ast::Expression::Value(
-                crate::microcad_kernel::ast::Value::String(s)
+            if let crate::evaluator::ast::Expression::Value(
+                crate::evaluator::ast::Value::String(s)
             ) = &c.args[0] {
                 assert_eq!(s, &f1.id.to_string());
             } else { panic!("Expected string arg"); }
@@ -701,9 +701,9 @@ mod tests {
         // Verify Sketch1 assignment
         let stmt1 = &program.statements[1];
         match stmt1 {
-             crate::microcad_kernel::ast::Statement::Assignment { name, expr } => {
+             crate::evaluator::ast::Statement::Assignment { name, expr } => {
                  assert_eq!(name, &format!("feat_{}", f1.id));
-                 if let crate::microcad_kernel::ast::Expression::Call(c) = expr {
+                 if let crate::evaluator::ast::Expression::Call(c) = expr {
                      assert_eq!(c.function, "sketch");
                  } else { panic!("Expected call"); }
              },
@@ -712,12 +712,12 @@ mod tests {
 
         // Verify Context Switch 2
         let stmt_ctx2 = &program.statements[2];
-         if let crate::microcad_kernel::ast::Statement::Expression(
-            crate::microcad_kernel::ast::Expression::Call(c)
+         if let crate::evaluator::ast::Statement::Expression(
+            crate::evaluator::ast::Expression::Call(c)
         ) = stmt_ctx2 {
             assert_eq!(c.function, "set_context");
-             if let crate::microcad_kernel::ast::Expression::Value(
-                crate::microcad_kernel::ast::Value::String(s)
+             if let crate::evaluator::ast::Expression::Value(
+                crate::evaluator::ast::Value::String(s)
             ) = &c.args[0] {
                 assert_eq!(s, &f2.id.to_string());
             } else { panic!("Expected string arg"); }
@@ -726,16 +726,16 @@ mod tests {
         // Verify Extrude1 assignment
         let stmt2 = &program.statements[3];
         match stmt2 {
-             crate::microcad_kernel::ast::Statement::Assignment { name, expr } => {
+             crate::evaluator::ast::Statement::Assignment { name, expr } => {
                  assert_eq!(name, &format!("feat_{}", f2.id));
-                 if let crate::microcad_kernel::ast::Expression::Call(c) = expr {
+                 if let crate::evaluator::ast::Expression::Call(c) = expr {
                      assert_eq!(c.function, "extrude");
                      // Format: 3 args (distance, operation, start_offset) when no sketch_data
                      assert_eq!(c.args.len(), 3, "Extrude should have 3 args: distance, operation, start_offset");
                      // First arg should be distance (number)
                      match &c.args[0] {
-                         crate::microcad_kernel::ast::Expression::Value(
-                             crate::microcad_kernel::ast::Value::Number(d)
+                         crate::evaluator::ast::Expression::Value(
+                             crate::evaluator::ast::Value::Number(d)
                          ) => {
                              assert!((*d - 10.0).abs() < 1e-6, "Default distance should be 10.0");
                          },
@@ -743,8 +743,8 @@ mod tests {
                      }
                      // Second arg should be operation (string)
                      match &c.args[1] {
-                         crate::microcad_kernel::ast::Expression::Value(
-                             crate::microcad_kernel::ast::Value::String(op)
+                         crate::evaluator::ast::Expression::Value(
+                             crate::evaluator::ast::Value::String(op)
                          ) => {
                              assert_eq!(op, "Add", "Default operation should be Add");
                          },
@@ -752,8 +752,8 @@ mod tests {
                      }
                      // Third arg should be start_offset (number)
                      match &c.args[2] {
-                         crate::microcad_kernel::ast::Expression::Value(
-                             crate::microcad_kernel::ast::Value::Number(o)
+                         crate::evaluator::ast::Expression::Value(
+                             crate::evaluator::ast::Value::Number(o)
                          ) => {
                              assert!((*o - 0.0).abs() < 1e-6, "Default start_offset should be 0.0");
                          },
@@ -775,11 +775,11 @@ mod tests {
         let prog1 = graph.regenerate();
         
         // Extract the context seed UUID
-        let seed1 = if let crate::microcad_kernel::ast::Statement::Expression(
-            crate::microcad_kernel::ast::Expression::Call(c)
+        let seed1 = if let crate::evaluator::ast::Statement::Expression(
+            crate::evaluator::ast::Expression::Call(c)
         ) = &prog1.statements[0] {
-            if let crate::microcad_kernel::ast::Expression::Value(
-                crate::microcad_kernel::ast::Value::String(s)
+            if let crate::evaluator::ast::Expression::Value(
+                crate::evaluator::ast::Value::String(s)
             ) = &c.args[0] {
                 s.clone()
             } else { panic!("Expected string seed"); }
@@ -801,12 +801,12 @@ mod tests {
         
         let mut found_f1 = false;
         for stmt in &prog2.statements {
-             if let crate::microcad_kernel::ast::Statement::Expression(
-                crate::microcad_kernel::ast::Expression::Call(c)
+             if let crate::evaluator::ast::Statement::Expression(
+                crate::evaluator::ast::Expression::Call(c)
             ) = stmt {
                 if c.function == "set_context" {
-                     if let crate::microcad_kernel::ast::Expression::Value(
-                        crate::microcad_kernel::ast::Value::String(s)
+                     if let crate::evaluator::ast::Expression::Value(
+                        crate::evaluator::ast::Value::String(s)
                     ) = &c.args[0] {
                         if s == &f1.id.to_string() {
                             found_f1 = true;
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn test_rollback_preview() {
-        use crate::microcad_kernel::ast::Statement;
+        use crate::evaluator::ast::Statement;
         
         let mut graph = FeatureGraph::new();
         let f1 = create_feature("F1", vec![]);

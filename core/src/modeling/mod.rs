@@ -1,5 +1,5 @@
-// MicroCAD integration layer
-// TODO: Connect to actual MicroCAD kernel
+// Modeling layer (legacy placeholder)
+// Uses Truck kernel for geometry operations via the kernel abstraction layer
 
 pub struct Kernel;
 
