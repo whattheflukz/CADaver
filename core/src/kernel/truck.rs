@@ -11,7 +11,7 @@ use crate::topo::registry::{AnalyticGeometry, KernelEntity};
 use std::collections::HashMap;
 
 // Use truck's pre-exported types which come from cgmath64
-use truck_modeling::{Point3, Vector3, builder, Vertex, Wire, Solid, Rad, EuclideanSpace, InnerSpace};
+use truck_modeling::{Point3, Vector3, builder, Vertex, Wire, Solid, Rad, EuclideanSpace, InnerSpace, Curve, Surface};
 use truck_meshalgo::tessellation::MeshableShape;
 use truck_polymesh::PolygonMesh;
 
@@ -85,6 +85,64 @@ fn detect_circle_2d(points: &[Point2D], tolerance: f64) -> Option<(f64, f64, f64
         println!("[detect_circle_2d] NOT a circle - deviation too high");
         None
     }
+}
+
+/// Transform a solid from local (Z-up) coordinates to world coordinates.
+/// This applies the sketch plane transformation to the solid's geometry.
+/// 
+/// The transformation maps:
+/// - local X (u) → x_axis direction
+/// - local Y (v) → y_axis direction  
+/// - local Z (w) → normal direction
+/// - Plus origin offset
+///
+/// This is the same transformation used for mesh display, but applied to the solid itself
+/// so that booleans can operate on solids in a consistent world coordinate system.
+pub fn transform_solid_to_world(
+    solid: &Solid,
+    origin: [f64; 3],
+    x_axis: [f64; 3],
+    y_axis: [f64; 3],
+    normal: [f64; 3],
+) -> Solid {
+    use truck_modeling::cgmath::Matrix4;
+    use truck_geotrait::Transformed;
+    use truck_topology::Shell;
+    
+    // Build 4x4 transformation matrix from basis vectors
+    // Column-major order: Transform local coords (u,v,w) to world (x,y,z)
+    // world = origin + u*x_axis + v*y_axis + w*normal
+    let transform = Matrix4::new(
+        x_axis[0], x_axis[1], x_axis[2], 0.0,  // column 0: x_axis
+        y_axis[0], y_axis[1], y_axis[2], 0.0,  // column 1: y_axis
+        normal[0], normal[1], normal[2], 0.0,  // column 2: normal
+        origin[0], origin[1], origin[2], 1.0,  // column 3: translation
+    );
+    
+    // Map all components with the transformation
+    let new_boundaries: Vec<Shell<Point3, Curve, Surface>> = solid.boundaries()
+        .iter()
+        .map(|shell| {
+            shell.mapped(
+                |p| {
+                    // Transform point: world = origin + u*x_axis + v*y_axis + w*normal
+                    let u = p.x;
+                    let v = p.y;
+                    let w = p.z;
+                    Point3::new(
+                        origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0],
+                        origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1],
+                        origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2],
+                    )
+                },
+                |c: &Curve| Transformed::transformed(c, transform),
+                |s: &Surface| Transformed::transformed(s, transform),
+            )
+        })
+        .collect();
+    
+    // Use new_unchecked - the transformation preserves topology
+    Solid::new_unchecked(new_boundaries)
 }
 
 /// Detect if a set of 3D vertices lies on a cylinder.
@@ -906,23 +964,26 @@ impl GeometryKernel for TruckKernel {
                      min_b[0], min_b[1], min_b[2], max_b[0], max_b[1], max_b[2]);
         }
         
-        // Check for coincident Z faces
-        let has_coincident_z = if let (Some((min_a, max_a)), Some((min_b, max_b))) = (&bbox_a, &bbox_b) {
-            let z_min_coincident = (min_a[2] - min_b[2]).abs() < 0.1;
-            let z_max_coincident = (max_a[2] - max_b[2]).abs() < 0.1;
+        // Check for coincident faces in ANY axis (X, Y, or Z)
+        // This handles solids from sketches on any plane
+        let has_coincident_faces = if let (Some((min_a, max_a)), Some((min_b, max_b))) = (&bbox_a, &bbox_b) {
+            let tol = 0.1;
+            // Check X axis
+            let x_min_coincident = (min_a[0] - min_b[0]).abs() < tol;
+            let x_max_coincident = (max_a[0] - max_b[0]).abs() < tol;
+            // Check Y axis  
+            let y_min_coincident = (min_a[1] - min_b[1]).abs() < tol;
+            let y_max_coincident = (max_a[1] - max_b[1]).abs() < tol;
+            // Check Z axis
+            let z_min_coincident = (min_a[2] - min_b[2]).abs() < tol;
+            let z_max_coincident = (max_a[2] - max_b[2]).abs() < tol;
+            
+            x_min_coincident || x_max_coincident ||
+            y_min_coincident || y_max_coincident ||
             z_min_coincident || z_max_coincident
         } else {
             false
         };
-        
-        if has_coincident_z {
-            println!("[TRUCK BOOLEAN] Detected coincident Z faces - will try translating tool solid");
-        }
-        
-        // First, try the original operation with panic catching
-        let mut complement_b = solid_b.clone();
-        complement_b.not();
-        println!("[TRUCK BOOLEAN] Complement of B computed, trying different tolerances");
         
         // Helper function to safely try boolean operation with panic catching
         fn try_boolean_and(a: &Solid, b: &Solid, tol: f64) -> Option<Solid> {
@@ -942,6 +1003,86 @@ impl GeometryKernel for TruckKernel {
                 }
             }
         }
+        
+        // Helper function to uniformly scale a solid slightly (from center)
+        // This creates slightly different bounds to break coincident faces
+        // While maintaining geometric integrity (circles stay circles, etc.)
+        fn scale_solid_uniform(solid: &Solid, scale_factor: f64, center: [f64; 3]) -> Solid {
+            use truck_modeling::cgmath::Matrix4;
+            use truck_geotrait::Transformed;
+            use truck_topology::Shell;
+            
+            // Create a transformation matrix that scales uniformly around center
+            // First translate to origin, scale, then translate back
+            let t1 = Matrix4::from_translation(Vector3::new(-center[0], -center[1], -center[2]));
+            let s = Matrix4::from_scale(scale_factor); // UNIFORM scale
+            let t2 = Matrix4::from_translation(Vector3::new(center[0], center[1], center[2]));
+            let transform = t2 * s * t1;
+            
+            // Map all components with the same transformation
+            let new_boundaries: Vec<Shell<Point3, Curve, Surface>> = solid.boundaries()
+                .iter()
+                .map(|shell| {
+                    shell.mapped(
+                        |p| {
+                            // Apply uniform scaling around center
+                            let new_x = center[0] + (p.x - center[0]) * scale_factor;
+                            let new_y = center[1] + (p.y - center[1]) * scale_factor;
+                            let new_z = center[2] + (p.z - center[2]) * scale_factor;
+                            Point3::new(new_x, new_y, new_z)
+                        },
+                        |c: &Curve| Transformed::transformed(c, transform),
+                        |s: &Surface| Transformed::transformed(s, transform),
+                    )
+                })
+                .collect();
+            
+            // Use new_unchecked to bypass validation (the solid should be valid)
+            Solid::new_unchecked(new_boundaries)
+        }
+        
+        // If there are coincident faces on ANY axis, we need to slightly modify the tool solid
+        // to break the coplanar relationship. We'll try uniform scaling by small amounts.
+        if has_coincident_faces {
+            println!("[TRUCK BOOLEAN] Detected coincident faces - trying with scaled tool solid");
+            
+            // Calculate center for scaling
+            let center = if let Some((min_b, max_b)) = &bbox_b {
+                [
+                    (min_b[0] + max_b[0]) / 2.0,
+                    (min_b[1] + max_b[1]) / 2.0,
+                    (min_b[2] + max_b[2]) / 2.0
+                ]
+            } else {
+                [0.0, 0.0, 5.0] // default
+            };
+            
+            // Try various small uniform scalings to break coplanarity
+            // Scale factors slightly > 1 make the solid larger, < 1 make it smaller
+            let scale_factors = [1.001, 0.999, 1.005, 0.995, 1.01, 0.99];
+            let tolerances = [self.tolerance, 0.05, 0.1, 0.25, 0.5];
+            
+            for &scale in &scale_factors {
+                let scaled_b = scale_solid_uniform(solid_b, scale, center);
+                let mut complement_scaled = scaled_b.clone();
+                complement_scaled.not();
+                
+                for &tol in &tolerances {
+                    println!("[TRUCK BOOLEAN] Trying uniform_scale={}, tolerance={}", scale, tol);
+                    if let Some(result) = try_boolean_and(solid_a, &complement_scaled, tol) {
+                        println!("[TRUCK BOOLEAN] Subtract succeeded with uniform_scale={}, tolerance={}", scale, tol);
+                        return Ok(result);
+                    }
+                }
+            }
+            
+            println!("[TRUCK BOOLEAN] Scaling approach failed, trying original solids...");
+        }
+        
+        // Try with original (untranslated) solids
+        let mut complement_b = solid_b.clone();
+        complement_b.not();
+        println!("[TRUCK BOOLEAN] Trying original solids with different tolerances");
         
         // Try multiple tolerances
         let tolerances = [self.tolerance, 0.05, 0.1, 0.25, 0.5, 1.0];

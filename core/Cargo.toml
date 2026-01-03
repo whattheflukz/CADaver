@@ -18,6 +18,7 @@ truck-polymesh = "0.6"
 truck-topology = "0.6"
 truck-base = "0.5"
 truck-shapeops = "0.4"  # Boolean operations (union, intersect, subtract)
+truck-geotrait = "0.4"  # Geometric traits (Transformed, etc.)
 truck-stepio = "0.3"    # STEP file import/export
 
 # cgmath is used by truck internally

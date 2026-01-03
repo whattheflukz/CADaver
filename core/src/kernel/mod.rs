@@ -11,6 +11,7 @@ mod truck;
 mod tests_boolean;
 
 pub use truck::TruckKernel;
+pub use truck::transform_solid_to_world;
 pub use types::*;
 
 use crate::geometry::Tessellation;

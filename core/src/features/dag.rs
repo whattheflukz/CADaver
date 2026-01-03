@@ -202,6 +202,45 @@ impl FeatureGraph {
         use crate::evaluator::ast::{Statement, Expression, Call, Value};
         use super::types::FeatureType;
 
+        // Pre-process: Collect features consumed by active Boolean operations
+        // These features should compute their solids but NOT tessellate for display
+        let mut consumed_features: std::collections::HashSet<EntityId> = std::collections::HashSet::new();
+        
+        for id in &self.sort_order {
+            if let Some(feature) = self.nodes.get(id) {
+                // Only consider non-suppressed Boolean features
+                if feature.suppressed {
+                    continue;
+                }
+                if feature.feature_type == FeatureType::Boolean {
+                    // Get body_list from parameters
+                    if let Some(crate::features::types::ParameterValue::List(body_ids)) = feature.parameters.get("body_list") {
+                        for body_id_str in body_ids {
+                            // Parse UUID and mark as consumed
+                            if let Ok(body_uuid) = uuid::Uuid::parse_str(body_id_str) {
+                                let body_entity_id = EntityId(body_uuid);
+                                consumed_features.insert(body_entity_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Send consumed features to evaluator via a special call
+        if !consumed_features.is_empty() {
+            let consumed_list: Vec<String> = consumed_features.iter()
+                .map(|id| id.to_string())
+                .collect();
+            let consumed_stmt = Statement::Expression(Expression::Call(Call {
+                function: "set_consumed_features".to_string(),
+                args: vec![Expression::Value(Value::Array(
+                    consumed_list.into_iter().map(Value::String).collect()
+                ))]
+            }));
+            _program.statements.push(consumed_stmt);
+        }
+
         for id in &self.sort_order {
             if let Some(feature) = self.nodes.get(id) {
                 if feature.suppressed {

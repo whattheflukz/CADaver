@@ -132,6 +132,10 @@ pub struct Feature {
     pub parameters: HashMap<String, ParameterValue>,
     pub dependencies: Vec<EntityId>, // IDs of features this feature depends on
     pub suppressed: bool,
+    /// If set, this feature's geometry is consumed by a Boolean operation
+    /// The geometry should still be computed but not tessellated for display
+    #[serde(default)]
+    pub consumed_by: Option<EntityId>,
 }
 
 impl Feature {
@@ -143,6 +147,7 @@ impl Feature {
             parameters: HashMap::new(),
             dependencies: Vec::new(),
             suppressed: false,
+            consumed_by: None,
         }
     }
 

@@ -59,6 +59,14 @@ pub struct Runtime {
     // Placeholder for memory/state
 }
 
+#[derive(Debug, Clone)]
+pub struct TransformData {
+    pub origin: [f64; 3],
+    pub x_axis: [f64; 3],
+    pub y_axis: [f64; 3],
+    pub normal: [f64; 3],
+}
+
 impl Runtime {
     pub fn new() -> Self {
         Self {}
@@ -73,17 +81,25 @@ impl Runtime {
         
         // We use a local generator that can be swapped out when context changes
         let mut current_generator = initial_generator.clone();
-        let mut solid_map: HashMap<String, Solid> = HashMap::new();
+        let mut solid_map: HashMap<String, (Solid, TransformData)> = HashMap::new();
+        
+        // Track which features are consumed by Boolean operations (should not be tessellated)
+        let mut consumed_features: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for stmt in &program.statements {
             match stmt {
                 Statement::Assignment { name, expr } => {
                     logs.push(format!("Assigning to {}", name));
                     if let Expression::Call(call) = expr {
-                        // Pass true for is_assignment to suppress immediate tessellation
-                        let res = self.mock_syscall(call, &current_generator, &mut modified, &mut logs, &mut tessellation, &mut topology_manifest, &mut solid_map, true)?;
-                        if let Some(solid) = res {
-                            solid_map.insert(name.clone(), solid);
+                        // Check if this feature is consumed - if so, skip tessellation
+                        let context_id = name.strip_prefix("feat_").unwrap_or(name);
+                        let is_consumed = consumed_features.contains(context_id);
+                        
+                        // Pass is_consumed to suppress tessellation ONLY for consumed features
+                        // Non-consumed features should still tessellate normally
+                        let res = self.mock_syscall(call, &current_generator, &mut modified, &mut logs, &mut tessellation, &mut topology_manifest, &mut solid_map, is_consumed)?;
+                        if let Some((solid, transform)) = res {
+                            solid_map.insert(name.clone(), (solid, transform));
                         }
                     }
                 }
@@ -99,6 +115,18 @@ impl Runtime {
                                 };
                                 logs.push(format!("Context switched to: {}", seed));
                                 current_generator = IdGenerator::new(&seed);
+                            }
+                        } else if call.function == "set_consumed_features" {
+                            // Handle consumed features list
+                            if let Some(first_arg) = call.args.first() {
+                                if let Expression::Value(Value::Array(arr)) = first_arg {
+                                    for val in arr {
+                                        if let Value::String(s) = val {
+                                            consumed_features.insert(s.clone());
+                                            logs.push(format!("Feature {} is consumed by Boolean - will skip tessellation", s));
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             // Pass false for is_assignment to permit tessellation
@@ -125,9 +153,9 @@ impl Runtime {
         logs: &mut Vec<String>,
         tessellation: &mut Tessellation,
         topology_manifest: &mut std::collections::HashMap<crate::topo::naming::TopoId, crate::topo::registry::KernelEntity>,
-        solid_map: &mut HashMap<String, Solid>,
+        solid_map: &mut HashMap<String, (Solid, TransformData)>,
         is_assignment: bool,
-    ) -> Result<Option<Solid>, KernelError> {
+    ) -> Result<Option<(Solid, TransformData)>, KernelError> {
         // Common imports for syscalls
         use crate::geometry::Point3;
         use crate::topo::naming::{NamingContext, TopoRank};
@@ -167,7 +195,13 @@ impl Runtime {
                                 }
                             }
                         }
-                        return Ok(Some(solid));
+                        let default_transform = TransformData {
+                            origin: [0.0, 0.0, 0.0],
+                            x_axis: [1.0, 0.0, 0.0],
+                            y_axis: [0.0, 1.0, 0.0],
+                            normal: [0.0, 0.0, 1.0],
+                        };
+                        return Ok(Some((solid, default_transform)));
                     }
                     Err(e) => {
                         logs.push(format!("Warning: Failed to create cube: {:?}", e));
@@ -550,6 +584,13 @@ impl Runtime {
                         let normal_vec = plane.normal;
                         let normal: [f64; 3] = [normal_vec[0], normal_vec[1], normal_vec[2]];
                         
+                        let transform_data = TransformData {
+                            origin: [origin[0], origin[1], origin[2]],
+                            x_axis: [x_axis[0], x_axis[1], x_axis[2]],
+                            y_axis: [y_axis[0], y_axis[1], y_axis[2]],
+                            normal,
+                        };
+                        
                         // Determine which loops to extrude
                         // Priority: profile_regions (exact boundary points) > find_closed_loops
                         // Type: Vec<Vec<Vec<[f64; 2]>>> where inner is [Outer, Hole1, Hole2...]
@@ -690,7 +731,7 @@ impl Runtime {
 
                         // Use the new MIT-compatible Truck kernel for extrusion
                         let kernel = kernel::default_kernel();
-                        let mut combined_solid: Option<Solid> = None;
+                        let mut combined_result: Option<(Solid, TransformData)> = None;
                         
                         for (i, region_loops) in loops_2d.iter().enumerate() {
                             if region_loops.is_empty() { continue; }
@@ -724,36 +765,47 @@ impl Runtime {
                             // 3. Extrude the polygon
                             match kernel.extrude_polygon(&polygon, &extrude_params) {
                                 Ok(solid) => {
-                                    // Tessellate each region independently (no boolean union)
-                                    match kernel.tessellate(&solid) {
-                                        Ok(mut mesh) => {
-                                            // 5. Transform from local Z-up space to sketch plane space
-                                            for p in &mut mesh.positions {
-                                                let u = p.x;
-                                                let v = p.y;
-                                                let w = p.z;
+                                    // Only tessellate if this is NOT an assignment to a variable
+                                    // (assignments are intermediate values, not displayed directly)
+                                    if !is_assignment {
+                                        // Tessellate each region independently (no boolean union)
+                                        match kernel.tessellate(&solid) {
+                                            Ok(mut mesh) => {
+                                                // 5. Transform from local Z-up space to sketch plane space
+                                                for p in &mut mesh.positions {
+                                                    let u = p.x;
+                                                    let v = p.y;
+                                                    let w = p.z;
+                                                    
+                                                    p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
+                                                    p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
+                                                    p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                                }
                                                 
-                                                p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
-                                                p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
-                                                p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                                // 6. Add to tessellation using kernel's mesh_to_tessellation
+                                                kernel.mesh_to_tessellation(
+                                                    &mesh,
+                                                    tessellation,
+                                                    topology_manifest,
+                                                    &ctx,
+                                                    &format!("Extrude_{}", i)
+                                                );
                                             }
-                                            
-                                            // 6. Add to tessellation using kernel's mesh_to_tessellation
-                                            kernel.mesh_to_tessellation(
-                                                &mesh,
-                                                tessellation,
-                                                topology_manifest,
-                                                &ctx,
-                                                &format!("Extrude_{}", i)
-                                            );
-                                            
-                                            // Store the last successful solid for potential variable assignment
-                                            combined_solid = Some(solid);
-                                        }
-                                        Err(e) => {
-                                            logs.push(format!("Warning: Tessellation failed for region {}: {:?}", i, e));
+                                            Err(e) => {
+                                                logs.push(format!("Warning: Tessellation failed for region {}: {:?}", i, e));
+                                            }
                                         }
                                     }
+                                    
+                                    // 7. Always store the solid for potential variable assignment  
+                                    // NOTE: The solid is stored in local (Z-up) coordinates.
+                                    // Boolean operations work best when all input solids
+                                    // are from sketches on the same plane.
+                                    // 7. Always store the solid for potential variable assignment  
+                                    // NOTE: The solid is stored in local (Z-up) coordinates.
+                                    // Boolean operations work best when all input solids
+                                    // are from sketches on the same plane.
+                                    combined_result = Some((solid, transform_data.clone()));
                                 }
                                 Err(e) => {
                                     logs.push(format!("Warning: Extrusion failed for region {}: {:?}", i, e));
@@ -765,28 +817,34 @@ impl Runtime {
                             logs.push("Warning: No closed loops found for extrusion".to_string());
                         }
 
-                        return Ok(combined_solid);
+                        return Ok(combined_result);
 
                     } else {
                         logs.push("Warning: Failed to parse sketch for extrusion".to_string());
                     }
                 } else {
-                    // No sketch provided - create a default box for testing
-                     let kernel = kernel::default_kernel();
-                     if let Ok(solid) = kernel.create_box(20.0, 20.0, distance) {
-                         if !is_assignment {
-                             if let Ok(mesh) = kernel.tessellate(&solid) {
-                                 kernel.mesh_to_tessellation(
-                                     &mesh,
-                                     tessellation,
-                                     topology_manifest,
-                                     &ctx,
-                                     "DefaultExtrude"
-                                 );
-                             }
-                         }
-                         return Ok(Some(solid));
-                     }
+                     // No sketch provided - create a default box for testing
+                      let kernel = kernel::default_kernel();
+                      if let Ok(solid) = kernel.create_box(20.0, 20.0, distance) {
+                          if !is_assignment {
+                              if let Ok(mesh) = kernel.tessellate(&solid) {
+                                  kernel.mesh_to_tessellation(
+                                      &mesh,
+                                      tessellation,
+                                      topology_manifest,
+                                      &ctx,
+                                      "DefaultExtrude"
+                                  );
+                              }
+                          }
+                          let default_transform = TransformData {
+                              origin: [0.0, 0.0, 0.0],
+                              x_axis: [1.0, 0.0, 0.0],
+                              y_axis: [0.0, 1.0, 0.0],
+                              normal: [0.0, 0.0, 1.0],
+                          };
+                          return Ok(Some((solid, default_transform)));
+                      }
                     logs.push("Created default extrusion (no sketch provided)".to_string());
                 }
                 
@@ -877,7 +935,13 @@ impl Runtime {
                                          Err(e) => logs.push(format!("Tessellation failed: {:?}", e)),
                                      }
                                  }
-                                 return Ok(Some(solid));
+                                 let default_transform = TransformData {
+                                     origin: [0.0, 0.0, 0.0],
+                                     x_axis: [1.0, 0.0, 0.0],
+                                     y_axis: [0.0, 1.0, 0.0],
+                                     normal: [0.0, 0.0, 1.0],
+                                 };
+                                 return Ok(Some((solid, default_transform)));
                              }
                              Err(e) => logs.push(format!("Revolution failed: {:?}", e)),
                          }
@@ -917,7 +981,7 @@ impl Runtime {
                 
                 println!("[BOOLEAN] solid_a found: {}, solid_b found: {}", solid_a.is_some(), solid_b.is_some());
                 
-                if let (Some(a), Some(b)) = (solid_a, solid_b) {
+                if let (Some((a, transform_a)), Some((b, _))) = (solid_a, solid_b) {
                     let kernel = kernel::default_kernel();
                     println!("[BOOLEAN] Calling kernel.boolean_{}", call.function);
                     let op_res = match call.function.as_str() {
@@ -933,8 +997,25 @@ impl Runtime {
                             // Always tessellate boolean results (they're the final geometry)
                             let ctx = NamingContext::new(id);
                             match kernel.tessellate(&new_solid) {
-                                Ok(mesh) => {
+                                Ok(mut mesh) => {
                                      println!("[BOOLEAN] Tessellation succeeded, {} vertices", mesh.positions.len());
+                                     
+                                     // Transform from local Z-up space to sketch plane space using transform from input A
+                                     let origin = transform_a.origin;
+                                     let x_axis = transform_a.x_axis;
+                                     let y_axis = transform_a.y_axis;
+                                     let normal = transform_a.normal;
+                                     
+                                     for p in &mut mesh.positions {
+                                         let u = p.x;
+                                         let v = p.y;
+                                         let w = p.z;
+                                         
+                                         p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
+                                         p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
+                                         p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                     }
+                                     
                                      kernel.mesh_to_tessellation(
                                          &mesh,
                                          tessellation,
@@ -949,7 +1030,7 @@ impl Runtime {
                                     logs.push(format!("Tessellation failed: {:?}", e));
                                 }
                             }
-                            return Ok(Some(new_solid));
+                            return Ok(Some((new_solid, transform_a.clone())));
                         }
                         Err(e) => {
                             println!("[BOOLEAN] Operation failed: {:?}", e);
@@ -974,7 +1055,7 @@ impl Runtime {
                     }
                 }
                 
-                if let Some(solid) = solid_map.get(&var_name) {
+                if let Some((solid, _)) = solid_map.get(&var_name) {
                     let kernel = kernel::default_kernel();
                     match kernel.export_step(solid) {
                          Ok(step_str) => {
