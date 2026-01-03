@@ -150,6 +150,20 @@ const FilletModal: Component<FilletModalProps> = (props) => {
             confirmLabel="Finish"
         >
             <div class="flex flex-col gap-3">
+                {/* Not Implemented Warning */}
+                <div class="bg-amber-900/50 border border-amber-600 rounded-md p-3">
+                    <div class="flex items-start gap-2">
+                        <span class="text-amber-400 text-lg">⚠️</span>
+                        <div class="flex flex-col gap-1">
+                            <span class="text-amber-300 text-xs font-bold uppercase">Not Yet Implemented</span>
+                            <span class="text-amber-200/80 text-[11px] leading-relaxed">
+                                The Truck CAD kernel does not currently support fillet operations.
+                                This feature is planned for a future release. Your parameters will be saved
+                                but no geometry changes will be applied.
+                            </span>
+                        </div>
+                    </div>
+                </div>
                 <div class="flex flex-col gap-1">
                     <label class="text-xs text-gray-400 uppercase font-bold">Parameters</label>
                     <div class="flex gap-2 items-center mt-1">

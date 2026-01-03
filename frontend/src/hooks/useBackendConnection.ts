@@ -215,6 +215,10 @@ export function useBackendConnection(props: BackendConnectionProps) {
         send({ command: 'ReorderFeature', payload: { id, new_index: newIndex } });
     };
 
+    // Feature ID map: maps TopoId feature_id -> FeatureGraph node UUID
+    // Enables viewport selection to map back to features
+    const featureIdMap = () => lastTessellation()?.feature_id_map || {};
+
     return {
         status,
         graph,
@@ -234,7 +238,8 @@ export function useBackendConnection(props: BackendConnectionProps) {
         clearErrors,
         dismissError,
         setRollback,
-        reorderFeature
+        reorderFeature,
+        featureIdMap
     };
 }
 

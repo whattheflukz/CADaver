@@ -7,9 +7,12 @@ export interface Tessellation {
     line_ids: any[];
     point_indices: number[];
     point_ids: any[];
+    // Maps TopoId feature_id -> FeatureGraph node UUID
+    // Enables viewport selection to map back to features
+    feature_id_map?: Record<string, string>;
 }
 
-export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Fillet' | 'Chamfer' | 'Cut' | 'Plane' | 'Axis' | 'Point';
+export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Fillet' | 'Chamfer' | 'Boolean' | 'Cut' | 'Plane' | 'Axis' | 'Point';
 
 export interface Feature {
     id: string; // EntityId is UUID string

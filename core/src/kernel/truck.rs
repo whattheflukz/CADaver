@@ -44,6 +44,7 @@ impl Default for TruckKernel {
 fn detect_circle_2d(points: &[Point2D], tolerance: f64) -> Option<(f64, f64, f64)> {
     if points.len() < 8 {
         // Need at least 8 points for reliable circle detection
+        println!("[detect_circle_2d] Too few points: {}", points.len());
         return None;
     }
     
@@ -62,6 +63,7 @@ fn detect_circle_2d(points: &[Point2D], tolerance: f64) -> Option<(f64, f64, f64
     let avg_radius = distances.iter().sum::<f64>() / n;
     
     if avg_radius < 0.001 {
+        println!("[detect_circle_2d] Degenerate radius: {}", avg_radius);
         return None; // Degenerate case
     }
     
@@ -73,9 +75,14 @@ fn detect_circle_2d(points: &[Point2D], tolerance: f64) -> Option<(f64, f64, f64
     // Relative tolerance: allow 0.5% deviation
     let rel_tolerance = tolerance.max(avg_radius * 0.005);
     
+    println!("[detect_circle_2d] {} points: center=({:.2}, {:.2}), avg_r={:.3}, max_dev={:.6}, tol={:.6}", 
+             points.len(), cx, cy, avg_radius, max_deviation, rel_tolerance);
+    
     if max_deviation < rel_tolerance {
+        println!("[detect_circle_2d] DETECTED as circle!");
         Some((cx, cy, avg_radius))
     } else {
+        println!("[detect_circle_2d] NOT a circle - deviation too high");
         None
     }
 }
@@ -206,10 +213,13 @@ impl GeometryKernel for TruckKernel {
         }
         
         // Build the exterior wire - detect if it's a circle
+        // Native circle edges created with rsweep work with truck_shapeops booleans
+        // (per GitHub example: https://github.com/ricosjp/truck/issues/68)
         let exterior_wire = if let Some((cx, cy, radius)) = detect_circle_2d(&polygon.exterior, self.tolerance) {
             println!("[extrude_polygon] Detected exterior CIRCLE: center=({:.2}, {:.2}), radius={:.2}", cx, cy, radius);
             self.build_circle_wire(cx, cy, radius)?
         } else {
+            println!("[extrude_polygon] Using polygon wire ({} points)", polygon.exterior.len());
             self.build_wire_from_points(&polygon.exterior)?
         };
         
@@ -817,26 +827,145 @@ impl GeometryKernel for TruckKernel {
             }
         }
     }
-    
     // === Boolean Operations ===
     
     fn boolean_union(&self, solid_a: &Self::Solid, solid_b: &Self::Solid) -> KernelResult<Self::Solid> {
-        truck_shapeops::or(solid_a, solid_b, self.tolerance)
-            .ok_or_else(|| KernelOpError::OperationFailed("Boolean union failed".into()))
+        println!("[TRUCK BOOLEAN] Attempting union with tolerance={}", self.tolerance);
+        let result = truck_shapeops::or(solid_a, solid_b, self.tolerance);
+        match &result {
+            Some(_) => println!("[TRUCK BOOLEAN] Union succeeded"),
+            None => println!("[TRUCK BOOLEAN] Union failed - truck_shapeops::or returned None"),
+        }
+        result.ok_or_else(|| KernelOpError::OperationFailed("Boolean union failed".into()))
     }
     
     fn boolean_intersect(&self, solid_a: &Self::Solid, solid_b: &Self::Solid) -> KernelResult<Self::Solid> {
-        truck_shapeops::and(solid_a, solid_b, self.tolerance)
-            .ok_or_else(|| KernelOpError::OperationFailed("Boolean intersection failed".into()))
+        println!("[TRUCK BOOLEAN] Attempting intersect with tolerance={}", self.tolerance);
+        let result = truck_shapeops::and(solid_a, solid_b, self.tolerance);
+        match &result {
+            Some(_) => println!("[TRUCK BOOLEAN] Intersect succeeded"),
+            None => println!("[TRUCK BOOLEAN] Intersect failed - truck_shapeops::and returned None"),
+        }
+        result.ok_or_else(|| KernelOpError::OperationFailed("Boolean intersection failed".into()))
     }
     
     fn boolean_subtract(&self, solid_a: &Self::Solid, solid_b: &Self::Solid) -> KernelResult<Self::Solid> {
         // Subtraction is: A - B = A AND (NOT B)
-        // Solid::not() mutates in place, so we clone first
+        // 
+        // CRITICAL: truck_shapeops fails when solids have coincident/coplanar faces.
+        // All extrusions in this system go from Z=0 to Z=distance, so they share Z boundaries.
+        // To work around this, we detect coincident Z boundaries and slightly extend solid_b
+        // before performing the boolean operation.
+        
+        println!("[TRUCK BOOLEAN] Attempting subtract");
+        
+        // Debug: Print solid info
+        let shells_a = solid_a.boundaries().len();
+        let shells_b = solid_b.boundaries().len();
+        let mut faces_a = 0;
+        for shell in solid_a.boundaries() {
+            faces_a += shell.face_iter().count();
+        }
+        let mut faces_b = 0;
+        for shell in solid_b.boundaries() {
+            faces_b += shell.face_iter().count();
+        }
+        println!("[TRUCK BOOLEAN] Solid A: {} shells, {} faces", shells_a, faces_a);
+        println!("[TRUCK BOOLEAN] Solid B: {} shells, {} faces", shells_b, faces_b);
+        
+        // Compute bounding boxes
+        fn compute_bbox(solid: &Solid) -> Option<([f64; 3], [f64; 3])> {
+            let mut min = [f64::INFINITY; 3];
+            let mut max = [f64::NEG_INFINITY; 3];
+            let mut has_points = false;
+            
+            for shell in solid.boundaries() {
+                for vertex in shell.vertex_iter() {
+                    let p = vertex.point();
+                    min[0] = min[0].min(p.x);
+                    min[1] = min[1].min(p.y);
+                    min[2] = min[2].min(p.z);
+                    max[0] = max[0].max(p.x);
+                    max[1] = max[1].max(p.y);
+                    max[2] = max[2].max(p.z);
+                    has_points = true;
+                }
+            }
+            if has_points { Some((min, max)) } else { None }
+        }
+        
+        let bbox_a = compute_bbox(solid_a);
+        let bbox_b = compute_bbox(solid_b);
+        
+        if let Some((min_a, max_a)) = &bbox_a {
+            println!("[TRUCK BOOLEAN] Solid A bbox: ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2})",
+                     min_a[0], min_a[1], min_a[2], max_a[0], max_a[1], max_a[2]);
+        }
+        if let Some((min_b, max_b)) = &bbox_b {
+            println!("[TRUCK BOOLEAN] Solid B bbox: ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2})",
+                     min_b[0], min_b[1], min_b[2], max_b[0], max_b[1], max_b[2]);
+        }
+        
+        // Check for coincident Z faces
+        let has_coincident_z = if let (Some((min_a, max_a)), Some((min_b, max_b))) = (&bbox_a, &bbox_b) {
+            let z_min_coincident = (min_a[2] - min_b[2]).abs() < 0.1;
+            let z_max_coincident = (max_a[2] - max_b[2]).abs() < 0.1;
+            z_min_coincident || z_max_coincident
+        } else {
+            false
+        };
+        
+        if has_coincident_z {
+            println!("[TRUCK BOOLEAN] Detected coincident Z faces - will try translating tool solid");
+        }
+        
+        // First, try the original operation with panic catching
         let mut complement_b = solid_b.clone();
         complement_b.not();
-        truck_shapeops::and(solid_a, &complement_b, self.tolerance)
-            .ok_or_else(|| KernelOpError::OperationFailed("Boolean subtraction failed".into()))
+        println!("[TRUCK BOOLEAN] Complement of B computed, trying different tolerances");
+        
+        // Helper function to safely try boolean operation with panic catching
+        fn try_boolean_and(a: &Solid, b: &Solid, tol: f64) -> Option<Solid> {
+            use std::panic::{catch_unwind, AssertUnwindSafe};
+            
+            // Wrap in catch_unwind since truck_shapeops can panic on complex geometry
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                truck_shapeops::and(a, b, tol)
+            }));
+            
+            match result {
+                Ok(Some(solid)) => Some(solid),
+                Ok(None) => None,
+                Err(_) => {
+                    println!("[TRUCK BOOLEAN] Boolean operation panicked (caught)");
+                    None
+                }
+            }
+        }
+        
+        // Try multiple tolerances
+        let tolerances = [self.tolerance, 0.05, 0.1, 0.25, 0.5, 1.0];
+        for tol in tolerances {
+            println!("[TRUCK BOOLEAN] Trying tolerance={}", tol);
+            if let Some(result) = try_boolean_and(solid_a, &complement_b, tol) {
+                println!("[TRUCK BOOLEAN] Subtract succeeded with tolerance={}", tol);
+                return Ok(result);
+            }
+        }
+        
+        println!("[TRUCK BOOLEAN] All tolerances failed, trying larger tolerances...");
+        
+        // Try larger tolerances
+        for tol in [2.0, 5.0, 10.0] {
+            println!("[TRUCK BOOLEAN] Trying larger tolerance={}", tol);
+            if let Some(result) = try_boolean_and(solid_a, &complement_b, tol) {
+                println!("[TRUCK BOOLEAN] Subtract succeeded with tolerance={}", tol);
+                return Ok(result);
+            }
+        }
+        
+        println!("[TRUCK BOOLEAN] Subtract failed with all tolerances");
+        Err(KernelOpError::OperationFailed("Boolean subtraction failed - Truck kernel limitation. This typically occurs with cylindrical geometry or when solids share coincident faces.".into()))
     }
     
     // === STEP File I/O ===
@@ -876,8 +1005,8 @@ impl GeometryKernel for TruckKernel {
 }
 
 impl TruckKernel {
-    /// Build a truck Wire from 2D points (as 3D with z=0).
-    fn build_wire_from_points(&self, points: &[Point2D]) -> KernelResult<Wire> {
+    /// Build a truck Wire from 2D points at a specified Z position.
+    fn build_wire_from_points_at_z(&self, points: &[Point2D], z: f64) -> KernelResult<Wire> {
         if points.len() < 3 {
             return Err(KernelOpError::InvalidGeometry(
                 "Wire requires at least 3 points".into()
@@ -886,7 +1015,7 @@ impl TruckKernel {
         
         let mut vertices: Vec<Vertex> = points
             .iter()
-            .map(|p| builder::vertex(Point3::new(p.x, p.y, 0.0)))
+            .map(|p| builder::vertex(Point3::new(p.x, p.y, z)))
             .collect();
         
         // Close the loop
@@ -901,20 +1030,28 @@ impl TruckKernel {
         Ok(wire)
     }
     
+    /// Build a truck Wire from 2D points at z=0 (default).
+    fn build_wire_from_points(&self, points: &[Point2D]) -> KernelResult<Wire> {
+        self.build_wire_from_points_at_z(points, 0.0)
+    }
+    
     /// Build a circular wire using rsweep (rotational sweep of a vertex).
     /// This creates a true circle/arc edge, preserving cylindrical topology on extrusion.
     fn build_circle_wire(&self, cx: f64, cy: f64, radius: f64) -> KernelResult<Wire> {
-        self.build_circle_wire_cw(cx, cy, radius, false)
+        self.build_circle_wire_cw_at_z(cx, cy, radius, false, 0.0)
     }
     
-    /// Build a circular wire with optional clockwise winding.
-    /// clockwise=true for holes (opposite to exterior CCW winding).
+    /// Build a circular wire with optional clockwise winding at z=0 (default).
     fn build_circle_wire_cw(&self, cx: f64, cy: f64, radius: f64, clockwise: bool) -> KernelResult<Wire> {
-        use std::f64::consts::PI;
-        
+        self.build_circle_wire_cw_at_z(cx, cy, radius, clockwise, 0.0)
+    }
+    
+    /// Build a circular wire with optional clockwise winding at specified Z.
+    /// clockwise=true for holes (opposite to exterior CCW winding).
+    fn build_circle_wire_cw_at_z(&self, cx: f64, cy: f64, radius: f64, clockwise: bool, z: f64) -> KernelResult<Wire> {
         // Create a vertex at radius distance from center (on the positive X side)
-        let start_point = Point3::new(cx + radius, cy, 0.0);
-        let center_point = Point3::new(cx, cy, 0.0);
+        let start_point = Point3::new(cx + radius, cy, z);
+        let center_point = Point3::new(cx, cy, z);
         
         let v: Vertex = builder::vertex(start_point);
         

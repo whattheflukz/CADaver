@@ -895,8 +895,11 @@ impl Runtime {
                 let mut var_a = String::new();
                 let mut var_b = String::new();
                 
+                println!("[BOOLEAN] Processing {} operation with {} args", call.function, call.args.len());
+                
                 // Parse args: union(a, b)
                 for (i, arg) in call.args.iter().enumerate() {
+                    println!("[BOOLEAN] Arg {}: {:?}", i, arg);
                     match (i, arg) {
                         (0, Expression::Variable(s)) => var_a = s.clone(),
                         (0, Expression::Value(Value::String(s))) => var_a = s.clone(),
@@ -906,11 +909,17 @@ impl Runtime {
                     }
                 }
                 
+                println!("[BOOLEAN] Looking up var_a='{}', var_b='{}'", var_a, var_b);
+                println!("[BOOLEAN] solid_map keys: {:?}", solid_map.keys().collect::<Vec<_>>());
+                
                 let solid_a = solid_map.get(&var_a);
                 let solid_b = solid_map.get(&var_b);
                 
+                println!("[BOOLEAN] solid_a found: {}, solid_b found: {}", solid_a.is_some(), solid_b.is_some());
+                
                 if let (Some(a), Some(b)) = (solid_a, solid_b) {
                     let kernel = kernel::default_kernel();
+                    println!("[BOOLEAN] Calling kernel.boolean_{}", call.function);
                     let op_res = match call.function.as_str() {
                         "union" => kernel.boolean_union(a, b),
                         "intersect" => kernel.boolean_intersect(a, b),
@@ -920,27 +929,35 @@ impl Runtime {
                     
                     match op_res {
                         Ok(new_solid) => {
-                            if !is_assignment {
-                                let ctx = NamingContext::new(id);
-                                match kernel.tessellate(&new_solid) {
-                                    Ok(mesh) => {
-                                         kernel.mesh_to_tessellation(
-                                             &mesh,
-                                             tessellation,
-                                             topology_manifest,
-                                             &ctx,
-                                             &format!("Boolean{}", call.function)
-                                         );
-                                         logs.push(format!("Performed {} on {} and {}", call.function, var_a, var_b));
-                                    }
-                                    Err(e) => logs.push(format!("Tessellation failed: {:?}", e)),
+                            println!("[BOOLEAN] Operation succeeded, tessellating result");
+                            // Always tessellate boolean results (they're the final geometry)
+                            let ctx = NamingContext::new(id);
+                            match kernel.tessellate(&new_solid) {
+                                Ok(mesh) => {
+                                     println!("[BOOLEAN] Tessellation succeeded, {} vertices", mesh.positions.len());
+                                     kernel.mesh_to_tessellation(
+                                         &mesh,
+                                         tessellation,
+                                         topology_manifest,
+                                         &ctx,
+                                         &format!("Boolean{}", call.function)
+                                     );
+                                     logs.push(format!("Performed {} on {} and {}", call.function, var_a, var_b));
+                                }
+                                Err(e) => {
+                                    println!("[BOOLEAN] Tessellation failed: {:?}", e);
+                                    logs.push(format!("Tessellation failed: {:?}", e));
                                 }
                             }
                             return Ok(Some(new_solid));
                         }
-                        Err(e) => logs.push(format!("Boolean operation failed: {:?}", e)),
+                        Err(e) => {
+                            println!("[BOOLEAN] Operation failed: {:?}", e);
+                            logs.push(format!("Boolean operation failed: {:?}", e));
+                        }
                     }
                 } else {
+                    println!("[BOOLEAN] ERROR: Could not find variables '{}' or '{}' in solid_map", var_a, var_b);
                     logs.push(format!("Warning: Could not find variables {} or {} for boolean op", var_a, var_b));
                 }
                 
@@ -994,7 +1011,8 @@ impl Runtime {
                     }
                 }
                 
-                logs.push(format!("WARNING: Fillet operation not supported by current kernel. Identity returned. Input={}, Radius={}, Edges={:?}", 
+                logs.push(format!("INFO: Fillet operation skipped - Truck CAD kernel v0.6 does not support fillet/edge rounding operations. \
+                    Parameters saved: Input={}, Radius={:.2}mm, Edges={:?}. Feature will apply when kernel support is added.", 
                     input_solid_var, radius, edges));
                 
                 Ok(None)
@@ -1021,7 +1039,8 @@ impl Runtime {
                     }
                 }
                 
-                logs.push(format!("WARNING: Chamfer operation not supported by current kernel. Identity returned. Input={}, Distance={}, Edges={:?}", 
+                logs.push(format!("INFO: Chamfer operation skipped - Truck CAD kernel v0.6 does not support chamfer operations. \
+                    Parameters saved: Input={}, Distance={:.2}mm, Edges={:?}. Feature will apply when kernel support is added.", 
                     input_solid_var, distance, edges));
                 
                 Ok(None)

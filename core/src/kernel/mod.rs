@@ -7,6 +7,9 @@
 pub mod types;
 mod truck;
 
+#[cfg(test)]
+mod tests_boolean;
+
 pub use truck::TruckKernel;
 pub use types::*;
 

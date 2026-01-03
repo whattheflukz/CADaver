@@ -17,6 +17,7 @@ import { CircularPatternModal } from './components/CircularPatternModal';
 import ExtrudeModal from './components/ExtrudeModal';
 import FilletModal from './components/FilletModal';
 import ChamferModal from './components/ChamferModal';
+import BooleanModal from './components/BooleanModal';
 import PlaneModal from './components/PlaneModal';
 import PointModal from './components/PointModal';
 import ModelingToolbar from './components/ModelingToolbar';
@@ -64,6 +65,11 @@ const App: Component = () => {
 
   // Point Modal state
   const [showPointModal, setShowPointModal] = createSignal(false);
+
+  // Boolean Modal state
+  const [editingBooleanId, setEditingBooleanId] = createSignal<string | null>(null);
+  const [pendingBoolean, setPendingBoolean] = createSignal(false);
+  const [pendingBooleanName, setPendingBooleanName] = createSignal<string | null>(null);
 
   // Standard plane visibility state
   const [standardPlaneVisibility, setStandardPlaneVisibility] = createSignal<{ XY: boolean; XZ: boolean; YZ: boolean }>({
@@ -116,6 +122,7 @@ const App: Component = () => {
     dismissError,
     setRollback,
     reorderFeature,
+    featureIdMap,
   } = useBackendConnection({
     autostartNextSketch: () => null, // Legacy: Disabled, handled by useSketching
     setAutostartNextSketch: () => { },
@@ -364,6 +371,22 @@ const App: Component = () => {
     setShowPointModal(true);
   };
 
+  const handleBoolean = () => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Boolean').length;
+    const name = `Boolean ${existing + 1}`;
+    console.log("handleBoolean: Creating new feature with name:", name);
+
+    const cmd = {
+      type: "Boolean",
+      name,
+      dependencies: []
+    };
+
+    setPendingBooleanName(name);
+    setPendingBoolean(true);
+    send({ command: 'CreateFeature', payload: cmd });
+  };
+
   const handlePointCreate = (params: Record<string, any>) => {
     const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Point').length;
     const name = params.name?.String || `Point ${existing + 1}`;
@@ -464,6 +487,25 @@ const App: Component = () => {
         setPendingChamferName(null);
         setSelectedFeature(match.id);
         setEditingChamferId(match.id);
+      }
+    }
+  });
+
+  // Auto-select newly created boolean feature
+  createEffect(() => {
+    if (pendingBoolean() && pendingBooleanName()) {
+      const nodes = graph().nodes;
+      const targetName = pendingBooleanName()!;
+
+      const booleans = Object.values(nodes).filter(n => n.feature_type === 'Boolean');
+      const match = booleans.find(n => n.name === targetName);
+
+      if (match) {
+        console.log("Found newly created boolean:", match.id);
+        setPendingBoolean(false);
+        setPendingBooleanName(null);
+        setSelectedFeature(match.id);
+        setEditingBooleanId(match.id);
       }
     }
   });
@@ -688,6 +730,7 @@ const App: Component = () => {
               onChamfer={() => handleChamfer()}
               onPlane={handlePlane}
               onPoint={handlePoint}
+              onBoolean={handleBoolean}
             />
           )}
 
@@ -1126,6 +1169,20 @@ const App: Component = () => {
             selection={selection()}
             setSelection={setSelection}
             graph={graph()}
+          />
+        </Show>
+
+        {/* Boolean Modal */}
+        <Show when={editingBooleanId()}>
+          <BooleanModal
+            featureId={editingBooleanId()!}
+            initialParams={graph().nodes[editingBooleanId()!]?.parameters || {}}
+            onUpdate={(id, params) => send({ command: 'UpdateFeature', payload: { id, params } })}
+            onClose={() => setEditingBooleanId(null)}
+            graph={graph()}
+            selection={selection()}
+            setSelection={setSelection}
+            featureIdMap={featureIdMap()}
           />
         </Show>
 

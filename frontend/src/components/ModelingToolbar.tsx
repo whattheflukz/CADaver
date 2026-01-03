@@ -16,6 +16,7 @@ interface ModelingToolbarProps {
     onChamfer: () => void;
     onPlane?: () => void;
     onPoint?: () => void;
+    onBoolean?: () => void;
 }
 
 // Helper to look up command info from registry
@@ -67,6 +68,18 @@ const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
 
             <div style={{ width: "1px", height: "24px", background: "#666" }} />
 
+            {/* Boolean - single button, operation selected in modal */}
+            <ToolButton
+                icon="🔗"
+                label="Boolean"
+                isActive={false}
+                onClick={() => props.onBoolean?.()}
+                description="Combine, intersect, or subtract bodies"
+                minWidth="60px"
+            />
+
+            <div style={{ width: "1px", height: "24px", background: "#666" }} />
+
             {/* Fillet Button */}
             <ToolButton
                 icon="⚪"
@@ -113,3 +126,4 @@ const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
 };
 
 export default ModelingToolbar;
+

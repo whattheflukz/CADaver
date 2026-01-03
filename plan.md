@@ -617,8 +617,8 @@ The project must not proceed to advanced solid modeling unless:
 **Target:** SolidWorks / Onshape part design workflows.
 
 ### Solid Features
-- [ ] Fillet (constant)
-- [ ] Chamfer
+- [ ] Fillet (constant) *(Blocked: Truck kernel v0.6 lacks fillet API)*
+- [ ] Chamfer *(Blocked: Truck kernel v0.6 lacks chamfer API)*
 - [ ] Shell
 - [ ] Draft
 - [ ] Offset faces

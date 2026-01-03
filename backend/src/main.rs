@@ -220,6 +220,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           "Revolve" => cad_core::features::types::FeatureType::Revolve,
                           "Fillet" => cad_core::features::types::FeatureType::Fillet,
                           "Chamfer" => cad_core::features::types::FeatureType::Chamfer,
+                          "Boolean" => cad_core::features::types::FeatureType::Boolean,
                           "Plane" => cad_core::features::types::FeatureType::Plane,
                           "Axis" => cad_core::features::types::FeatureType::Axis,
                           "Point" => cad_core::features::types::FeatureType::Point,
@@ -524,6 +525,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                         "Sketch" => cad_core::features::types::FeatureType::Sketch,
                         "Extrude" => cad_core::features::types::FeatureType::Extrude,
                         "Revolve" => cad_core::features::types::FeatureType::Revolve,
+                        "Boolean" => cad_core::features::types::FeatureType::Boolean,
                         "Cut" => cad_core::features::types::FeatureType::Cut,
                         _ => {
                             let error = serde_json::json!({
@@ -691,8 +693,32 @@ async fn process_regen(
                  broadcast_selection(socket, selection_state).await;
              }
 
+             // Build feature_id_map: maps TopoId feature_id (EntityId) -> FeatureGraph node UUID
+             // This enables frontend to map from viewport selections back to feature nodes
+             let mut tessellation = result.tessellation;
+             {
+                 let graph = state.graph.read().unwrap();
+                 for id in &graph.sort_order {
+                     if let Some(feature) = graph.nodes.get(id) {
+                         if feature.suppressed {
+                             continue;
+                         }
+                         // The IdGenerator is seeded with feature.id.to_string()
+                         // Then the first next_id() call generates the TopoId's feature_id
+                         let gen = cad_core::topo::IdGenerator::new(&feature.id.to_string());
+                         let topo_feature_id = gen.next_id();
+                         
+                         // Map: TopoId feature_id -> FeatureGraph node UUID
+                         tessellation.feature_id_map.insert(
+                             topo_feature_id.to_string(),
+                             feature.id.to_string()
+                         );
+                     }
+                 }
+             }
+
              // Send Render Update
-             let json = serde_json::to_string(&result.tessellation).unwrap_or("{}".into());
+             let json = serde_json::to_string(&tessellation).unwrap_or("{}".into());
              let _ = socket.send(Message::Text(format!("RENDER_UPDATE:{}", json))).await;
         }
         Err(e) => {

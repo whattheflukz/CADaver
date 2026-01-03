@@ -28,6 +28,15 @@ pub enum ExtrudeOperation {
     Intersect, // Keep only the intersection
 }
 
+/// Operation type for boolean features
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum BooleanOperation {
+    #[default]
+    Union,     // Combine two solids
+    Intersect, // Keep only the intersection
+    Subtract,  // Remove tool from target
+}
+
 /// Direction for extrude features
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExtrudeDirection {
@@ -107,6 +116,7 @@ pub enum FeatureType {
     Revolve,
     Fillet,
     Chamfer,
+    Boolean,
     Cut,
     // Datums
     Plane,

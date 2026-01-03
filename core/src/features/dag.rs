@@ -427,6 +427,47 @@ impl FeatureGraph {
                         // Reference points - no kernel call needed
                         None
                     },
+                    FeatureType::Boolean => {
+                        // Boolean operations: union, intersect, subtract
+                        let mut args = Vec::new();
+                        
+                        // Get operation type (default Union)
+                        let operation = match feature.parameters.get("operation") {
+                            Some(crate::features::types::ParameterValue::String(s)) => s.clone(),
+                            _ => "Union".to_string(),
+                        };
+                        
+                        // Get body_list parameter
+                        let body_ids: Vec<String> = match feature.parameters.get("body_list") {
+                            Some(crate::features::types::ParameterValue::List(list)) => list.clone(),
+                            _ => vec![],
+                        };
+                        
+                        if body_ids.len() >= 2 {
+                            // Get target (first body) and tool (second body) feature variables
+                            let target_var = format!("feat_{}", body_ids[0]);
+                            let tool_var = format!("feat_{}", body_ids[1]);
+                            
+                            args.push(Expression::Variable(target_var));
+                            args.push(Expression::Variable(tool_var));
+                            
+                            // Determine the kernel function based on operation
+                            let func_name = match operation.as_str() {
+                                "Union" => "union",
+                                "Intersect" => "intersect",
+                                "Subtract" => "subtract",
+                                _ => "union",
+                            };
+                            
+                            Some(Call {
+                                function: func_name.to_string(),
+                                args,
+                            })
+                        } else {
+                            // Not enough bodies - skip
+                            None
+                        }
+                    },
                     _ => None
                 };
 

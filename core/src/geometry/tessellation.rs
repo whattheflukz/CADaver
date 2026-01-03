@@ -1,6 +1,7 @@
 use super::{Point3, Vector3};
 use crate::topo::naming::TopoId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Tessellation {
@@ -12,10 +13,15 @@ pub struct Tessellation {
     // Line support for Sketches/Edges
     pub line_indices: Vec<u32>, // Pairs of indices into vertices
     pub line_ids: Vec<TopoId>, // Maps line segment index -> TopoId
-
+    
     // Point support for Vertices
     pub point_indices: Vec<u32>, // Indices into vertices
     pub point_ids: Vec<TopoId>, // Maps point index -> TopoId
+    
+    // Maps TopoId feature_id (EntityId string) -> FeatureGraph node UUID string
+    // This enables the frontend to map from viewport selections back to feature nodes
+    #[serde(default)]
+    pub feature_id_map: HashMap<String, String>,
 }
 
 impl Tessellation {
