@@ -15,6 +15,7 @@ interface FeatureTreeProps {
     onUpdateFeature?: (id: string, params: Record<string, any>) => void;
     onEditSketch?: (id: string) => void;
     onEditExtrude?: (id: string) => void;
+    onEditBoolean?: (id: string) => void;
     onOpenVariables?: () => void;
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
@@ -331,14 +332,16 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                     {feature().suppressed ? '🚫' : '👁️'}
                                                 </span>
 
-                                                {/* Edit icon - for Sketch and Extrude */}
-                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                                {/* Edit icon - for Sketch, Extrude, and Boolean */}
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean') && (
                                                     <span
                                                         class="feature-edit"
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             if (feature().feature_type === 'Sketch') {
                                                                 props.onEditSketch?.(id);
+                                                            } else if (feature().feature_type === 'Boolean') {
+                                                                props.onEditBoolean?.(id);
                                                             } else {
                                                                 props.onEditExtrude?.(id);
                                                             }
@@ -350,7 +353,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                 )}
 
                                                 {/* Expand/collapse arrow */}
-                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude') && (
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean') && (
                                                     <span
                                                         class="feature-expander"
                                                         onClick={(e) => {
@@ -375,6 +378,9 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                     feature={feature()}
                                                     onUpdate={(params) => props.onUpdateFeature?.(id, params)}
                                                 />
+                                            )}
+                                            {feature().feature_type === 'Boolean' && props.expanded[id] && (
+                                                <BooleanInfo feature={feature()} />
                                             )}
                                         </div>
                                     );
@@ -580,6 +586,42 @@ const ExtrudeControls: Component<{ feature: Feature, onUpdate: (params: Record<s
     );
 };
 
+// Sub-component for Boolean info display
+const BooleanInfo: Component<{ feature: Feature }> = (props) => {
+    const getOperation = (): string => {
+        const params = props.feature.parameters || {};
+        if (params.operation && typeof params.operation === 'object' && 'String' in params.operation) {
+            return (params.operation as any).String;
+        }
+        return 'Unknown';
+    };
+
+    const getOperationIcon = (op: string): string => {
+        switch (op) {
+            case 'Union': return '🔗';
+            case 'Subtract': return '➖';
+            case 'Intersect': return '∩';
+            default: return '🔧';
+        }
+    };
+
+    const operation = getOperation();
+
+    return (
+        <div class="feature-children" style={{ padding: '6px 10px' }}>
+            <div style={{
+                display: 'flex',
+                'align-items': 'center',
+                gap: '8px',
+                'font-size': '11px',
+                color: '#9ca3af'
+            }}>
+                <span style={{ 'font-size': '13px' }}>{getOperationIcon(operation)}</span>
+                <span style={{ color: '#d1d5db' }}>{operation}</span>
+            </div>
+        </div>
+    );
+};
 function getOpIcon(op: any) {
     if (op.AddGeometry) {
         const geom = op.AddGeometry.geometry;

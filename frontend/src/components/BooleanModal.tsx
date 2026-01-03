@@ -1,4 +1,4 @@
-import { createSignal, type Component, onMount, createEffect, For, createMemo } from 'solid-js';
+import { createSignal, type Component, onMount, createEffect, For, createMemo, Show } from 'solid-js';
 import { BaseModal } from './BaseModal';
 import type { ParameterValue, FeatureGraphState, Feature } from '../types';
 
@@ -19,15 +19,15 @@ interface BooleanModalProps {
 /**
  * BooleanModal - Modal for boolean operations (Union, Intersect, Subtract)
  * 
- * Supports:
- * - Viewport selection: Click on bodies in the 3D viewer
- * - List selection: Click features in the modal list
- * - Pre-selection: Existing viewport selections are adopted on open
+ * Features separate selection boxes for Target and Tool bodies,
+ * similar to Onshape's UI pattern.
  */
 const BooleanModal: Component<BooleanModalProps> = (props) => {
-    const [operation, setOperation] = createSignal<'Union' | 'Intersect' | 'Subtract'>('Union');
-    const [selectedBodies, setSelectedBodies] = createSignal<string[]>([]);
-    const [keepToolBody, setKeepToolBody] = createSignal(false); // If true, tool body is NOT consumed
+    const [operation, setOperation] = createSignal<'Union' | 'Intersect' | 'Subtract'>('Subtract');
+    const [targetBodies, setTargetBodies] = createSignal<string[]>([]);
+    const [toolBodies, setToolBodies] = createSignal<string[]>([]);
+    const [keepToolBody, setKeepToolBody] = createSignal(false);
+    const [activeField, setActiveField] = createSignal<'target' | 'tool'>('tool');
     const [initialized, setInitialized] = createSignal(false);
 
     // Get all features that produce geometry (Extrude, Revolve, Boolean - but not self)
@@ -41,9 +41,15 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
                 f != null &&
                 !f.suppressed &&
                 ['Extrude', 'Revolve', 'Boolean'].includes(f.feature_type) &&
-                f.id !== props.featureId // Don't include self
+                f.id !== props.featureId
             );
     });
+
+    // Get feature name by ID
+    const getFeatureName = (id: string): string => {
+        const feature = props.graph?.nodes?.[id];
+        return feature?.name || id.slice(0, 8);
+    };
 
     // Helper to extract FeatureGraph node UUID from a TopoId selection
     const extractFeatureNodeId = (sel: any): string | null => {
@@ -51,7 +57,6 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
         const fId = sel.feature_id;
         if (!fId) return null;
 
-        // TopoId's feature_id might be wrapped in various formats
         let topoFeatureId: string | null = null;
         if (typeof fId === 'string') {
             topoFeatureId = fId;
@@ -61,30 +66,30 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
             topoFeatureId = String(fId);
         }
 
-        // Look up in the mapping to get the FeatureGraph node UUID
         if (topoFeatureId && props.featureIdMap) {
             const nodeUuid = props.featureIdMap[topoFeatureId];
             if (nodeUuid) return nodeUuid;
-            // Debug: log if not found
-            console.log("[BooleanModal] TopoId feature_id not in map:", topoFeatureId);
         }
 
         return null;
     };
 
     // Sync selected bodies to backend
-    const syncToBackend = (op: string, bodies: string[], keepTool: boolean) => {
+    const syncToBackend = (op: string, targets: string[], tools: string[], keepTool: boolean) => {
+        // Combine targets and tools for body_list (target first, then tools)
+        const bodyList = [...targets, ...tools];
+
         const params: { [key: string]: ParameterValue } = {
             operation: { String: op },
-            target_feature: bodies.length > 0 ? { String: bodies[0] } : { String: '' },
-            tool_feature: bodies.length > 1 ? { String: bodies[1] } : { String: '' },
-            body_list: { List: bodies },
-            keep_tool_body: { Bool: keepTool }, // New parameter: if true, tool body is NOT consumed
+            target_feature: targets.length > 0 ? { String: targets[0] } : { String: '' },
+            tool_feature: tools.length > 0 ? { String: tools[0] } : { String: '' },
+            body_list: { List: bodyList },
+            keep_tool_body: { Bool: keepTool },
         };
         props.onUpdate(props.featureId, params);
     };
 
-    // Initialize from saved params AND pre-selections
+    // Initialize from saved params
     onMount(() => {
         const params = props.initialParams;
 
@@ -96,49 +101,61 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
             }
         }
 
-        // Initialize keep_tool_body from params (default false)
+        // Initialize keep_tool_body from params
         if (params['keep_tool_body'] && typeof params['keep_tool_body'] === 'object' && 'Bool' in params['keep_tool_body']) {
             setKeepToolBody((params['keep_tool_body'] as any).Bool);
         }
 
-        // Initialize from saved body_list OR current viewport selection
-        let initialBodies: string[] = [];
+        // Initialize from saved params - target is first, tool is second
+        if (params['target_feature'] && typeof params['target_feature'] === 'object' && 'String' in params['target_feature']) {
+            const targetId = (params['target_feature'] as any).String;
+            if (targetId) {
+                setTargetBodies([targetId]);
+            }
+        }
 
-        // First try saved params
-        if (params['body_list'] && typeof params['body_list'] === 'object' && 'List' in params['body_list']) {
-            initialBodies = (params['body_list'] as any).List.filter((id: string) => id);
+        if (params['tool_feature'] && typeof params['tool_feature'] === 'object' && 'String' in params['tool_feature']) {
+            const toolId = (params['tool_feature'] as any).String;
+            if (toolId) {
+                setToolBodies([toolId]);
+            }
         }
 
         // If no saved bodies, adopt from viewport selection
-        if (initialBodies.length === 0 && props.selection.length > 0) {
+        if (targetBodies().length === 0 && toolBodies().length === 0 && props.selection.length > 0) {
+            const initialBodies: string[] = [];
             for (const sel of props.selection) {
                 const nodeId = extractFeatureNodeId(sel);
                 if (nodeId && !initialBodies.includes(nodeId)) {
-                    // Verify it's a body-producing feature
                     const feature = props.graph?.nodes?.[nodeId];
                     if (feature && ['Extrude', 'Revolve', 'Boolean'].includes(feature.feature_type) && feature.id !== props.featureId) {
                         initialBodies.push(nodeId);
                     }
                 }
             }
+            // First goes to tools (active by default), second to targets
+            if (initialBodies.length >= 1) {
+                setToolBodies([initialBodies[0]]);
+            }
+            if (initialBodies.length >= 2) {
+                setTargetBodies([initialBodies[1]]);
+            }
         }
 
-        if (initialBodies.length > 0) {
-            setSelectedBodies(initialBodies);
-            syncToBackend(operation(), initialBodies, keepToolBody());
+        if (targetBodies().length > 0 || toolBodies().length > 0) {
+            syncToBackend(operation(), targetBodies(), toolBodies(), keepToolBody());
         }
 
         setInitialized(true);
     });
 
-    // Watch for new viewport selections and add to list
+    // Watch for new viewport selections and add to active field
     createEffect(() => {
         if (!initialized()) return;
 
         const currentSel = props.selection;
         if (currentSel.length === 0) return;
 
-        // Extract body feature IDs from current selection
         const newBodies: string[] = [];
         for (const sel of currentSel) {
             const nodeId = extractFeatureNodeId(sel);
@@ -153,65 +170,102 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
         }
 
         if (newBodies.length > 0) {
-            // Add new bodies to the list (without duplicates)
-            const current = selectedBodies();
-            const combined = [...current];
-            for (const id of newBodies) {
-                if (!combined.includes(id)) {
-                    combined.push(id);
+            const field = activeField();
+            if (field === 'tool') {
+                const current = toolBodies();
+                const combined = [...current];
+                for (const id of newBodies) {
+                    if (!combined.includes(id) && !targetBodies().includes(id)) {
+                        combined.push(id);
+                    }
                 }
-            }
-            if (combined.length !== current.length) {
-                setSelectedBodies(combined);
-                syncToBackend(operation(), combined, keepToolBody());
+                if (combined.length !== current.length) {
+                    setToolBodies(combined);
+                    syncToBackend(operation(), targetBodies(), combined, keepToolBody());
+                }
+            } else {
+                const current = targetBodies();
+                const combined = [...current];
+                for (const id of newBodies) {
+                    if (!combined.includes(id) && !toolBodies().includes(id)) {
+                        combined.push(id);
+                    }
+                }
+                if (combined.length !== current.length) {
+                    setTargetBodies(combined);
+                    syncToBackend(operation(), combined, toolBodies(), keepToolBody());
+                }
             }
         }
     });
 
-    const handleOperationChange = (e: Event) => {
-        const val = (e.target as HTMLSelectElement).value as 'Union' | 'Intersect' | 'Subtract';
-        setOperation(val);
-        syncToBackend(val, selectedBodies(), keepToolBody());
+    const handleOperationChange = (op: 'Union' | 'Intersect' | 'Subtract') => {
+        setOperation(op);
+        syncToBackend(op, targetBodies(), toolBodies(), keepToolBody());
     };
 
     const handleKeepToolBodyChange = (e: Event) => {
         const checked = (e.target as HTMLInputElement).checked;
         setKeepToolBody(checked);
-        syncToBackend(operation(), selectedBodies(), checked);
+        syncToBackend(operation(), targetBodies(), toolBodies(), checked);
     };
 
-    const toggleBody = (featureId: string) => {
-        const current = selectedBodies();
-        let updated: string[];
-
-        if (current.includes(featureId)) {
-            updated = current.filter(id => id !== featureId);
-        } else {
-            updated = [...current, featureId];
-        }
-
-        setSelectedBodies(updated);
-        syncToBackend(operation(), updated, keepToolBody());
+    const removeFromTools = (id: string) => {
+        const updated = toolBodies().filter(x => x !== id);
+        setToolBodies(updated);
+        syncToBackend(operation(), targetBodies(), updated, keepToolBody());
     };
 
-    const handleClearAll = () => {
-        setSelectedBodies([]);
-        syncToBackend(operation(), [], keepToolBody());
+    const removeFromTargets = (id: string) => {
+        const updated = targetBodies().filter(x => x !== id);
+        setTargetBodies(updated);
+        syncToBackend(operation(), updated, toolBodies(), keepToolBody());
     };
 
-    const getOperationDescription = () => {
-        switch (operation()) {
-            case 'Union': return 'Combine all selected bodies into one';
-            case 'Intersect': return 'Keep only the overlapping volume';
-            case 'Subtract': return 'Remove second body from first';
-        }
+    const isValid = () => targetBodies().length >= 1 && toolBodies().length >= 1;
+
+    // Styles
+    const tabStyle = (isActive: boolean) => ({
+        padding: '8px 16px',
+        border: 'none',
+        background: isActive ? '#3b82f6' : 'transparent',
+        color: isActive ? 'white' : '#9ca3af',
+        cursor: 'pointer',
+        'font-size': '13px',
+        'font-weight': isActive ? '600' : '400',
+        'border-bottom': isActive ? '2px solid #3b82f6' : '2px solid transparent',
+        transition: 'all 0.15s ease',
+    });
+
+    const selectionBoxStyle = (isActive: boolean, borderColor: string) => ({
+        border: `2px solid ${isActive ? borderColor : '#374151'}`,
+        'border-radius': '6px',
+        padding: '8px 12px',
+        'min-height': '44px',
+        cursor: 'pointer',
+        background: isActive ? `${borderColor}10` : '#1f2937',
+        transition: 'all 0.15s ease',
+    });
+
+    const tagStyle = {
+        display: 'inline-flex',
+        'align-items': 'center',
+        gap: '6px',
+        background: '#374151',
+        padding: '4px 8px',
+        'border-radius': '4px',
+        'font-size': '12px',
+        color: 'white',
     };
 
-    const isValid = () => selectedBodies().length >= 2;
-    const isSelected = (id: string) => selectedBodies().includes(id);
-    const getSelectionOrder = (id: string): number | null => {
-        const idx = selectedBodies().indexOf(id);
-        return idx >= 0 ? idx + 1 : null;
+    const removeButtonStyle = {
+        background: 'none',
+        border: 'none',
+        color: '#9ca3af',
+        cursor: 'pointer',
+        padding: '0',
+        'font-size': '14px',
+        'line-height': '1',
     };
 
     return (
@@ -223,120 +277,129 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
             confirmLabel="Finish"
             confirmDisabled={!isValid()}
         >
-            <div class="flex flex-col gap-3">
-                {/* Operation Type */}
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-gray-400 uppercase font-bold">Operation</label>
-                    <select
-                        value={operation()}
-                        onChange={handleOperationChange}
-                        class="bg-gray-800 text-white text-sm rounded px-2 py-1.5 border border-gray-600 focus:border-blue-500 outline-none"
+            <div style={{ display: 'flex', 'flex-direction': 'column', gap: '16px' }}>
+                {/* Operation Tabs */}
+                <div style={{ display: 'flex', 'border-bottom': '1px solid #374151' }}>
+                    <button
+                        style={tabStyle(operation() === 'Union')}
+                        onClick={() => handleOperationChange('Union')}
                     >
-                        <option value="Union">🔗 Union - Combine bodies</option>
-                        <option value="Intersect">∩ Intersect - Keep overlap</option>
-                        <option value="Subtract">➖ Subtract - Remove second from first</option>
-                    </select>
-                    <span class="text-[10px] text-gray-500 italic">{getOperationDescription()}</span>
+                        Union
+                    </button>
+                    <button
+                        style={tabStyle(operation() === 'Subtract')}
+                        onClick={() => handleOperationChange('Subtract')}
+                    >
+                        Subtract
+                    </button>
+                    <button
+                        style={tabStyle(operation() === 'Intersect')}
+                        onClick={() => handleOperationChange('Intersect')}
+                    >
+                        Intersect
+                    </button>
                 </div>
 
-                <div class="h-px bg-gray-700 w-full"></div>
-
-                {/* Selection Info */}
-                <div class="text-[10px] text-blue-400 bg-blue-900/30 rounded p-2">
-                    <strong>↳ Click on bodies in the 3D viewer</strong> to add them to the selection.
-                </div>
-
-                {/* Available Bodies - Clickable List */}
-                <div class="flex flex-col gap-1">
-                    <div class="flex justify-between items-center">
-                        <label class="text-xs text-gray-400 uppercase font-bold">
-                            Bodies ({selectedBodies().length} selected)
-                        </label>
-                        <button
-                            onClick={handleClearAll}
-                            class="text-[10px] text-red-400 hover:text-red-300"
-                        >
-                            Clear
-                        </button>
+                {/* Tools Selection Box */}
+                <div>
+                    <div style={{ 'font-size': '11px', color: '#9ca3af', 'margin-bottom': '4px', 'text-transform': 'uppercase', 'font-weight': '600' }}>
+                        Tools
                     </div>
-                    <div class="overflow-y-auto max-h-[180px] bg-gray-900 rounded p-1">
-                        {bodyFeatures().length === 0 ? (
-                            <div class="text-[10px] text-gray-500 italic p-2 text-center">
-                                No body features available. Create an Extrude first.
+                    <div
+                        style={selectionBoxStyle(activeField() === 'tool', '#ef4444')}
+                        onClick={() => setActiveField('tool')}
+                    >
+                        <Show when={toolBodies().length > 0} fallback={
+                            <span style={{ color: '#6b7280', 'font-size': '12px', 'font-style': 'italic' }}>
+                                Click to select, then click bodies in viewport
+                            </span>
+                        }>
+                            <div style={{ display: 'flex', 'flex-wrap': 'wrap', gap: '6px' }}>
+                                <For each={toolBodies()}>
+                                    {(id) => (
+                                        <span style={tagStyle}>
+                                            {getFeatureName(id)}
+                                            <button
+                                                style={removeButtonStyle}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    removeFromTools(id);
+                                                }}
+                                                title="Remove"
+                                            >
+                                                ×
+                                            </button>
+                                        </span>
+                                    )}
+                                </For>
                             </div>
-                        ) : (
-                            <For each={bodyFeatures()}>
-                                {(feature) => {
-                                    const selected = isSelected(feature.id);
-                                    const order = getSelectionOrder(feature.id);
-                                    return (
-                                        <div
-                                            class={`flex items-center justify-between text-[11px] px-2 py-1.5 rounded cursor-pointer transition-colors ${selected
-                                                ? 'bg-blue-600/40 text-white border border-blue-500'
-                                                : 'text-gray-300 hover:bg-gray-800 border border-transparent'
-                                                }`}
-                                            onClick={() => toggleBody(feature.id)}
-                                        >
-                                            <span class="flex items-center gap-2">
-                                                {selected && (
-                                                    <span class="bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded font-bold min-w-[18px] text-center">
-                                                        {order}
-                                                    </span>
-                                                )}
-                                                <span class="text-blue-400">
-                                                    {feature.feature_type === 'Extrude' && '⬆️'}
-                                                    {feature.feature_type === 'Revolve' && '🔄'}
-                                                    {feature.feature_type === 'Boolean' && '🔗'}
-                                                </span>
-                                                <span>{feature.name}</span>
-                                            </span>
-                                            <span class="text-[9px] text-gray-500">
-                                                {feature.feature_type}
-                                            </span>
-                                        </div>
-                                    );
-                                }}
-                            </For>
-                        )}
+                        </Show>
                     </div>
                 </div>
 
-                {operation() === 'Subtract' && selectedBodies().length >= 2 && (
-                    <div class="text-[10px] text-gray-400 bg-gray-800/50 rounded p-2">
-                        <strong>Order:</strong>
-                        <span class="text-blue-400 ml-1">1st</span> = target (keep) •
-                        <span class="text-orange-400 ml-1">2nd</span> = tool (remove)
+                {/* Targets Selection Box */}
+                <div>
+                    <div style={{ 'font-size': '11px', color: '#9ca3af', 'margin-bottom': '4px', 'text-transform': 'uppercase', 'font-weight': '600' }}>
+                        Targets
                     </div>
-                )}
+                    <div
+                        style={selectionBoxStyle(activeField() === 'target', '#3b82f6')}
+                        onClick={() => setActiveField('target')}
+                    >
+                        <Show when={targetBodies().length > 0} fallback={
+                            <span style={{ color: '#6b7280', 'font-size': '12px', 'font-style': 'italic' }}>
+                                Click to select, then click bodies in viewport
+                            </span>
+                        }>
+                            <div style={{ display: 'flex', 'flex-wrap': 'wrap', gap: '6px' }}>
+                                <For each={targetBodies()}>
+                                    {(id) => (
+                                        <span style={tagStyle}>
+                                            {getFeatureName(id)}
+                                            <button
+                                                style={removeButtonStyle}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    removeFromTargets(id);
+                                                }}
+                                                title="Remove"
+                                            >
+                                                ×
+                                            </button>
+                                        </span>
+                                    )}
+                                </For>
+                            </div>
+                        </Show>
+                    </div>
+                </div>
 
-                {/* Keep Tool Body Checkbox - only shown for Subtract */}
-                {operation() === 'Subtract' && (
-                    <div class="flex items-center gap-2 bg-gray-800/50 rounded p-2">
-                        <input
-                            type="checkbox"
-                            id="keepToolBody"
-                            checked={keepToolBody()}
-                            onChange={handleKeepToolBodyChange}
-                            class="w-4 h-4 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
-                        />
-                        <label for="keepToolBody" class="text-[11px] text-gray-300">
-                            Keep tool body visible
-                            <span class="text-[9px] text-gray-500 ml-1">(don't consume it)</span>
-                        </label>
-                    </div>
-                )}
+                {/* Keep tools checkbox */}
+                <div style={{ display: 'flex', 'align-items': 'center', gap: '8px' }}>
+                    <input
+                        type="checkbox"
+                        id="keepToolBody"
+                        checked={keepToolBody()}
+                        onChange={handleKeepToolBodyChange}
+                        style={{ width: '16px', height: '16px' }}
+                    />
+                    <label for="keepToolBody" style={{ 'font-size': '13px', color: '#d1d5db' }}>
+                        Keep tools
+                    </label>
+                </div>
 
                 {/* Validation Message */}
-                {!isValid() && (
-                    <div class="text-[10px] text-amber-400 bg-amber-900/30 rounded p-2">
-                        ⚠️ Select at least 2 bodies to perform a boolean operation.
+                <Show when={!isValid()}>
+                    <div style={{
+                        'font-size': '11px',
+                        color: '#fbbf24',
+                        background: 'rgba(251, 191, 36, 0.1)',
+                        'border-radius': '4px',
+                        padding: '8px 12px',
+                    }}>
+                        ⚠️ Select at least one tool and one target body.
                     </div>
-                )}
-
-                {/* Info note */}
-                <div class="text-[10px] text-gray-500 bg-gray-800/50 rounded p-2">
-                    <strong>Tip:</strong> Click bodies in the viewport OR in the list above to select them.
-                </div>
+                </Show>
             </div>
         </BaseModal>
     );

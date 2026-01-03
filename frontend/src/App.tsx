@@ -688,6 +688,7 @@ const App: Component = () => {
               }
             }}
             onEditExtrude={(id) => setEditingExtrudeId(id)}
+            onEditBoolean={(id) => setEditingBooleanId(id)}
             onOpenVariables={() => setShowVariablesPanel(true)}
             rollbackPoint={graph().rollback_point ?? null}
             onSetRollback={setRollback}
