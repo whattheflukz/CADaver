@@ -213,13 +213,28 @@ impl FeatureGraph {
                     continue;
                 }
                 if feature.feature_type == FeatureType::Boolean {
-                    // Get body_list from parameters
+                    // Check if keep_tool_body is set (default false = consume tool body)
+                    let keep_tool_body = match feature.parameters.get("keep_tool_body") {
+                        Some(crate::features::types::ParameterValue::Bool(b)) => *b,
+                        _ => false, // Default: consume tool body
+                    };
+                    
+                    // Get body_list from parameters: [target_id, tool_id]
                     if let Some(crate::features::types::ParameterValue::List(body_ids)) = feature.parameters.get("body_list") {
-                        for body_id_str in body_ids {
+                        for (idx, body_id_str) in body_ids.iter().enumerate() {
                             // Parse UUID and mark as consumed
                             if let Ok(body_uuid) = uuid::Uuid::parse_str(body_id_str) {
                                 let body_entity_id = EntityId(body_uuid);
-                                consumed_features.insert(body_entity_id);
+                                
+                                // idx 0 = target body (always consumed - replaced by boolean result)
+                                // idx 1 = tool body (consumed only if keep_tool_body is false)
+                                if idx == 0 {
+                                    // Target body is always consumed
+                                    consumed_features.insert(body_entity_id);
+                                } else if idx == 1 && !keep_tool_body {
+                                    // Tool body consumed only if not keeping it
+                                    consumed_features.insert(body_entity_id);
+                                }
                             }
                         }
                     }

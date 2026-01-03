@@ -27,6 +27,7 @@ interface BooleanModalProps {
 const BooleanModal: Component<BooleanModalProps> = (props) => {
     const [operation, setOperation] = createSignal<'Union' | 'Intersect' | 'Subtract'>('Union');
     const [selectedBodies, setSelectedBodies] = createSignal<string[]>([]);
+    const [keepToolBody, setKeepToolBody] = createSignal(false); // If true, tool body is NOT consumed
     const [initialized, setInitialized] = createSignal(false);
 
     // Get all features that produce geometry (Extrude, Revolve, Boolean - but not self)
@@ -72,12 +73,13 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
     };
 
     // Sync selected bodies to backend
-    const syncToBackend = (op: string, bodies: string[]) => {
+    const syncToBackend = (op: string, bodies: string[], keepTool: boolean) => {
         const params: { [key: string]: ParameterValue } = {
             operation: { String: op },
             target_feature: bodies.length > 0 ? { String: bodies[0] } : { String: '' },
             tool_feature: bodies.length > 1 ? { String: bodies[1] } : { String: '' },
             body_list: { List: bodies },
+            keep_tool_body: { Bool: keepTool }, // New parameter: if true, tool body is NOT consumed
         };
         props.onUpdate(props.featureId, params);
     };
@@ -92,6 +94,11 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
             if (['Union', 'Intersect', 'Subtract'].includes(op)) {
                 setOperation(op);
             }
+        }
+
+        // Initialize keep_tool_body from params (default false)
+        if (params['keep_tool_body'] && typeof params['keep_tool_body'] === 'object' && 'Bool' in params['keep_tool_body']) {
+            setKeepToolBody((params['keep_tool_body'] as any).Bool);
         }
 
         // Initialize from saved body_list OR current viewport selection
@@ -118,7 +125,7 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
 
         if (initialBodies.length > 0) {
             setSelectedBodies(initialBodies);
-            syncToBackend(operation(), initialBodies);
+            syncToBackend(operation(), initialBodies, keepToolBody());
         }
 
         setInitialized(true);
@@ -156,7 +163,7 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
             }
             if (combined.length !== current.length) {
                 setSelectedBodies(combined);
-                syncToBackend(operation(), combined);
+                syncToBackend(operation(), combined, keepToolBody());
             }
         }
     });
@@ -164,7 +171,13 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
     const handleOperationChange = (e: Event) => {
         const val = (e.target as HTMLSelectElement).value as 'Union' | 'Intersect' | 'Subtract';
         setOperation(val);
-        syncToBackend(val, selectedBodies());
+        syncToBackend(val, selectedBodies(), keepToolBody());
+    };
+
+    const handleKeepToolBodyChange = (e: Event) => {
+        const checked = (e.target as HTMLInputElement).checked;
+        setKeepToolBody(checked);
+        syncToBackend(operation(), selectedBodies(), checked);
     };
 
     const toggleBody = (featureId: string) => {
@@ -178,12 +191,12 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
         }
 
         setSelectedBodies(updated);
-        syncToBackend(operation(), updated);
+        syncToBackend(operation(), updated, keepToolBody());
     };
 
     const handleClearAll = () => {
         setSelectedBodies([]);
-        syncToBackend(operation(), []);
+        syncToBackend(operation(), [], keepToolBody());
     };
 
     const getOperationDescription = () => {
@@ -259,8 +272,8 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
                                     return (
                                         <div
                                             class={`flex items-center justify-between text-[11px] px-2 py-1.5 rounded cursor-pointer transition-colors ${selected
-                                                    ? 'bg-blue-600/40 text-white border border-blue-500'
-                                                    : 'text-gray-300 hover:bg-gray-800 border border-transparent'
+                                                ? 'bg-blue-600/40 text-white border border-blue-500'
+                                                : 'text-gray-300 hover:bg-gray-800 border border-transparent'
                                                 }`}
                                             onClick={() => toggleBody(feature.id)}
                                         >
@@ -288,12 +301,28 @@ const BooleanModal: Component<BooleanModalProps> = (props) => {
                     </div>
                 </div>
 
-                {/* Selection Order Info for Subtract */}
                 {operation() === 'Subtract' && selectedBodies().length >= 2 && (
                     <div class="text-[10px] text-gray-400 bg-gray-800/50 rounded p-2">
                         <strong>Order:</strong>
                         <span class="text-blue-400 ml-1">1st</span> = target (keep) •
                         <span class="text-orange-400 ml-1">2nd</span> = tool (remove)
+                    </div>
+                )}
+
+                {/* Keep Tool Body Checkbox - only shown for Subtract */}
+                {operation() === 'Subtract' && (
+                    <div class="flex items-center gap-2 bg-gray-800/50 rounded p-2">
+                        <input
+                            type="checkbox"
+                            id="keepToolBody"
+                            checked={keepToolBody()}
+                            onChange={handleKeepToolBodyChange}
+                            class="w-4 h-4 text-blue-500 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                        />
+                        <label for="keepToolBody" class="text-[11px] text-gray-300">
+                            Keep tool body visible
+                            <span class="text-[9px] text-gray-500 ml-1">(don't consume it)</span>
+                        </label>
                     </div>
                 )}
 

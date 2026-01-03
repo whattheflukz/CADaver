@@ -58,6 +58,8 @@ interface ViewportProps {
     activeMeasurements?: any[];
     // Inferred constraints for live preview during drawing
     inferredConstraints?: any[];
+    // Hidden bodies - bodies that exist but should not be rendered (separate from suppression)
+    hiddenBodies?: Set<string>;
 }
 
 const Viewport: Component<ViewportProps> = (props) => {
@@ -198,9 +200,39 @@ const Viewport: Component<ViewportProps> = (props) => {
         if (data && data.vertices.length > 0) {
             const geometry = new THREE.BufferGeometry();
 
+            // Filter out triangles from hidden bodies
+            let filteredIndices = data.indices;
+            let filteredTriangleIds = data.triangle_ids;
+
+            if (props.hiddenBodies && props.hiddenBodies.size > 0 && data.feature_id_map) {
+                const visibleIndices: number[] = [];
+                const visibleTriangleIds: any[] = [];
+
+                for (let i = 0; i < data.triangle_ids.length; i++) {
+                    const triangleId = data.triangle_ids[i];
+                    // Check if this triangle belongs to a hidden body
+                    // triangleId has feature_id which maps to feature UUID via feature_id_map
+                    const featureIdStr = triangleId?.feature_id;
+                    const featureUuid = featureIdStr ? data.feature_id_map[featureIdStr] : null;
+
+                    if (!featureUuid || !props.hiddenBodies.has(featureUuid)) {
+                        // Not hidden, include this triangle
+                        visibleIndices.push(
+                            data.indices[i * 3],
+                            data.indices[i * 3 + 1],
+                            data.indices[i * 3 + 2]
+                        );
+                        visibleTriangleIds.push(triangleId);
+                    }
+                }
+
+                filteredIndices = visibleIndices;
+                filteredTriangleIds = visibleTriangleIds;
+            }
+
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
             geometry.setAttribute('normal', new THREE.Float32BufferAttribute(data.normals, 3));
-            geometry.setIndex(data.indices);
+            geometry.setIndex(filteredIndices);
 
             const material = new THREE.MeshStandardMaterial({
                 color: 0x888888, // Neutral grey base
@@ -215,56 +247,94 @@ const Viewport: Component<ViewportProps> = (props) => {
             // Lines for Sketches / Edges
             if (data.line_indices && data.line_indices.length > 0) {
                 // Convert indexed geometry to segment soup for LineSegmentsGeometry
+                // Filter out lines from hidden bodies
                 const segmentPositions: number[] = [];
-                for (let i = 0; i < data.line_indices.length; i++) {
-                    const idx = data.line_indices[i];
+
+                // line_indices come in pairs (start, end), line_ids correspond to each pair
+                for (let i = 0; i < data.line_indices.length; i += 2) {
+                    const lineIdIndex = Math.floor(i / 2);
+                    const lineId = data.line_ids?.[lineIdIndex];
+
+                    // Check if this line belongs to a hidden body
+                    const featureIdStr = lineId?.feature_id;
+                    const featureUuid = featureIdStr && data.feature_id_map ? data.feature_id_map[featureIdStr] : null;
+
+                    if (featureUuid && props.hiddenBodies?.has(featureUuid)) {
+                        // Skip this line - it's from a hidden body
+                        continue;
+                    }
+
+                    const idx1 = data.line_indices[i];
+                    const idx2 = data.line_indices[i + 1];
                     segmentPositions.push(
-                        data.vertices[idx * 3],
-                        data.vertices[idx * 3 + 1],
-                        data.vertices[idx * 3 + 2]
+                        data.vertices[idx1 * 3],
+                        data.vertices[idx1 * 3 + 1],
+                        data.vertices[idx1 * 3 + 2],
+                        data.vertices[idx2 * 3],
+                        data.vertices[idx2 * 3 + 1],
+                        data.vertices[idx2 * 3 + 2]
                     );
                 }
 
-                const lineGeo = new LineSegmentsGeometry();
-                lineGeo.setPositions(segmentPositions);
+                if (segmentPositions.length > 0) {
+                    const lineGeo = new LineSegmentsGeometry();
+                    lineGeo.setPositions(segmentPositions);
 
-                const resolution = (window as any).viewportLineResolution || new THREE.Vector2(window.innerWidth, window.innerHeight);
+                    const resolution = (window as any).viewportLineResolution || new THREE.Vector2(window.innerWidth, window.innerHeight);
 
-                // Edge lines - subtle gray for 3D body edges
-                const lineMat = new LineMaterial({
-                    color: 0x444444, // Dark gray - subtle
-                    linewidth: 10, // Wide enough to click easily
-                    resolution: resolution,
-                    depthTest: true
-                });
+                    // Edge lines - subtle gray for 3D body edges
+                    const lineMat = new LineMaterial({
+                        color: 0x444444, // Dark gray - subtle
+                        linewidth: 10, // Wide enough to click easily
+                        resolution: resolution,
+                        depthTest: true
+                    });
 
-                const lineMesh = new LineSegments2(lineGeo, lineMat);
-                lineMesh.name = "sketch_lines";
-                lineMesh.computeLineDistances();
-                mainMesh.add(lineMesh);
+                    const lineMesh = new LineSegments2(lineGeo, lineMat);
+                    lineMesh.name = "sketch_lines";
+                    lineMesh.computeLineDistances();
+                    mainMesh.add(lineMesh);
+                }
             }
 
             // Points for Vertices
             if (data.point_indices && data.point_indices.length > 0) {
-                const pointGeo = new THREE.BufferGeometry();
-                pointGeo.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
-                pointGeo.setIndex(data.point_indices);
+                // Filter out points from hidden bodies
+                const visiblePointIndices: number[] = [];
 
-                // Vertex points - orange circles with plus sign
-                const pointTexture = createPointMarkerTexture('#ffaa00', 64);
-                const pointMat = new THREE.PointsMaterial({
-                    map: pointTexture,
-                    size: 12, // Slightly larger to accommodate the detail
-                    sizeAttenuation: false,
-                    depthTest: false, // Always on top
-                    transparent: true, // Required for texture alpha
-                    alphaTest: 0.1, // Clip pixels with low alpha
-                });
+                for (let i = 0; i < data.point_indices.length; i++) {
+                    const pointId = data.point_ids?.[i];
+                    const featureIdStr = pointId?.feature_id;
+                    const featureUuid = featureIdStr && data.feature_id_map ? data.feature_id_map[featureIdStr] : null;
 
-                const pointMesh = new THREE.Points(pointGeo, pointMat);
-                pointMesh.name = "vertices";
-                pointMesh.renderOrder = 999;
-                mainMesh.add(pointMesh);
+                    if (featureUuid && props.hiddenBodies?.has(featureUuid)) {
+                        // Skip - from hidden body
+                        continue;
+                    }
+                    visiblePointIndices.push(data.point_indices[i]);
+                }
+
+                if (visiblePointIndices.length > 0) {
+                    const pointGeo = new THREE.BufferGeometry();
+                    pointGeo.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3));
+                    pointGeo.setIndex(visiblePointIndices);
+
+                    // Vertex points - orange circles with plus sign
+                    const pointTexture = createPointMarkerTexture('#ffaa00', 64);
+                    const pointMat = new THREE.PointsMaterial({
+                        map: pointTexture,
+                        size: 12, // Slightly larger to accommodate the detail
+                        sizeAttenuation: false,
+                        depthTest: false, // Always on top
+                        transparent: true, // Required for texture alpha
+                        alphaTest: 0.1, // Clip pixels with low alpha
+                    });
+
+                    const pointMesh = new THREE.Points(pointGeo, pointMat);
+                    pointMesh.name = "vertices";
+                    pointMesh.renderOrder = 999;
+                    mainMesh.add(pointMesh);
+                }
             }
         }
     });

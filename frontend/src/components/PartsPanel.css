@@ -1,0 +1,154 @@
+/* Parts Panel Styles */
+.parts-panel {
+    margin-top: 16px;
+    border-top: 1px solid #3a3a4a;
+    pointer-events: auto;
+    /* Enable clicks since .sidebar has pointer-events: none */
+    background: rgba(30, 30, 30, 0.9);
+    /* Add background so clicks don't pass through */
+}
+
+.parts-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    cursor: pointer;
+    background: #2a2a3a;
+    border-radius: 4px;
+    margin: 8px 4px 4px 4px;
+    transition: background 0.15s ease;
+}
+
+.parts-header:hover {
+    background: #3a3a4a;
+}
+
+.parts-title {
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #e0e0e0;
+}
+
+.parts-count {
+    margin-left: 6px;
+    font-size: 11px;
+    color: #888;
+}
+
+.parts-expander {
+    margin-left: auto;
+    font-size: 10px;
+    color: #888;
+}
+
+.parts-list {
+    padding: 4px;
+}
+
+.parts-empty {
+    padding: 12px;
+    text-align: center;
+    color: #666;
+    font-size: 11px;
+    font-style: italic;
+}
+
+.part-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    margin: 2px 0;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    gap: 8px;
+}
+
+.part-item:hover {
+    background: #3a3a4a;
+}
+
+.part-item.selected {
+    background: #4a5568;
+    border-left: 3px solid #63b3ed;
+}
+
+.part-item.consumed {
+    opacity: 0.55;
+}
+
+.part-item.tool-body {
+    opacity: 0.65;
+}
+
+.part-item.tool-body .part-name {
+    font-style: italic;
+}
+
+.part-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+}
+
+.part-name {
+    flex: 1;
+    font-size: 12px;
+    color: #e0e0e0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.part-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 500;
+}
+
+.part-badge.tool {
+    background: #553c12;
+    color: #f6ad55;
+}
+
+.part-badge.consumed {
+    background: #2d3748;
+    color: #a0aec0;
+}
+
+.part-badge.modified {
+    background: #2d4a7c;
+    color: #63b3ed;
+}
+
+.part-visibility {
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background 0.15s ease;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.part-visibility:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.part-visibility.hidden {
+    opacity: 0.5;
+}
+
+.part-item.hidden-body {
+    opacity: 0.7;
+}
+
+.part-item.hidden-body .part-name {
+    text-decoration: line-through;
+    color: #888;
+}

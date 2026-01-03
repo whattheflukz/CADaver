@@ -4,6 +4,7 @@ import './App.css';
 
 import Viewport from './components/Viewport';
 import FeatureTree from './components/FeatureTree';
+import PartsPanel from './components/PartsPanel';
 import SelectionToolbar from './components/SelectionToolbar';
 import SketchToolbar from './components/SketchToolbar';
 import DimensionHUD from './components/DimensionHUD';
@@ -83,6 +84,21 @@ const App: Component = () => {
       ...prev,
       [plane]: !prev[plane]
     }));
+  };
+
+  // Hidden bodies state - bodies that exist but aren't rendered (different from suppression)
+  const [hiddenBodies, setHiddenBodies] = createSignal<Set<string>>(new Set());
+
+  const toggleBodyVisibility = (id: string) => {
+    setHiddenBodies(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
   };
 
   // Command Palette state
@@ -692,6 +708,15 @@ const App: Component = () => {
             onToggleStandardPlane={toggleStandardPlane}
             onExtrudeSketch={handleExtrude}
           />
+
+          {/* Parts Panel - List of solid bodies */}
+          <PartsPanel
+            graph={graph()}
+            selectedId={selectedFeature()}
+            onSelect={setSelectedFeature}
+            hiddenBodies={hiddenBodies()}
+            onToggleVisibility={toggleBodyVisibility}
+          />
         </div>
         <div class="viewport-container" style={{ position: "relative" }}>
           {!sketchMode() && (
@@ -863,6 +888,7 @@ const App: Component = () => {
             }
             activeMeasurements={sketchMode() ? activeMeasurements() : undefined}
             inferredConstraints={sketchMode() ? inferredConstraints() : undefined}
+            hiddenBodies={hiddenBodies()}
           />
 
 

@@ -2,9 +2,9 @@
     "name": "cad-root",
     "private": true,
     "scripts": {
-        "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"blue,green\" \"cargo +stable run --manifest-path backend/Cargo.toml\" \"npm run dev --prefix frontend\"",
-        "dev:release": "concurrently --names \"backend,frontend\" --prefix-colors \"blue,green\" \"cargo +stable run --release --manifest-path backend/Cargo.toml\" \"npm run dev --prefix frontend\"",
-        "build": "cargo +stable build --workspace && npm run build --prefix frontend"
+        "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"blue,green\" \"cargo run --manifest-path backend/Cargo.toml\" \"npm run dev --prefix frontend\"",
+        "dev:release": "concurrently --names \"backend,frontend\" --prefix-colors \"blue,green\" \"cargo run --release --manifest-path backend/Cargo.toml\" \"npm run dev --prefix frontend\"",
+        "build": "cargo build --workspace && npm run build --prefix frontend"
     },
     "devDependencies": {
         "concurrently": "^9.1.0"
