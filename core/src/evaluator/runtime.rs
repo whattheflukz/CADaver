@@ -1126,6 +1126,297 @@ impl Runtime {
                 
                 Ok(None)
             }
+            "linear_pattern" => {
+                // Linear pattern: creates copies of a source body along a direction
+                // Args: source_var, direction[3], count, spacing
+                let id = generator.next_id();
+                modified.push(id);
+                
+                let mut source_var = String::new();
+                let mut direction: [f64; 3] = [1.0, 0.0, 0.0];
+                let mut count: i32 = 3;
+                let mut spacing: f64 = 10.0;
+                
+                for (i, arg) in call.args.iter().enumerate() {
+                    match (i, arg) {
+                        (0, Expression::Variable(s)) => source_var = s.clone(),
+                        (0, Expression::Value(Value::String(s))) => source_var = s.clone(),
+                        (1, Expression::Value(Value::Array(arr))) if arr.len() >= 3 => {
+                            if let (Value::Number(x), Value::Number(y), Value::Number(z)) = 
+                                (&arr[0], &arr[1], &arr[2]) {
+                                direction = [*x, *y, *z];
+                            }
+                        },
+                        (2, Expression::Value(Value::Number(n))) => count = *n as i32,
+                        (3, Expression::Value(Value::Number(s))) => spacing = *s,
+                        _ => {}
+                    }
+                }
+                
+                logs.push(format!("Linear pattern: source={}, direction={:?}, count={}, spacing={}", 
+                    source_var, direction, count, spacing));
+                
+                if let Some((source_solid, source_transform)) = solid_map.get(&source_var) {
+                    if count <= 1 {
+                        // Just return original solid
+                        logs.push("Pattern count <= 1, returning original solid".to_string());
+                        return Ok(Some((source_solid.clone(), source_transform.clone())));
+                    }
+                    
+                    let kernel = kernel::default_kernel();
+                    let ctx = NamingContext::new(id);
+                    
+                    // Normalize direction
+                    let dir_len = (direction[0].powi(2) + direction[1].powi(2) + direction[2].powi(2)).sqrt();
+                    let dir_norm = if dir_len > 1e-10 {
+                        [direction[0] / dir_len, direction[1] / dir_len, direction[2] / dir_len]
+                    } else {
+                        [1.0, 0.0, 0.0]
+                    };
+                    
+                    // Start with the original solid
+                    let mut result_solid = source_solid.clone();
+                    
+                    // Create and union translated copies
+                    for instance_idx in 1..count {
+                        let offset = spacing * (instance_idx as f64);
+                        let translation = [
+                            dir_norm[0] * offset,
+                            dir_norm[1] * offset,
+                            dir_norm[2] * offset,
+                        ];
+                        
+                        // Translate the solid using Truck's transformation
+                        use truck_modeling::cgmath::{Matrix4, Vector3 as CgVector3};
+                        use truck_geotrait::Transformed;
+                        use truck_topology::Shell;
+                        use truck_modeling::{Point3, Curve, Surface};
+                        
+                        let transform = Matrix4::from_translation(
+                            CgVector3::new(translation[0], translation[1], translation[2])
+                        );
+                        
+                        let translated_boundaries: Vec<Shell<Point3, Curve, Surface>> = source_solid.boundaries()
+                            .iter()
+                            .map(|shell| {
+                                shell.mapped(
+                                    |p| Point3::new(p.x + translation[0], p.y + translation[1], p.z + translation[2]),
+                                    |c: &Curve| Transformed::transformed(c, transform),
+                                    |s: &Surface| Transformed::transformed(s, transform),
+                                )
+                            })
+                            .collect();
+                        
+                        let translated_solid = Solid::new_unchecked(translated_boundaries);
+                        
+                        // Union with accumulated result
+                        // Union with accumulated result
+                        match kernel.boolean_union(&result_solid, &translated_solid) {
+                            Ok(unioned) => {
+                                result_solid = unioned;
+                                logs.push(format!("Pattern instance {} unioned successfully", instance_idx));
+                            }
+                            Err(e) => {
+                                logs.push(format!("Union failed for instance {} ({:?}), appending as disjoint shell", instance_idx, e));
+                                let mut boundaries = result_solid.boundaries().clone();
+                                boundaries.extend(translated_solid.boundaries().clone());
+                                result_solid = Solid::new_unchecked(boundaries);
+                            }
+                        }
+                    }
+                    
+                    // Tessellate and output
+                    if !is_assignment {
+                        match kernel.tessellate(&result_solid) {
+                            Ok(mut mesh) => {
+                                // Transform from local space to world space using source transform
+                                let origin = source_transform.origin;
+                                let x_axis = source_transform.x_axis;
+                                let y_axis = source_transform.y_axis;
+                                let normal = source_transform.normal;
+                                
+                                for p in &mut mesh.positions {
+                                    let u = p.x;
+                                    let v = p.y;
+                                    let w = p.z;
+                                    
+                                    p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
+                                    p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
+                                    p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                }
+                                
+                                kernel.mesh_to_tessellation(
+                                    &mesh,
+                                    tessellation,
+                                    topology_manifest,
+                                    &ctx,
+                                    "LinearPattern"
+                                );
+                                logs.push(format!("Linear pattern created with {} instances", count));
+                            }
+                            Err(e) => {
+                                logs.push(format!("Linear pattern tessellation failed: {:?}", e));
+                            }
+                        }
+                    }
+                    
+                    return Ok(Some((result_solid, source_transform.clone())));
+                } else {
+                    logs.push(format!("Warning: Could not find source solid {} for linear pattern", source_var));
+                }
+                
+                Ok(None)
+            }
+            "circular_pattern" => {
+                // Circular pattern: creates copies of a source body around an axis
+                // Args: source_var, axis, center[3], count, angle_span
+                let id = generator.next_id();
+                modified.push(id);
+                
+                let mut source_var = String::new();
+                let mut axis = "Z";
+                let mut center: [f64; 3] = [0.0, 0.0, 0.0];
+                let mut count: i32 = 6;
+                let mut angle_span: f64 = 360.0;
+                
+                for (i, arg) in call.args.iter().enumerate() {
+                    match (i, arg) {
+                        (0, Expression::Variable(s)) => source_var = s.clone(),
+                        (0, Expression::Value(Value::String(s))) => source_var = s.clone(),
+                        (1, Expression::Value(Value::String(s))) => axis = Box::leak(s.clone().into_boxed_str()),
+                        (2, Expression::Value(Value::Array(arr))) if arr.len() >= 3 => {
+                            if let (Value::Number(x), Value::Number(y), Value::Number(z)) = 
+                                (&arr[0], &arr[1], &arr[2]) {
+                                center = [*x, *y, *z];
+                            }
+                        },
+                        (3, Expression::Value(Value::Number(n))) => count = *n as i32,
+                        (4, Expression::Value(Value::Number(a))) => angle_span = *a,
+                        _ => {}
+                    }
+                }
+                
+                logs.push(format!("Circular pattern: source={}, axis={}, center={:?}, count={}, angle={}", 
+                    source_var, axis, center, count, angle_span));
+                
+                if let Some((source_solid, source_transform)) = solid_map.get(&source_var) {
+                    if count <= 1 {
+                        return Ok(Some((source_solid.clone(), source_transform.clone())));
+                    }
+                    
+                    let kernel = kernel::default_kernel();
+                    let ctx = NamingContext::new(id);
+                    
+                    // Axis vector
+                    let axis_vec: [f64; 3] = match axis {
+                        "X" => [1.0, 0.0, 0.0],
+                        "Y" => [0.0, 1.0, 0.0],
+                        _ => [0.0, 0.0, 1.0], // Z default
+                    };
+                    
+                    // Angle per instance
+                    let angle_increment = angle_span.to_radians() / (count as f64);
+                    
+                    let mut result_solid = source_solid.clone();
+                    
+                    for instance_idx in 1..count {
+                        let angle = angle_increment * (instance_idx as f64);
+                        
+                        // Rotate around axis using cgmath rotation matrix
+                        use truck_modeling::cgmath::{Matrix4, Vector3 as CgVector3, Rad, Matrix3, SquareMatrix};
+                        use truck_geotrait::Transformed;
+                        use truck_topology::Shell;
+                        use truck_modeling::{Point3, Curve, Surface};
+                        
+                        // Create rotation matrix around axis at center
+                        let axis_normalized = CgVector3::new(axis_vec[0], axis_vec[1], axis_vec[2]);
+                        let rotation = Matrix3::from_axis_angle(axis_normalized, Rad(angle));
+                        
+                        let rotated_boundaries: Vec<Shell<Point3, Curve, Surface>> = source_solid.boundaries()
+                            .iter()
+                            .map(|shell| {
+                                shell.mapped(
+                                    |p| {
+                                        // Translate to center, rotate, translate back
+                                        let rel = CgVector3::new(p.x - center[0], p.y - center[1], p.z - center[2]);
+                                        let rotated = rotation * rel;
+                                        Point3::new(
+                                            rotated.x + center[0],
+                                            rotated.y + center[1], 
+                                            rotated.z + center[2]
+                                        )
+                                    },
+                                    |c: &Curve| {
+                                        // For curves, we need full transformation matrix
+                                        let t1 = Matrix4::from_translation(CgVector3::new(-center[0], -center[1], -center[2]));
+                                        let r = Matrix4::from(rotation);
+                                        let t2 = Matrix4::from_translation(CgVector3::new(center[0], center[1], center[2]));
+                                        let transform = t2 * r * t1;
+                                        Transformed::transformed(c, transform)
+                                    },
+                                    |s: &Surface| {
+                                        let t1 = Matrix4::from_translation(CgVector3::new(-center[0], -center[1], -center[2]));
+                                        let r = Matrix4::from(rotation);
+                                        let t2 = Matrix4::from_translation(CgVector3::new(center[0], center[1], center[2]));
+                                        let transform = t2 * r * t1;
+                                        Transformed::transformed(s, transform)
+                                    },
+                                )
+                            })
+                            .collect();
+                        
+                        let rotated_solid = Solid::new_unchecked(rotated_boundaries);
+                        
+                        match kernel.boolean_union(&result_solid, &rotated_solid) {
+                            Ok(unioned) => {
+                                result_solid = unioned;
+                            }
+                            Err(e) => {
+                                logs.push(format!("Warning: Circular pattern union failed for instance {}: {:?}", instance_idx, e));
+                            }
+                        }
+                    }
+                    
+                    if !is_assignment {
+                        match kernel.tessellate(&result_solid) {
+                            Ok(mut mesh) => {
+                                let origin = source_transform.origin;
+                                let x_axis = source_transform.x_axis;
+                                let y_axis = source_transform.y_axis;
+                                let normal = source_transform.normal;
+                                
+                                for p in &mut mesh.positions {
+                                    let u = p.x;
+                                    let v = p.y;
+                                    let w = p.z;
+                                    
+                                    p.x = origin[0] + u * x_axis[0] + v * y_axis[0] + w * normal[0];
+                                    p.y = origin[1] + u * x_axis[1] + v * y_axis[1] + w * normal[1];
+                                    p.z = origin[2] + u * x_axis[2] + v * y_axis[2] + w * normal[2];
+                                }
+                                
+                                kernel.mesh_to_tessellation(
+                                    &mesh,
+                                    tessellation,
+                                    topology_manifest,
+                                    &ctx,
+                                    "CircularPattern"
+                                );
+                                logs.push(format!("Circular pattern created with {} instances", count));
+                            }
+                            Err(e) => {
+                                logs.push(format!("Circular pattern tessellation failed: {:?}", e));
+                            }
+                        }
+                    }
+                    
+                    return Ok(Some((result_solid, source_transform.clone())));
+                } else {
+                    logs.push(format!("Warning: Could not find source solid {} for circular pattern", source_var));
+                }
+                
+                Ok(None)
+            }
             "sphere" => {
                 let id = generator.next_id();
                 modified.push(id);

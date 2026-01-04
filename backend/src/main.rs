@@ -69,6 +69,7 @@ struct CreateCmd {
     feature_type: String, 
     name: String,
     dependencies: Option<Vec<uuid::Uuid>>,
+    params: Option<std::collections::HashMap<String, cad_core::features::types::ParameterValue>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -224,6 +225,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                           "Plane" => cad_core::features::types::FeatureType::Plane,
                           "Axis" => cad_core::features::types::FeatureType::Axis,
                           "Point" => cad_core::features::types::FeatureType::Point,
+                          "LinearPattern" => cad_core::features::types::FeatureType::LinearPattern,
+                          "CircularPattern" => cad_core::features::types::FeatureType::CircularPattern,
                           _ => {
                               warn!("Unknown feature type: {}", cmd.feature_type);
                               cad_core::features::types::FeatureType::Point

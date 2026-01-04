@@ -273,6 +273,13 @@ export const COMMAND_DEFINITIONS: Command[] = [
         modes: ["modeling"],
         category: "modeling",
     },
+    {
+        id: "action:linear_pattern",
+        name: "Linear Pattern (Solid)",
+        description: "Create a linear array of a solid body",
+        modes: ["modeling"],
+        category: "modeling",
+    },
 
     // === GLOBAL COMMANDS (All Modes) ===
     {

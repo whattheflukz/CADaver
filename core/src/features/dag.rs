@@ -522,6 +522,115 @@ impl FeatureGraph {
                             None
                         }
                     },
+                    FeatureType::LinearPattern => {
+                        // Linear pattern: creates copies of a source body along a direction
+                        // Source body from first dependency (required)
+                        if let Some(dep_id) = feature.dependencies.first() {
+                            let mut args = Vec::new();
+                            
+                            let source_var = format!("feat_{}", dep_id);
+                            args.push(Expression::Variable(source_var));
+                            
+                            // Direction vector (default X axis)
+                            let direction = match feature.parameters.get("direction") {
+                                Some(crate::features::types::ParameterValue::List(list)) if list.len() >= 3 => {
+                                    vec![
+                                        list[0].parse::<f64>().unwrap_or(1.0),
+                                        list[1].parse::<f64>().unwrap_or(0.0),
+                                        list[2].parse::<f64>().unwrap_or(0.0),
+                                    ]
+                                },
+                                Some(crate::features::types::ParameterValue::String(s)) => {
+                                    match s.as_str() {
+                                        "X" => vec![1.0, 0.0, 0.0],
+                                        "Y" => vec![0.0, 1.0, 0.0],
+                                        "Z" => vec![0.0, 0.0, 1.0],
+                                        _ => vec![1.0, 0.0, 0.0], // Default X
+                                    }
+                                },
+                                _ => vec![1.0, 0.0, 0.0], // Default X axis
+                            };
+                            args.push(Expression::Value(Value::Array(
+                                direction.into_iter().map(Value::Number).collect()
+                            )));
+                            
+                            // Count (default 3)
+                            let count = match feature.parameters.get("count") {
+                                Some(crate::features::types::ParameterValue::Float(n)) => *n as i32,
+                                _ => 3,
+                            };
+                            args.push(Expression::Value(Value::Number(count as f64)));
+                            
+                            // Spacing (default 10.0)
+                            let spacing = match feature.parameters.get("spacing") {
+                                Some(crate::features::types::ParameterValue::Float(s)) => *s,
+                                _ => 10.0,
+                            };
+                            args.push(Expression::Value(Value::Number(spacing)));
+                            
+                            Some(Call {
+                                function: "linear_pattern".to_string(),
+                                args,
+                            })
+                        } else {
+                            // No source body - skip
+                            None
+                        }
+                    },
+                    FeatureType::CircularPattern => {
+                        // Circular pattern: creates copies of a source body around an axis
+                        // Source body from first dependency (required)
+                        if let Some(dep_id) = feature.dependencies.first() {
+                            let mut args = Vec::new();
+                            
+                            let source_var = format!("feat_{}", dep_id);
+                            args.push(Expression::Variable(source_var));
+                            
+                            // Axis (default Z)
+                            let axis = match feature.parameters.get("axis") {
+                                Some(crate::features::types::ParameterValue::String(s)) => s.clone(),
+                                _ => "Z".to_string(),
+                            };
+                            args.push(Expression::Value(Value::String(axis)));
+                            
+                            // Center point (default origin)
+                            let center = match feature.parameters.get("center") {
+                                Some(crate::features::types::ParameterValue::List(list)) if list.len() >= 3 => {
+                                    vec![
+                                        list[0].parse::<f64>().unwrap_or(0.0),
+                                        list[1].parse::<f64>().unwrap_or(0.0),
+                                        list[2].parse::<f64>().unwrap_or(0.0),
+                                    ]
+                                },
+                                _ => vec![0.0, 0.0, 0.0],
+                            };
+                            args.push(Expression::Value(Value::Array(
+                                center.into_iter().map(Value::Number).collect()
+                            )));
+                            
+                            // Count (default 6)
+                            let count = match feature.parameters.get("count") {
+                                Some(crate::features::types::ParameterValue::Float(n)) => *n as i32,
+                                _ => 6,
+                            };
+                            args.push(Expression::Value(Value::Number(count as f64)));
+                            
+                            // Angle span in degrees (default 360 = full circle, equal spacing)
+                            let angle = match feature.parameters.get("angle") {
+                                Some(crate::features::types::ParameterValue::Float(a)) => *a,
+                                _ => 360.0,
+                            };
+                            args.push(Expression::Value(Value::Number(angle)));
+                            
+                            Some(Call {
+                                function: "circular_pattern".to_string(),
+                                args,
+                            })
+                        } else {
+                            // No source body - skip
+                            None
+                        }
+                    },
                     _ => None
                 };
 
@@ -1030,5 +1139,88 @@ mod tests {
         let result = graph.reorder_feature(f4.id, 0);
         assert!(result.is_ok(), "Independent feature should be able to move to start");
         assert_eq!(graph.sort_order[0], f4.id);
+    }
+    #[test]
+    fn test_linear_pattern_regeneration() {
+        let mut graph = FeatureGraph::new();
+        // 1. Create source feature (e.g. Extrude)
+        let f1 = Feature::new("SourceBody", FeatureType::Extrude);
+        
+        // 2. Create Linear Pattern feature
+        let mut f2 = Feature::new("Pattern1", FeatureType::LinearPattern);
+        f2.dependencies = vec![f1.id];
+        // Set parameters
+        f2.parameters.insert("direction".to_string(), ParameterValue::String("Y".to_string()));
+        f2.parameters.insert("count".to_string(), ParameterValue::Float(5.0));
+        f2.parameters.insert("spacing".to_string(), ParameterValue::Float(15.0));
+
+        graph.add_node(f1.clone());
+        graph.add_node(f2.clone());
+
+        // Regenerate
+        let program = graph.regenerate();
+
+        // Check for linear_pattern call
+        // Statement layout: 
+        // 0: set_context(f1)
+        // 1: f1 = extrude(...)
+        // 2: set_context(f2)
+        // 3: f2 = linear_pattern(source, direction, count, spacing)
+        
+        // Find the pattern assignment
+        let pattern_stmt = program.statements.iter().find(|s| {
+             matches!(s, crate::evaluator::ast::Statement::Assignment { name, .. } if name == &format!("feat_{}", f2.id))
+        }).expect("Should find pattern assignment");
+
+        // Verify arguments
+        if let crate::evaluator::ast::Statement::Assignment { expr, .. } = pattern_stmt {
+            if let crate::evaluator::ast::Expression::Call(c) = expr {
+                assert_eq!(c.function, "linear_pattern");
+                assert_eq!(c.args.len(), 4, "Should have 4 args: source, direction, count, spacing");
+                
+                // Arg 0: Source variable
+                match &c.args[0] {
+                    crate::evaluator::ast::Expression::Variable(v) => {
+                        assert_eq!(v, &format!("feat_{}", f1.id));
+                    },
+                    _ => panic!("Expected variable for source"),
+                }
+
+                // Arg 1: Direction vector [0, 1, 0] (for "Y")
+                match &c.args[1] {
+                     crate::evaluator::ast::Expression::Value(
+                         crate::evaluator::ast::Value::Array(arr)
+                     ) => {
+                         assert_eq!(arr.len(), 3);
+                         // Check Y is 1.0
+                         if let crate::evaluator::ast::Value::Number(n) = arr[1] {
+                             assert!((n - 1.0).abs() < 1e-6);
+                         } else { panic!("Expected number"); }
+                     },
+                     _ => panic!("Expected array for direction"),
+                }
+
+                // Arg 2: Count (5)
+                 match &c.args[2] {
+                     crate::evaluator::ast::Expression::Value(
+                         crate::evaluator::ast::Value::Number(n)
+                     ) => {
+                         assert!((n - 5.0).abs() < 1e-6);
+                     },
+                     _ => panic!("Expected number for count"),
+                }
+
+                // Arg 3: Spacing (15.0)
+                 match &c.args[3] {
+                     crate::evaluator::ast::Expression::Value(
+                         crate::evaluator::ast::Value::Number(n)
+                     ) => {
+                         assert!((n - 15.0).abs() < 1e-6);
+                     },
+                     _ => panic!("Expected number for spacing"),
+                }
+
+            } else { panic!("Expected Call expression"); }
+        }
     }
 }

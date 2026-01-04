@@ -22,6 +22,7 @@ import BooleanModal from './components/BooleanModal';
 import PlaneModal from './components/PlaneModal';
 import PointModal from './components/PointModal';
 import ModelingToolbar from './components/ModelingToolbar';
+import { LinearPatternModal3D } from './components/LinearPatternModal3D';
 import CommandPalette from './components/CommandPalette';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal';
 import VariablesPanel from './components/VariablesPanel';
@@ -48,6 +49,8 @@ const App: Component = () => {
   const [pendingExtrude, setPendingExtrude] = createSignal(false);
   const [pendingExtrudeName, setPendingExtrudeName] = createSignal<string | null>(null);
   const [editingExtrudeId, setEditingExtrudeId] = createSignal<string | null>(null);
+  const [editingLinearPatternId, setEditingLinearPatternId] = createSignal<string | null>(null);
+
   // For region click detection in extrude mode
   const [regionClickPoint, setRegionClickPoint] = createSignal<[number, number] | null>(null);
 
@@ -63,6 +66,7 @@ const App: Component = () => {
 
   // Plane Modal state
   const [showPlaneModal, setShowPlaneModal] = createSignal(false);
+  const [showLinearPatternModal, setShowLinearPatternModal] = createSignal(false);
 
   // Point Modal state
   const [showPointModal, setShowPointModal] = createSignal(false);
@@ -403,6 +407,38 @@ const App: Component = () => {
     send({ command: 'CreateFeature', payload: cmd });
   };
 
+  const handleLinearPattern = () => {
+    setShowLinearPatternModal(true);
+  };
+
+  const handleLinearPatternCreate = (params: { bodyId: string; direction: [number, number, number]; count: number; spacing: number }) => {
+    const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'LinearPattern').length;
+    const name = `LinearPattern ${existing + 1}`;
+
+    // Convert direction array to list param
+    const featureParams = {
+      direction: { List: params.direction.map(String) },
+      count: { Float: params.count },
+      spacing: { Float: params.spacing },
+    };
+
+    const cmd = {
+      type: "LinearPattern",
+      name,
+      dependencies: [params.bodyId],
+      params: featureParams
+    };
+
+    setPendingBooleanName(name);
+    setPendingBoolean(true);
+
+    if (editingLinearPatternId()) {
+      send({ command: 'UpdateFeature', payload: { id: editingLinearPatternId()!, params: featureParams } });
+    } else {
+      send({ command: 'CreateFeature', payload: cmd });
+    }
+  };
+
   const handlePointCreate = (params: Record<string, any>) => {
     const existing = Object.values(graph().nodes).filter(n => n.feature_type === 'Point').length;
     const name = params.name?.String || `Point ${existing + 1}`;
@@ -580,6 +616,9 @@ const App: Component = () => {
           handleExtrude();
         }
         break;
+      case 'action:linear_pattern':
+        handleLinearPattern();
+        break;
       case 'action:new_sketch':
         if (!sketchMode() && !sketchSetupMode()) {
           const name = "Sketch " + (Object.keys(graph().nodes).length + 1);
@@ -637,7 +676,7 @@ const App: Component = () => {
   return (
     <div class="app">
       <header class="header">
-        <h1>CADaver</h1>
+        <h1>CADaver <span style="font-size: 0.5em; opacity: 0.5; font-weight: normal;">v0.1.0-alpha (Build 2026.01.04)</span></h1>
         <div class={`status ${status().toLowerCase()}`}>
           {status()}
         </div>
@@ -689,6 +728,10 @@ const App: Component = () => {
             }}
             onEditExtrude={(id) => setEditingExtrudeId(id)}
             onEditBoolean={(id) => setEditingBooleanId(id)}
+            onEditLinearPattern={(id) => {
+              setEditingLinearPatternId(id);
+              setShowLinearPatternModal(true);
+            }}
             onOpenVariables={() => setShowVariablesPanel(true)}
             rollbackPoint={graph().rollback_point ?? null}
             onSetRollback={setRollback}
@@ -757,6 +800,7 @@ const App: Component = () => {
               onPlane={handlePlane}
               onPoint={handlePoint}
               onBoolean={handleBoolean}
+              onLinearPattern={handleLinearPattern}
             />
           )}
 
@@ -1277,6 +1321,19 @@ const App: Component = () => {
             send({ command: 'ClearSelection' });
           }}
         />
+
+        {showLinearPatternModal() && (
+          <LinearPatternModal3D
+            isOpen={showLinearPatternModal()}
+            onClose={() => setShowLinearPatternModal(false)}
+            onConfirm={handleLinearPatternCreate}
+            graph={graph()}
+            selection={selection()}
+            featureIdMap={featureIdMap()}
+            featureId={editingLinearPatternId() || undefined}
+            initialParams={editingLinearPatternId() ? graph().nodes[editingLinearPatternId()!]?.parameters : undefined}
+          />
+        )}
 
         {/* Sketch Selection Panel */}
         <SketchSelectionPanel

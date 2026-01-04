@@ -118,6 +118,9 @@ pub enum FeatureType {
     Chamfer,
     Boolean,
     Cut,
+    // Patterns
+    LinearPattern,
+    CircularPattern,
     // Datums
     Plane,
     Axis,

@@ -16,6 +16,7 @@ interface FeatureTreeProps {
     onEditSketch?: (id: string) => void;
     onEditExtrude?: (id: string) => void;
     onEditBoolean?: (id: string) => void;
+    onEditLinearPattern?: (id: string) => void;
     onOpenVariables?: () => void;
     rollbackPoint?: string | null;
     onSetRollback?: (id: string | null) => void;
@@ -332,8 +333,8 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                     {feature().suppressed ? '🚫' : '👁️'}
                                                 </span>
 
-                                                {/* Edit icon - for Sketch, Extrude, and Boolean */}
-                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean') && (
+                                                {/* Edit icon - for Sketch, Extrude, Boolean, and LinearPattern */}
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean' || feature().feature_type === 'LinearPattern') && (
                                                     <span
                                                         class="feature-edit"
                                                         onClick={(e) => {
@@ -342,6 +343,8 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                                 props.onEditSketch?.(id);
                                                             } else if (feature().feature_type === 'Boolean') {
                                                                 props.onEditBoolean?.(id);
+                                                            } else if (feature().feature_type === 'LinearPattern') {
+                                                                props.onEditLinearPattern?.(id);
                                                             } else {
                                                                 props.onEditExtrude?.(id);
                                                             }
@@ -353,7 +356,7 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                                 )}
 
                                                 {/* Expand/collapse arrow */}
-                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean') && (
+                                                {(feature().feature_type === 'Sketch' || feature().feature_type === 'Extrude' || feature().feature_type === 'Boolean' || feature().feature_type === 'LinearPattern') && (
                                                     <span
                                                         class="feature-expander"
                                                         onClick={(e) => {
@@ -381,6 +384,9 @@ const FeatureTree: Component<FeatureTreeProps> = (props) => {
                                             )}
                                             {feature().feature_type === 'Boolean' && props.expanded[id] && (
                                                 <BooleanInfo feature={feature()} />
+                                            )}
+                                            {feature().feature_type === 'LinearPattern' && props.expanded[id] && (
+                                                <PatternInfo feature={feature()} graph={props.graph} />
                                             )}
                                         </div>
                                     );
@@ -651,5 +657,38 @@ function getOpName(op: any) {
     }
     return 'Operation';
 }
+
+// Sub-component for Pattern info display
+const PatternInfo: Component<{ feature: Feature, graph: FeatureGraphState }> = (props) => {
+    // Get dependencies (bodies to pattern)
+    // LinearPattern dependencies usually include the body(s) to pattern
+    const getSourceBodies = () => {
+        const deps = props.feature.dependencies || [];
+        // Map dependency IDs to feature names
+        return deps.map(id => {
+            const f = props.graph.nodes[id];
+            return f ? f.name : 'Unknown Body';
+        });
+    };
+
+    const bodies = getSourceBodies();
+
+    return (
+        <div class="feature-children">
+            {bodies.length > 0 ? (
+                <For each={bodies}>
+                    {(name) => (
+                        <div style={{ "font-size": "11px", color: "#9ca3af", "padding-left": "4px", "display": "flex", "align-items": "center", "gap": "4px" }}>
+                            <span>•</span>
+                            <span>{name}</span>
+                        </div>
+                    )}
+                </For>
+            ) : (
+                <div style={{ "font-size": "11px", "font-style": "italic", color: "#6b7280" }}>No attached bodies</div>
+            )}
+        </div>
+    );
+};
 
 export default FeatureTree;

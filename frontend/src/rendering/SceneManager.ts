@@ -70,6 +70,36 @@ export class SceneManager {
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
 
+        // User Customization: CAD-style controls
+        // 1. Left click: Reserved for selection (disable orbit)
+        // 2. Middle click: Pan
+        // 3. Right click: Rotate
+        this.controls.mouseButtons = {
+            LEFT: null as any,
+            MIDDLE: THREE.MOUSE.PAN,
+            RIGHT: THREE.MOUSE.ROTATE
+        };
+
+        // 4. Infinite orbit support
+        // OrbitControls by default allows 0 to PI (pole to pole).
+        // Removing boundaries I added previously.
+
+        // 5. Alt + Right Click for Pan
+        this.container.addEventListener('mousedown', (e) => {
+            if (e.button === 2 && e.altKey) {
+                this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+            }
+        }, { capture: true });
+
+        this.container.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                this.controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+            }
+        }, { capture: true });
+
+        // Prevent context menu on right click to avoid interference
+        this.container.addEventListener('contextmenu', (e) => e.preventDefault());
+
         // Helpers
         const gridSize = config.gridSize ?? 50;
         const gridDivisions = config.gridDivisions ?? 50;

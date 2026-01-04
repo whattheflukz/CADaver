@@ -14,6 +14,7 @@ interface ModelingToolbarProps {
     onRevolve: () => void;
     onFillet: () => void;
     onChamfer: () => void;
+    onLinearPattern?: () => void;
     onPlane?: () => void;
     onPoint?: () => void;
     onBoolean?: () => void;
@@ -75,6 +76,16 @@ const ModelingToolbar: Component<ModelingToolbarProps> = (props) => {
                 isActive={false}
                 onClick={() => props.onBoolean?.()}
                 description="Combine, intersect, or subtract bodies"
+                minWidth="60px"
+            />
+
+            {/* Linear Pattern Button */}
+            <ToolButton
+                icon="🔢"
+                label="Pattern"
+                isActive={false}
+                onClick={() => props.onLinearPattern?.()}
+                description="Create linear array of solids"
                 minWidth="60px"
             />
 

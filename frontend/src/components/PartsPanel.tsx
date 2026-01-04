@@ -89,29 +89,60 @@ const PartsPanel: Component<PartsPanelProps> = (props) => {
                 continue;
             }
 
+            // Start LinearPattern consumption logic
+            if (feature.feature_type === 'LinearPattern' || feature.feature_type === 'CircularPattern') {
+                const deps = feature.dependencies || [];
+                deps.forEach(depId => toolBodies.add(depId));
+            }
+
             // Check if this feature produces a solid body
-            const producesSolid = ['Extrude', 'Revolve'].includes(feature.feature_type);
+            const producesSolid = ['Extrude', 'Revolve', 'LinearPattern', 'CircularPattern'].includes(feature.feature_type);
 
             if (producesSolid) {
                 const isToolBody = toolBodies.has(id);
-                const booleanId = targetBodies.get(id);
-                const isModifiedByBoolean = !!booleanId;
+                // LinearPattern/CircularPattern specific logic: Expand to multiple parts if count > 1
+                if ((feature.feature_type === 'LinearPattern' || feature.feature_type === 'CircularPattern') && !isToolBody) {
+                    const params = feature.parameters || {};
+                    let count = 1;
+                    // Extract count
+                    if (params.count) {
+                        count = typeof params.count === 'object' && 'Float' in params.count
+                            ? params.count.Float
+                            : Number(params.count);
+                    }
 
-                // For visibility toggling:
-                // - Target body modified by Boolean -> toggle the Boolean's tessellation
-                // - Tool body / unmodified body -> toggle the feature's own tessellation
-                const tessellationFeatureId = isModifiedByBoolean ? booleanId! : id;
+                    // If count is invalid or < 1, default to 1
+                    if (!count || count < 1) count = 1;
 
-                bodies.push({
-                    id,
-                    name: feature.name,
-                    featureType: feature.feature_type,
-                    isConsumed: isToolBody, // Only tool bodies are consumed
-                    isToolBody,
-                    isModifiedByBoolean,
-                    visible: !props.hiddenBodies?.has(tessellationFeatureId),
-                    tessellationFeatureId,
-                });
+                    for (let i = 0; i < count; i++) {
+                        bodies.push({
+                            id: `${id}_${i}`, // Virtual ID for the part
+                            name: `${feature.name} (Part ${i + 1})`,
+                            featureType: feature.feature_type,
+                            isConsumed: false,
+                            isToolBody: false,
+                            isModifiedByBoolean: false,
+                            visible: !props.hiddenBodies?.has(id), // Tied to feature visibility
+                            tessellationFeatureId: id, // All share the same tessellation
+                        });
+                    }
+                } else {
+                    // Standard single-body feature (Extrude, Revolve, or consumed Pattern)
+                    const booleanId = targetBodies.get(id);
+                    const isModifiedByBoolean = !!booleanId;
+                    const tessellationFeatureId = isModifiedByBoolean ? booleanId! : id;
+
+                    bodies.push({
+                        id,
+                        name: feature.name,
+                        featureType: feature.feature_type,
+                        isConsumed: isToolBody,
+                        isToolBody,
+                        isModifiedByBoolean,
+                        visible: !props.hiddenBodies?.has(tessellationFeatureId),
+                        tessellationFeatureId,
+                    });
+                }
             }
         }
 

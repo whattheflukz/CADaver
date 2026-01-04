@@ -12,7 +12,7 @@ export interface Tessellation {
     feature_id_map?: Record<string, string>;
 }
 
-export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Fillet' | 'Chamfer' | 'Boolean' | 'Cut' | 'Plane' | 'Axis' | 'Point';
+export type FeatureType = 'Sketch' | 'Extrude' | 'Revolve' | 'Fillet' | 'Chamfer' | 'Boolean' | 'Cut' | 'LinearPattern' | 'CircularPattern' | 'Plane' | 'Axis' | 'Point';
 
 export interface Feature {
     id: string; // EntityId is UUID string
